@@ -45,6 +45,8 @@ const Index = () => {
     pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
     arrhythmiaCount: 0,
     arrhythmiaStatus: "SIN ARRITMIAS|0",
+    glucose: { value: 0, trend: 'STABLE', confidence: 0 },
+    arterialHealth: { agingIndex: 0, stiffness: 0, vascularStatus: 'CALIBRANDO' },
     isCalibrating: false,
     calibrationProgress: 0,
     lastArrhythmiaData: undefined,
@@ -154,7 +156,9 @@ const Index = () => {
     getBackpressureConfig,
     setBackpressureConfig,
     currentStride,
+    currentStride,
     setSignalCallback,
+    setCanvas,
   } = useSignalProcessor();
   
   const { 
@@ -548,6 +552,8 @@ const Index = () => {
       pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
       arrhythmiaCount: 0,
       arrhythmiaStatus: "SIN ARRITMIAS|0",
+      glucose: { value: 0, trend: 'STABLE', confidence: 0 },
+      arterialHealth: { agingIndex: 0, stiffness: 0, vascularStatus: 'CALIBRANDO' },
       isCalibrating: false,
       calibrationProgress: 0,
       lastArrhythmiaData: undefined,
@@ -630,6 +636,8 @@ const Index = () => {
                 pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
                 arrhythmiaCount: 0,
                 arrhythmiaStatus: "SIN ARRITMIAS|0",
+                glucose: { value: 0, trend: 'STABLE', confidence: 0 },
+                arterialHealth: { agingIndex: 0, stiffness: 0, vascularStatus: 'CALIBRANDO' },
                 lastArrhythmiaData: undefined,
                 signalQuality: 0,
                 measurementConfidence: 'INVALID'
@@ -1038,6 +1046,9 @@ const Index = () => {
               elapsedTime={elapsedTime}
               perfusionIndex={lastSignal?.perfusionIndex || 0}
               pressure={vitalSigns.pressure}
+              glucose={vitalSigns.glucose}
+              arterialHealth={vitalSigns.arterialHealth}
+              onCanvasReady={setCanvas}
             />
           </div>
 

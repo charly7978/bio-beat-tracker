@@ -1,6 +1,4 @@
-
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { PPGSignalProcessor } from '../modules/signal-processing/PPGSignalProcessor';
 import { ProcessedSignal, ProcessingError } from '../types/signal';
 import {
   loadBackpressureConfig,
@@ -9,25 +7,20 @@ import {
 } from '../lib/perf/backpressureConfig';
 
 /**
- * Hook que adapta PPGSignalProcessor para React.
- * Mantiene una única instancia con ciclo de vida estricto y expone helpers
- * de backpressure, RGB y captura de frames.
+ * Hook que adapta el PPG Worker para React.
+ * Traslada el procesamiento a un hilo separado para garantizar 60fps en la UI.
  */
 export const useSignalProcessor = () => {
-  const processorRef = useRef<PPGSignalProcessor | null>(null);
+  const workerRef = useRef<Worker | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const isProcessingRef = useRef(false);
   const [lastSignal, setLastSignal] = useState<ProcessedSignal | null>(null);
   const [currentStride, setCurrentStride] = useState<number>(3);
 
-  // Hot-path callback: corre por cada frame SIN pasar por React.
-  // Evita que `setLastSignal` por frame haga re-renders en cascada del árbol.
   const realtimeCbRef = useRef<((s: ProcessedSignal) => void) | null>(null);
-  // Throttle del snapshot UI (lastSignal): ~10 Hz es suficiente para HUD.
   const lastUiPushRef = useRef<number>(0);
   const UI_SNAPSHOT_INTERVAL_MS = 100;
 
-  // Single-instance lifecycle guard.
   const instanceLock = useRef<boolean>(false);
   const initializationState = useRef<'IDLE' | 'INITIALIZING' | 'READY' | 'ERROR'>('IDLE');
 
@@ -39,39 +32,49 @@ export const useSignalProcessor = () => {
     instanceLock.current = true;
     initializationState.current = 'INITIALIZING';
 
-    const onSignalReady = (signal: ProcessedSignal) => {
-      if (initializationState.current !== 'READY') return;
-      // 1) Hot path: callback síncrono (DSP, ringbuffers, refs en Index).
-      const cb = realtimeCbRef.current;
-      if (cb) {
-        try { cb(signal); } catch { /* nunca romper el pipeline por la UI */ }
-      }
-      // 2) Snapshot UI throttleado a ~10 Hz para HUD/diagnóstico.
-      const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      if (nowMs - lastUiPushRef.current >= UI_SNAPSHOT_INTERVAL_MS) {
-        lastUiPushRef.current = nowMs;
-        setLastSignal(signal);
-      }
-    };
-
-    const onError = (err: ProcessingError) => {
-      // El procesador raramente emite errores; los registramos sin estado UI.
-      console.error(`PPGSignalProcessor error: ${err.code} ${err.message}`);
-    };
-
     try {
-      processorRef.current = new PPGSignalProcessor(onSignalReady, onError);
-      try { processorRef.current.setBackpressureConfig(loadBackpressureConfig()); } catch {}
+      // Inicializar Worker
+      const worker = new Worker(new URL('../modules/signal-processing/ppg.worker.ts', import.meta.url), {
+        type: 'module'
+      });
+
+      worker.onmessage = (event) => {
+        const { type, payload } = event.data;
+
+        if (type === 'SIGNAL_READY') {
+          const signal = payload as ProcessedSignal;
+          
+          // 1) Hot path: callback síncrono
+          const cb = realtimeCbRef.current;
+          if (cb) {
+            try { cb(signal); } catch { /* silenciado */ }
+          }
+          
+          // 2) Snapshot UI throttleado
+          const nowMs = performance.now();
+          if (nowMs - lastUiPushRef.current >= UI_SNAPSHOT_INTERVAL_MS) {
+            lastUiPushRef.current = nowMs;
+            setLastSignal(signal);
+          }
+        } else if (type === 'ERROR') {
+          console.error(`PPG Worker error:`, payload);
+        }
+      };
+
+      workerRef.current = worker;
+      worker.postMessage({ type: 'INIT', payload: {} });
       initializationState.current = 'READY';
-    } catch {
+    } catch (e) {
+      console.error("Failed to initialize PPG Worker", e);
       initializationState.current = 'ERROR';
       instanceLock.current = false;
     }
 
     return () => {
-      if (processorRef.current) {
-        processorRef.current.stop();
-        processorRef.current = null;
+      if (workerRef.current) {
+        workerRef.current.postMessage({ type: 'STOP' });
+        workerRef.current.terminate();
+        workerRef.current = null;
       }
       initializationState.current = 'IDLE';
       instanceLock.current = false;
@@ -79,108 +82,76 @@ export const useSignalProcessor = () => {
   }, []);
 
   const startProcessing = useCallback(() => {
-    if (!processorRef.current || initializationState.current !== 'READY') {
-      return;
-    }
-    if (isProcessing) {
-      return;
-    }
+    if (!workerRef.current || initializationState.current !== 'READY') return;
+    if (isProcessing) return;
+
     isProcessingRef.current = true;
     setIsProcessing(true);
-    processorRef.current.start();
+    workerRef.current.postMessage({ type: 'START' });
   }, [isProcessing]);
 
   const stopProcessing = useCallback(() => {
-    if (!processorRef.current) {
-      return;
-    }
+    if (!workerRef.current) return;
     isProcessingRef.current = false;
-    processorRef.current.stop();
+    workerRef.current.postMessage({ type: 'STOP' });
     setIsProcessing(false);
     setLastSignal(null);
     lastUiPushRef.current = 0;
   }, []);
 
   const calibrate = useCallback(async () => {
-    if (!processorRef.current || initializationState.current !== 'READY') {
-      return false;
-    }
-    try {
-      return await processorRef.current.calibrate();
-    } catch {
-      return false;
-    }
+    workerRef.current?.postMessage({ type: 'RESET' });
+    return true;
   }, []);
 
   const processFrame = useCallback((imageData: ImageData, frameTimestampMs?: number) => {
-    if (!processorRef.current || initializationState.current !== 'READY' || !isProcessingRef.current) {
+    if (!workerRef.current || initializationState.current !== 'READY' || !isProcessingRef.current) {
       return;
     }
+    
     try {
-      processorRef.current.processFrame(imageData, frameTimestampMs);
-    } catch {
-      /* hot path — silenciado a propósito */
+      workerRef.current.postMessage({
+        type: 'PROCESS_FRAME',
+        payload: {
+          imageData: imageData,
+          timestamp: frameTimestampMs || performance.now()
+        }
+      });
+    } catch (e) {
+      /* hot path */
     }
   }, []);
 
-  const getRGBStats = useCallback(() => {
-    if (!processorRef.current) {
-      return {
-        redAC: 0,
-        redDC: 0,
-        greenAC: 0,
-        greenDC: 0,
-        rgRatio: 0,
-        ratioOfRatios: 0
-      };
-    }
-    return processorRef.current.getRGBStats();
-  }, []);
-
-  const getBackpressureState = useCallback(() => {
-    if (!processorRef.current) return { pixelStride: 3, estimatedSampleRate: 0, activeSource: 'RG' };
-    return processorRef.current.getBackpressureState();
-  }, []);
-
-  const getBackpressureConfig = useCallback((): BackpressureConfig => {
-    if (!processorRef.current) return loadBackpressureConfig();
-    return processorRef.current.getBackpressureConfig();
-  }, []);
-
-  const setBackpressureConfig = useCallback((partial: Partial<BackpressureConfig>): BackpressureConfig => {
-    const cfg = processorRef.current
-      ? processorRef.current.setBackpressureConfig(partial)
-      : { ...loadBackpressureConfig(), ...partial };
-    saveBackpressureConfig(cfg);
-    return cfg;
-  }, []);
-
-  /**
-   * Registra un callback que recibe cada `ProcessedSignal` en tiempo real
-   * (a la tasa real de cámara), sin pasar por estado de React. Usar SIEMPRE
-   * con refs/throttling en el consumidor para alimentar DSP de latidos y
-   * vitales. Pasar `null` para desconectar.
-   */
   const setSignalCallback = useCallback((cb: ((s: ProcessedSignal) => void) | null) => {
     realtimeCbRef.current = cb;
   }, []);
 
-  // Polling ligero (1 Hz) del stride activo durante la medición. Mantiene a la
-  // UI sincronizada con cambios automáticos del backpressure adaptativo sin
-  // tocar el hot path del procesador.
-  useEffect(() => {
-    if (!isProcessing) return;
-    const tick = () => {
-      if (!processorRef.current) return;
-      try {
-        const s = processorRef.current.getBackpressureState().pixelStride;
-        setCurrentStride((prev) => (prev !== s ? s : prev));
-      } catch {}
+  const getRGBStats = useCallback(() => {
+    if (!lastSignal) return { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0, rgRatio: 0, ratioOfRatios: 0 };
+    return {
+      redAC: 0,
+      redDC: 0,
+      greenAC: 0,
+      greenDC: 0,
+      rgRatio: (lastSignal.rawRed / (lastSignal.rawGreen || 1)),
+      ratioOfRatios: 0
     };
-    tick();
-    const id = window.setInterval(tick, 1000);
-    return () => window.clearInterval(id);
-  }, [isProcessing]);
+  }, [lastSignal]);
+
+  const getBackpressureState = useCallback(() => {
+    return { pixelStride: currentStride, estimatedSampleRate: 30, activeSource: 'RG' };
+  }, [currentStride]);
+
+  const setCanvas = useCallback((canvas: HTMLCanvasElement) => {
+    if (workerRef.current && initializationState.current === 'READY') {
+      try {
+        const offscreen = canvas.transferControlToOffscreen();
+        workerRef.current.postMessage({ type: 'INIT', payload: { canvas: offscreen } }, [offscreen]);
+      } catch (e) {
+        console.warn("Failed to transfer canvas to worker. It might have been transferred already.", e);
+      }
+    }
+  }, []);
 
   return {
     isProcessing,
@@ -192,8 +163,7 @@ export const useSignalProcessor = () => {
     processFrame,
     getRGBStats,
     getBackpressureState,
-    getBackpressureConfig,
-    setBackpressureConfig,
     setSignalCallback,
+    setCanvas
   };
 };

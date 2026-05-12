@@ -25,6 +25,9 @@ interface PPGSignalMeterProps {
   elapsedTime?: number;
   perfusionIndex?: number;
   pressure?: { systolic: number; diastolic: number; confidence?: string; featureQuality?: number };
+  glucose?: { value: number; trend: string };
+  arterialHealth?: { agingIndex: number; stiffness: number; vascularStatus: string };
+  onCanvasReady?: (canvas: HTMLCanvasElement) => void;
 }
 
 const TARGET_FPS = 30;
@@ -82,16 +85,24 @@ const PPGSignalMeter = ({
   rrIntervals = [],
   elapsedTime = 0,
   perfusionIndex = 0,
-  pressure
+  pressure,
+  glucose,
+  arterialHealth,
+  onCanvasReady
 }: PPGSignalMeterProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const waveCanvasRef = useRef<HTMLCanvasElement>(null); // Nuevo canvas para el Worker
   const containerRef = useRef<HTMLDivElement>(null);
   const animationRef = useRef<number | null>(null);
   const isRunningRef = useRef(false);
   const dataBufferRef = useRef<CircularBuffer | null>(null);
 
   // Latest props captured via ref so the RAF loop doesn't re-create per render
-  const propsRef = useRef({ value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure });
+  const propsRef = useRef({ 
+    value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, 
+    isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, 
+    perfusionIndex, pressure, glucose, arterialHealth 
+  });
   const lastPeakTimeRef = useRef(0);
   const [showPulse, setShowPulse] = useState(false);
 
@@ -165,7 +176,7 @@ const PPGSignalMeter = ({
       bpmStatsRef.current = { min: 0, max: 0, sum: 0, n: 0 };
       bpmTrendRef.current = [];
     }
-  }, [value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure]);
+  }, [value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, glucose, arterialHealth]);
 
   // Pulse animation on peak (UI overlay only)
   useEffect(() => {
@@ -210,6 +221,15 @@ const PPGSignalMeter = ({
     const ctx = canvas.getContext('2d', { alpha: false });
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
+    // Sincronizar Wave Canvas (Worker)
+    const waveCanvas = waveCanvasRef.current;
+    if (waveCanvas) {
+      waveCanvas.width = canvas.width;
+      waveCanvas.height = canvas.height;
+      waveCanvas.style.width = canvas.style.width;
+      waveCanvas.style.height = canvas.style.height;
+    }
+
     // Compute zones in CSS pixels.
     // Heights are proportional, but with sensible minima.
     const header = { x: 0, y: 0, w: cssW, h: 36 };
@@ -247,6 +267,13 @@ const PPGSignalMeter = ({
       window.removeEventListener('orientationchange', recomputeLayout);
     };
   }, [recomputeLayout]);
+
+  // Pass canvas to parent/worker
+  useEffect(() => {
+    if (waveCanvasRef.current && onCanvasReady) {
+      onCanvasReady(waveCanvasRef.current);
+    }
+  }, [onCanvasReady]);
 
   // ============= DRAWING HELPERS =============
 
@@ -324,7 +351,7 @@ const PPGSignalMeter = ({
 
   const drawMetricsBar = useCallback((ctx: CanvasRenderingContext2D, now: number) => {
     const { metrics } = layoutRef.current;
-    const { bpm, spo2, pressure, perfusionIndex: pi, arrhythmiaStatus: arr } = propsRef.current;
+    const { bpm, spo2, pressure, perfusionIndex: pi, arrhythmiaStatus: arr, glucose, arterialHealth: ah } = propsRef.current;
 
     // Background row
     ctx.fillStyle = 'rgba(6, 12, 22, 0.85)';
@@ -486,6 +513,20 @@ const PPGSignalMeter = ({
         ctx.fillStyle = bpConf === 'HIGH' ? COLORS.TEXT_PRIMARY : bpConf === 'MEDIUM' ? COLORS.TEXT_WARN : COLORS.TEXT_DIM;
         ctx.fillText(`conf: ${bpConf}`, metrics.w - 16, metrics.y + 18);
       }
+    }
+
+    // === Advanced Biomarkers (Glucose & Arterial) ===
+    if (glucose && glucose.value > 0) {
+      ctx.font = `bold 9px ${FONT_MONO}`;
+      ctx.fillStyle = COLORS.TEXT_INFO;
+      ctx.textAlign = 'left';
+      ctx.fillText(`GLUCOSA: ${glucose.value} mg/dL`, colW * 2 + 16, metrics.y + 88);
+    }
+    if (ah && ah.agingIndex !== 0) {
+      ctx.font = `bold 9px ${FONT_MONO}`;
+      ctx.fillStyle = ah.agingIndex < 0 ? COLORS.TEXT_PRIMARY : COLORS.TEXT_WARN;
+      ctx.textAlign = 'right';
+      ctx.fillText(`AGI: ${ah.agingIndex.toFixed(2)} (${ah.vascularStatus})`, metrics.w - 16, metrics.y + 88);
     }
 
     // Arrhythmia banner (overlay top-right of metrics)
@@ -1174,6 +1215,10 @@ const PPGSignalMeter = ({
 
   return (
     <div ref={containerRef} className="fixed inset-0 bg-slate-950 overflow-hidden">
+      <canvas
+        ref={waveCanvasRef}
+        className="absolute inset-0 w-full h-full opacity-60"
+      />
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
