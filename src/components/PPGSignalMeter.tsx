@@ -697,15 +697,20 @@ const PPGSignalMeter = ({
     // Stroke segments — group by arrhythmia for fewer state changes
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    let segStart = 0;
-    while (segStart < coords.length - 1) {
-      const arrSeg = coords[segStart].isArr;
-      let segEnd = segStart + 1;
-      while (segEnd < coords.length && coords[segEnd].isArr === arrSeg) segEnd++;
+    let i = 0;
+    while (i < coords.length - 1) {
+      const isArr = coords[i].isArr;
       ctx.beginPath();
-      ctx.moveTo(coords[segStart].x, coords[segStart].y);
-      for (let i = segStart + 1; i < segEnd; i++) ctx.lineTo(coords[i].x, coords[i].y);
-      if (arrSeg) {
+      ctx.moveTo(coords[i].x, coords[i].y);
+      
+      // Dibujar hasta que cambie el estado o lleguemos al final
+      // Incluimos el punto de transición para evitar huecos en la onda
+      while (i < coords.length - 1 && coords[i].isArr === isArr) {
+        i++;
+        ctx.lineTo(coords[i].x, coords[i].y);
+      }
+      
+      if (isArr) {
         ctx.strokeStyle = COLORS.SIGNAL_ARR;
         ctx.shadowColor = COLORS.SIGNAL_ARR_GLOW;
         ctx.shadowBlur = 14;
@@ -718,7 +723,8 @@ const PPGSignalMeter = ({
       }
       ctx.stroke();
       ctx.shadowBlur = 0;
-      segStart = segEnd - 1;
+      // No necesitamos incrementar i manualmente aquí, el bucle interno ya lo hizo
+      // i ahora apunta al primer punto del siguiente segmento o al final de coords.
     }
 
     // Peaks markers
