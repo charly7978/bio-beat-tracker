@@ -162,6 +162,10 @@ export const useSignalProcessor = () => {
     }
   }, []);
 
+  const sendResize = useCallback((width: number, height: number) => {
+    workerRef.current?.postMessage({ type: 'RESIZE', payload: { width, height } });
+  }, []);
+
   const getBackpressureConfig = useCallback(() => {
     return loadBackpressureConfig();
   }, []);
@@ -186,6 +190,7 @@ export const useSignalProcessor = () => {
     getBackpressureConfig,
     setBackpressureConfig,
     setSignalCallback,
-    setCanvas
+    setCanvas,
+    sendResize,
   };
 };

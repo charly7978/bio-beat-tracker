@@ -28,6 +28,7 @@ interface PPGSignalMeterProps {
   glucose?: { value: number; trend: string };
   arterialHealth?: { agingIndex: number; stiffness: number; vascularStatus: string };
   onCanvasReady?: (canvas: HTMLCanvasElement) => void;
+  onResize?: (width: number, height: number) => void;
 }
 
 const TARGET_FPS = 30;
@@ -89,7 +90,8 @@ const PPGSignalMeter = ({
   pressure,
   glucose,
   arterialHealth,
-  onCanvasReady
+  onCanvasReady,
+  onResize
 }: PPGSignalMeterProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const waveCanvasRef = useRef<HTMLCanvasElement>(null); // Nuevo canvas para el Worker
@@ -256,7 +258,10 @@ const PPGSignalMeter = ({
     const footer = { x: 0, y: cssH - buttonsH - footerH, w: cssW, h: footerH };
 
     layoutRef.current = { dpr, width: cssW, height: cssH, header, metrics, plot, trend, poincare, footer };
-  }, []);
+
+    // Notificar al worker del nuevo tamaño físico
+    if (onResize) onResize(Math.floor(cssW * dpr), Math.floor(cssH * dpr));
+  }, [onResize]);
 
   useLayoutEffect(() => {
     recomputeLayout();
@@ -1118,7 +1123,7 @@ const PPGSignalMeter = ({
     <div ref={containerRef} className="fixed inset-0 bg-slate-950 overflow-hidden">
       <canvas
         ref={waveCanvasRef}
-        className="absolute inset-0 w-full h-full opacity-60"
+        className="absolute inset-0 w-full h-full"
       />
       <canvas
         ref={canvasRef}

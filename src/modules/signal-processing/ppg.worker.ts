@@ -29,8 +29,10 @@ let lastAPGY = 0;
 let minVal = -20;
 let maxVal = 20;
 let range = 40;
-const SWEEP_SPEED = 3.2; // Más rápido para mayor fluidez
-const GHOST_WIDTH = 50; // Más espacio de borrado
+// SWEEP_SPEED se calcula dinámicamente en drawSignalSweep para que
+// el barrido completo siempre tarde ~4 s sin importar el ancho del canvas.
+const SWEEP_DURATION_S = 4.0; // segundos por barrido completo
+const GHOST_WIDTH_FRAC = 0.06; // fracción del ancho que se borra por delante
 
 /**
  * PPG WEB WORKER
@@ -101,6 +103,19 @@ self.onmessage = (event: MessageEvent) => {
       }
       break;
 
+    case 'RESIZE':
+      // El main thread informa de un nuevo tamaño CSS→físico para el OffscreenCanvas.
+      // Actualizamos width/height y regeneramos el fondo.
+      if (canvas && payload?.width && payload?.height) {
+        canvas.width = payload.width;
+        canvas.height = payload.height;
+        bgCanvas = null; // Forzar regeneración del fondo a nuevo tamaño
+        lastX = 0;       // Reiniciar posición de barrido
+        lastY = 0;
+        drawGrid();
+      }
+      break;
+
     case 'RESET':
       if (processor) processor.reset();
       lastX = 0;
@@ -117,35 +132,64 @@ function drawGrid() {
   if (!ctx || !canvas) return;
   const w = canvas.width;
   const h = canvas.height;
-  
+
   if (!bgCanvas) {
     bgCanvas = new OffscreenCanvas(w, h);
     bgCtx = bgCanvas.getContext('2d');
   }
-  
+
   if (!bgCtx) return;
 
-  // Fondo degradado profundo
+  // ── Fondo: degradado profundo tipo monitor clínico ──
   const grad = bgCtx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, COLORS.BG_TOP);
-  grad.addColorStop(1, COLORS.BG_BOTTOM);
+  grad.addColorStop(0, '#040d08');
+  grad.addColorStop(0.5, '#020a06');
+  grad.addColorStop(1, '#040d08');
   bgCtx.fillStyle = grad;
   bgCtx.fillRect(0, 0, w, h);
-  
-  bgCtx.strokeStyle = COLORS.GRID;
-  bgCtx.lineWidth = 1;
+
+  // ── Cuadrícula ECG "papel milimetrado" ──
+  // Cuadros menores: ~h/24 (aprox 5mm a 25 mm/s)
+  const minor = h / 24;
+  const major = minor * 5;
+
+  // Líneas menores (muy sutiles)
+  bgCtx.strokeStyle = 'rgba(220, 38, 38, 0.07)';
+  bgCtx.lineWidth = 0.5;
   bgCtx.beginPath();
-  // Líneas horizontales
-  for (let y = 0; y <= h; y += h / 4) {
-    bgCtx.moveTo(0, y);
-    bgCtx.lineTo(w, y);
+  for (let y = 0; y <= h; y += minor) {
+    bgCtx.moveTo(0, y); bgCtx.lineTo(w, y);
   }
-  // Líneas verticales
-  for (let x = 0; x <= w; x += w / 10) {
-    bgCtx.moveTo(x, 0);
-    bgCtx.lineTo(x, h);
+  for (let x = 0; x <= w; x += minor) {
+    bgCtx.moveTo(x, 0); bgCtx.lineTo(x, h);
   }
   bgCtx.stroke();
+
+  // Líneas mayores (5×minor, más visibles)
+  bgCtx.strokeStyle = 'rgba(220, 38, 38, 0.18)';
+  bgCtx.lineWidth = 1;
+  bgCtx.beginPath();
+  for (let y = 0; y <= h; y += major) {
+    bgCtx.moveTo(0, y); bgCtx.lineTo(w, y);
+  }
+  for (let x = 0; x <= w; x += major) {
+    bgCtx.moveTo(x, 0); bgCtx.lineTo(x, h);
+  }
+  bgCtx.stroke();
+
+  // Baseline central (referencia 0)
+  bgCtx.strokeStyle = 'rgba(34, 197, 94, 0.30)';
+  bgCtx.lineWidth = 1;
+  bgCtx.setLineDash([8, 6]);
+  bgCtx.beginPath();
+  bgCtx.moveTo(0, h / 2); bgCtx.lineTo(w, h / 2);
+  bgCtx.stroke();
+  bgCtx.setLineDash([]);
+
+  // Borde superior/inferior del área de plot
+  bgCtx.strokeStyle = 'rgba(34, 197, 94, 0.22)';
+  bgCtx.lineWidth = 1;
+  bgCtx.strokeRect(0, 0, w, h);
 
   // Pintar el fondo inicial
   ctx.drawImage(bgCanvas, 0, 0);
@@ -159,27 +203,43 @@ function drawSignalSweep(signal: ProcessedSignal) {
   const val = signal.filteredValue;
   const apg = signal.diagnostics?.apg || 0;
   const quality = signal.quality || 0;
-  
-  // 1. Auto-scaling adaptativo más agresivo
-  const targetMin = Math.min(minVal, val - 3);
-  const targetMax = Math.max(maxVal, val + 3);
-  minVal = minVal * 0.96 + targetMin * 0.04; // Adaptación más rápida
-  maxVal = maxVal * 0.96 + targetMax * 0.04;
-  range = Math.max(12, maxVal - minVal);
 
-  // 2. Normalización a coordenadas de canvas
-  const y = h - ((val - minVal) / range) * h;
-  
-  // Normalización APG (escala fija o adaptativa menor)
-  const apgY = h/2 - (apg * h / 800); 
+  // 1. Velocidad de barrido: w píxeles / (SWEEP_DURATION_S * FPS_estimado)
+  // FPS estimado a 30 fps. Esto garantiza que el barrido siempre tarde ~4 s
+  // independientemente del DPR o del ancho del canvas.
+  const SWEEP_SPEED = w / (SWEEP_DURATION_S * 30);
+  const GHOST_WIDTH = Math.ceil(w * GHOST_WIDTH_FRAC);
+
+  // 2. Auto-scaling agresivo: adapta en ~10 frames (factor 0.18)
+  //    Si la señal sale del rango actual, fuerza inmediatamente el límite.
+  const margin = Math.abs(val) * 0.05 + 1.5; // margen pequeño
+  const targetMin = val - margin;
+  const targetMax = val + margin;
+  // Hard-clamp instantáneo si el valor sale del rango
+  if (val < minVal) minVal = val - margin;
+  if (val > maxVal) maxVal = val + margin;
+  // Suavizado lento hacia el rango observado (retroceso hacia el promedio)
+  minVal = minVal * 0.88 + (targetMin * 0.12);
+  maxVal = maxVal * 0.88 + (targetMax * 0.12);
+  range = Math.max(8, maxVal - minVal);
+
+  // 3. Normalización a coordenadas de canvas
+  // Dejamos un margen del 10% arriba y abajo para que la onda no se corte
+  const MARGIN_TOP = h * 0.10;
+  const MARGIN_BOT = h * 0.10;
+  const plotH = h - MARGIN_TOP - MARGIN_BOT;
+  const y = MARGIN_TOP + plotH - ((val - minVal) / range) * plotH;
+
+  // Normalización APG
+  const apgY = h / 2 - (apg * plotH / 800);
 
   const x = lastX + SWEEP_SPEED;
-  
+
   if (x >= w) {
     lastX = 0;
   }
 
-  // 3. Efecto Sweep (borrado por delante usando el buffer de fondo)
+  // 4. Efecto Sweep (borrado por delante usando el buffer de fondo)
   if (bgCanvas) {
     ctx.drawImage(bgCanvas, x, 0, GHOST_WIDTH, h, x, 0, GHOST_WIDTH, h);
   } else {
@@ -188,7 +248,7 @@ function drawSignalSweep(signal: ProcessedSignal) {
   }
 
   if (quality > 5) {
-    // 4. Dibujar APG (Aceleración - Sombra informativa)
+    // 5. APG (Aceleración — capa informativa)
     ctx.beginPath();
     ctx.strokeStyle = COLORS.APG;
     ctx.lineWidth = 1.5;
@@ -196,44 +256,57 @@ function drawSignalSweep(signal: ProcessedSignal) {
     ctx.lineTo(x, apgY);
     ctx.stroke();
 
-    // 5. Dibujar Sombra/Resplandor (Glow)
+    // 6. Glow exterior (doble pasada para mayor visibilidad)
     ctx.beginPath();
-    ctx.strokeStyle = COLORS.SIGNAL_GLOW;
-    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(34, 197, 94, 0.20)';
+    ctx.lineWidth = 10;
     ctx.lineJoin = 'round';
     ctx.moveTo(lastX, lastY);
     ctx.lineTo(x, y);
     ctx.stroke();
 
-    // 6. Dibujar Línea Principal
     ctx.beginPath();
-    ctx.strokeStyle = COLORS.SIGNAL;
-    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = COLORS.SIGNAL_GLOW;
+    ctx.lineWidth = 5;
+    ctx.lineJoin = 'round';
     ctx.moveTo(lastX, lastY);
     ctx.lineTo(x, y);
     ctx.stroke();
 
-    // 7. Cabezal de barrido (Spark)
+    // 7. Línea principal
+    ctx.beginPath();
+    ctx.strokeStyle = COLORS.SIGNAL;
+    ctx.lineWidth = 2.8;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.moveTo(lastX, lastY);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+
+    // 8. Cabezal de barrido (Spark) — más grande para mayor impacto visual
+    const sparkR = Math.max(3, w * 0.004);
     ctx.beginPath();
     ctx.fillStyle = COLORS.HEAD;
-    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+    ctx.arc(x, y, sparkR, 0, Math.PI * 2);
     ctx.fill();
-    
+
     // Halo del cabezal
-    const gradient = ctx.createRadialGradient(x, y, 0, x, y, 8);
-    gradient.addColorStop(0, 'rgba(255, 255, 255, 0.8)');
-    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    const haloR = sparkR * 3.5;
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, haloR);
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 0.75)');
+    gradient.addColorStop(0.4, 'rgba(34, 197, 94, 0.35)');
+    gradient.addColorStop(1, 'rgba(34, 197, 94, 0)');
     ctx.fillStyle = gradient;
     ctx.beginPath();
-    ctx.arc(x, y, 8, 0, Math.PI * 2);
+    ctx.arc(x, y, haloR, 0, Math.PI * 2);
     ctx.fill();
   } else {
-    // Señal de baja calidad: línea punteada o tenue
+    // Señal de baja calidad: línea punteada tenue
     ctx.beginPath();
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.3)';
-    ctx.setLineDash([2, 4]);
-    ctx.moveTo(lastX, h/2);
-    ctx.lineTo(x, h/2);
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
+    ctx.setLineDash([2, 5]);
+    ctx.moveTo(lastX, h / 2);
+    ctx.lineTo(x, h / 2);
     ctx.stroke();
     ctx.setLineDash([]);
   }

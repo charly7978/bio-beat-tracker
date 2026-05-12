@@ -158,6 +158,7 @@ const Index = () => {
     currentStride,
     setSignalCallback,
     setCanvas,
+    sendResize,
   } = useSignalProcessor();
   
   const { 
@@ -1059,6 +1060,7 @@ const Index = () => {
               glucose={vitalSigns.glucose}
               arterialHealth={vitalSigns.arterialHealth}
               onCanvasReady={setCanvas}
+              onResize={sendResize}
             />
           </div>
 
@@ -1185,7 +1187,7 @@ const Index = () => {
                                 fill="none"
                                 className={`${statusColor === 'emerald' ? 'stroke-emerald-400' : statusColor === 'yellow' ? 'stroke-yellow-400' : 'stroke-red-400'}`}
                                 strokeWidth="3"
-                                strokeDasharray={`${normalPercent}, 100`}
+                                strokeDasharray={normalPercent + ", 100"}
                                 strokeLinecap="round" />
                         </svg>
                         <div className="absolute inset-0 flex items-center justify-center">
