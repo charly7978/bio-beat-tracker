@@ -339,11 +339,23 @@ const Index = () => {
         return;
       }
       try {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        processFrame(imageData, frameTimestampMs);
+        // Opción optimizada: Usar ImageBitmap (Transferable)
+        // Esto evita el getImageData en el hilo principal.
+        createImageBitmap(video).then(bitmap => {
+          if (!isProcessingRef.current) {
+            bitmap.close();
+            return;
+          }
+          processFrame(bitmap as any, frameTimestampMs);
+        }).catch(() => {
+          // Fallback a canvas local si falla
+          if (!isProcessingRef.current) return;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          processFrame(imageData, frameTimestampMs);
+        });
       } catch {
-        /* drawImage / getImageData can throw if the video tears down mid-frame */
+        /* drawImage can throw if the video tears down mid-frame */
       }
       scheduleNext(video);
     };

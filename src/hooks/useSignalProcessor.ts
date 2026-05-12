@@ -104,19 +104,28 @@ export const useSignalProcessor = () => {
     return true;
   }, []);
 
-  const processFrame = useCallback((imageData: ImageData, frameTimestampMs?: number) => {
+  const processFrame = useCallback((data: ImageData | ImageBitmap, frameTimestampMs?: number) => {
     if (!workerRef.current || initializationState.current !== 'READY' || !isProcessingRef.current) {
       return;
     }
     
     try {
+      const payload: any = {
+        timestamp: frameTimestampMs || performance.now()
+      };
+      const transfers: Transferable[] = [];
+
+      if (data instanceof ImageBitmap) {
+        payload.bitmap = data;
+        transfers.push(data);
+      } else {
+        payload.imageData = data;
+      }
+
       workerRef.current.postMessage({
         type: 'PROCESS_FRAME',
-        payload: {
-          imageData: imageData,
-          timestamp: frameTimestampMs || performance.now()
-        }
-      });
+        payload
+      }, transfers);
     } catch (e) {
       /* hot path */
     }

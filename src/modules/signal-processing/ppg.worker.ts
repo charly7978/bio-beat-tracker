@@ -5,6 +5,10 @@ let processor: PPGSignalProcessor | null = null;
 let canvas: OffscreenCanvas | null = null;
 let ctx: OffscreenCanvasRenderingContext2D | null = null;
 
+// Internal canvas for pixel extraction (avoids main thread getImageData)
+let extractionCanvas: OffscreenCanvas | null = null;
+let extractionCtx: OffscreenCanvasRenderingContext2D | null = null;
+
 const COLORS = {
   BG: '#06090f',
   SIGNAL: '#22c55e',
@@ -52,8 +56,25 @@ self.onmessage = (event: MessageEvent) => {
       break;
 
     case 'PROCESS_FRAME':
-      if (processor && payload.imageData) {
-        processor.processFrame(payload.imageData, payload.timestamp);
+      if (processor) {
+        if (payload.imageData) {
+          processor.processFrame(payload.imageData, payload.timestamp);
+        } else if (payload.bitmap) {
+          const bitmap = payload.bitmap as ImageBitmap;
+          
+          if (!extractionCanvas) {
+            extractionCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+            extractionCtx = extractionCanvas.getContext('2d', { willReadFrequently: true });
+          }
+          
+          if (extractionCtx) {
+            extractionCtx.drawImage(bitmap, 0, 0);
+            const imageData = extractionCtx.getImageData(0, 0, bitmap.width, bitmap.height);
+            processor.processFrame(imageData, payload.timestamp);
+          }
+          
+          bitmap.close();
+        }
       }
       break;
 
