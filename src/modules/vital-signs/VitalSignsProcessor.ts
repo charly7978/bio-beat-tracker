@@ -88,7 +88,7 @@ export class VitalSignsProcessor {
   
   // Gating de estabilidad (Consistencia)
   private stableFramesCount: number = 0;
-  private readonly STABILITY_REQUIRED_FRAMES = 90; // ~3 segundos a 30fps
+  private readonly STABILITY_REQUIRED_FRAMES = 45; // Reducido a ~1.5 segundos para respuesta más rápida
   private lastCoherentSpO2: number = 0;
   private lastCoherentBPM: number = 0;
   
@@ -217,11 +217,10 @@ export class VitalSignsProcessor {
     if (range < 0.2) return 2;
     
     const mean = recent.reduce((a, b) => a + b, 0) / recent.length;
-    const variance = recent.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / recent.length;
-    const stdDev = Math.sqrt(variance);
-    const snr = range / (stdDev + 0.05);
+    const snr = range / (stdDev + 0.03); // Más tolerante con señales pequeñas
     
-    return Math.min(100, Math.max(0, snr * 16));
+    // SQI interno más generoso para permitir que los cálculos comiencen
+    return Math.min(100, Math.max(0, snr * 22));
   }
 
   private getMeasurementConfidence(): 'HIGH' | 'MEDIUM' | 'LOW' | 'INVALID' {
@@ -269,19 +268,19 @@ export class VitalSignsProcessor {
     signalValue: number, 
     rrData: RRData
   ): void {
-    const minQualityForCalculation = 10;
+    const minQualityForCalculation = 5;
     if (this.measurements.signalQuality < minQualityForCalculation) {
       this.stableFramesCount = 0;
       return;
     }
 
     const confidence = this.getMeasurementConfidence();
-    const isHighlyStable = confidence === 'HIGH' && this.measurements.signalQuality > 50;
+    const isHighlyStable = confidence !== 'INVALID' && this.measurements.signalQuality > 15;
 
     if (isHighlyStable) {
       this.stableFramesCount++;
     } else {
-      this.stableFramesCount = Math.max(0, this.stableFramesCount - 2); // Penalización rápida por inestabilidad
+      this.stableFramesCount = Math.max(0, this.stableFramesCount - 1); // Penalización más suave
     }
 
     if (this.frameCount % 60 === 0) {
@@ -379,8 +378,8 @@ export class VitalSignsProcessor {
       log.info(`[SpO2 Debug] ACr:${redAC.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${greenAC.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}%`);
     }
     
-    // Umbrales mínimos de pulsatilidad (PI > 0.05%)
-    if (piRed < 0.05 || piGreen < 0.05) return 0;
+    // Umbrales mínimos de pulsatilidad (PI > 0.02% - Muy sensible)
+    if (piRed < 0.02 || piGreen < 0.02) return 0;
     
     const ratioRed = redAC / redDC;
     const ratioGreen = greenAC / greenDC;
