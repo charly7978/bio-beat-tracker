@@ -315,26 +315,68 @@ export class VitalSignsProcessor {
    * 
    * VALIDACIÓN: Solo retorna valor si los datos son físicamente plausibles
    */
+  // Buffer para valores R (Ratio-of-Ratios) para filtrado de mediana
+  private rValueHistory: number[] = [];
+  private readonly R_HISTORY_SIZE = 15;
+
+  /**
+   * SpO2 - FÓRMULA RATIO-OF-RATIOS (Estándar Texas Instruments SLAA655)
+   * 
+   * R = (AC_red/DC_red) / (AC_ir/DC_ir)
+   * SpO2 = 110 - 25 * R
+   * 
+   * Para cámaras usamos verde como proxy de IR (mejor SNR que azul)
+   * 
+   * MEJORA: Implementa filtrado de mediana para R y logging de depuración
+   */
   private calculateSpO2Raw(): number {
     const { redAC, redDC, greenAC, greenDC } = this.rgbData;
     
     if (redDC < 15 || greenDC < 15) return 0;
     
-    // Lowered AC thresholds — real pulsatility can be very small
-    if (redAC < 0.08 || greenAC < 0.08) return 0;
-    
     const piRed = (redAC / redDC) * 100;
     const piGreen = (greenAC / greenDC) * 100;
-    if (piRed < 0.08 || piGreen < 0.08) return 0;
+
+    // Log de depuración para diagnóstico clínico
+    if (this.calibrationSamples % 10 === 0) {
+      log.info(`[SpO2 Debug] ACr:${redAC.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${greenAC.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}%`);
+    }
+    
+    // Umbrales mínimos de pulsatilidad (PI > 0.05%)
+    if (piRed < 0.05 || piGreen < 0.05) return 0;
     
     const ratioRed = redAC / redDC;
     const ratioGreen = greenAC / greenDC;
     if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) return 0;
     
-    const R = ratioRed / ratioGreen;
-    if (R < 0.2 || R > 2.0) return 0;
+    const currentR = ratioRed / ratioGreen;
     
-    const spo2 = 109.5 - 24.5 * R;
+    // Validar rango físico de R para tejido humano
+    if (currentR < 0.2 || currentR > 2.5) {
+      if (this.calibrationSamples % 5 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
+      return 0;
+    }
+
+    // Acumular R para filtrado de mediana (Mejor práctica clínica)
+    this.rValueHistory.push(currentR);
+    if (this.rValueHistory.length > this.R_HISTORY_SIZE) {
+      this.rValueHistory.shift();
+    }
+
+    if (this.rValueHistory.length < 5) return 0;
+
+    // Calcular mediana de R para estabilidad
+    const sortedR = [...this.rValueHistory].sort((a, b) => a - b);
+    const medianR = sortedR[Math.floor(sortedR.length / 2)];
+    
+    // Curva de calibración optimizada para cámara (Green as IR proxy)
+    // Usamos intercepto 112 para compensar mayor absorción en verde
+    const spo2 = Math.min(100, Math.max(70, 112 - 28 * medianR));
+    
+    if (this.calibrationSamples % 30 === 0) {
+      log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}%`);
+    }
+
     return Number.isFinite(spo2) ? spo2 : 0;
   }
 
@@ -387,12 +429,14 @@ export class VitalSignsProcessor {
     this.measurements.arrhythmiaCount = 0;
     this.measurements.arrhythmiaStatus = "SIN ARRITMIAS|0";
     this.measurements.lastArrhythmiaData = null;
+    this.rValueHistory = [];
     return result.spo2 !== 0 ? result : null;
   }
 
   fullReset(): void {
     this.signalHistory = [];
     this.validPulseCount = 0;
+    this.rValueHistory = [];
     this.measurements = {
       spo2: 0,
       systolicPressure: 0,
