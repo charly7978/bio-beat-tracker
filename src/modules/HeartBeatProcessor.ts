@@ -34,6 +34,15 @@ export class HeartBeatProcessor {
   private consecutivePeaks = 0;
   private signalQualityIndex = 0;
 
+  // Per-frame cache: stats over slow-moving windows (gate range, sample rate,
+  // periodicity, SQI) recomputed every N frames to avoid per-frame slice/sort
+  // allocations. Values are statistical aggregates over 60-180 samples, so
+  // updating at ~6-10 Hz instead of 30 Hz is imperceptible.
+  private frameTick = 0;
+  private cachedGateRange = 0;
+  private cachedSampleRate = 30;
+  private cachedPeriodicity: { bpm: number; score: number } = { bpm: 0, score: 0 };
+
   constructor() {
     this.setupAudio();
   }
@@ -80,19 +89,30 @@ export class HeartBeatProcessor {
       return { bpm: 0, confidence: 0, isPeak: false, filteredValue: 0, sqi: 0 };
     }
 
+    this.frameTick++;
+
     // === GATE: minimum signal energy to reject noise ===
-    const recentForGate = this.signalBuffer.slice(-60);
-    const gSorted = [...recentForGate].sort((a, b) => a - b);
-    const gRange = (gSorted[Math.floor(gSorted.length * 0.9)] ?? 0) - (gSorted[Math.floor(gSorted.length * 0.1)] ?? 0);
-    if (gRange < 0.5) {
+    // Recompute slow stats (gate range, periodicity, SQI) every 4 frames.
+    // Peak detection still runs every frame.
+    if (this.frameTick % 4 === 0 || this.cachedGateRange === 0) {
+      const recentForGate = this.signalBuffer.slice(-60);
+      const gSorted = [...recentForGate].sort((a, b) => a - b);
+      this.cachedGateRange = (gSorted[Math.floor(gSorted.length * 0.9)] ?? 0) - (gSorted[Math.floor(gSorted.length * 0.1)] ?? 0);
+    }
+    if (this.cachedGateRange < 0.5) {
       return { bpm: 0, confidence: 0, isPeak: false, filteredValue: 0, sqi: 0 };
     }
 
     // Adaptive window for normalization
     const windowLen = this.consecutivePeaks < 3 ? 90 : 150;
     const { normalizedValue, range } = this.normalizeSignal(filteredValue, windowLen);
-    
-    const periodicity = this.estimatePeriodicity();
+
+    // Periodicity is an autocorrelation over 120-180 samples — recompute every
+    // 6 frames (~5 Hz). Keep last value otherwise.
+    if (this.frameTick % 6 === 0) {
+      this.cachedPeriodicity = this.estimatePeriodicity();
+    }
+    const periodicity = this.cachedPeriodicity;
     this.periodicityScore = periodicity.score;
 
     if (periodicity.bpm > 0) {
@@ -104,7 +124,9 @@ export class HeartBeatProcessor {
     }
 
     this.updateThreshold(range, this.periodicityScore);
-    this.signalQualityIndex = this.calculateSQI(range, this.periodicityScore);
+    if (this.frameTick % 4 === 0) {
+      this.signalQualityIndex = this.calculateSQI(range, this.periodicityScore);
+    }
 
     const timeSinceLastPeak = this.lastPeakTime > 0 ? now - this.lastPeakTime : Number.MAX_SAFE_INTEGER;
     let isPeak = false;
@@ -206,17 +228,22 @@ export class HeartBeatProcessor {
   }
 
   private estimateSampleRate(): number {
-    if (this.timestampBuffer.length < 10) return 30;
+    if (this.timestampBuffer.length < 10) return this.cachedSampleRate || 30;
+    // Sample rate drifts slowly; recompute every 30 frames (~1 s).
+    if (this.frameTick % 30 !== 0 && this.cachedSampleRate > 0) {
+      return this.cachedSampleRate;
+    }
     const recent = this.timestampBuffer.slice(-50);
     const intervals: number[] = [];
     for (let i = 1; i < recent.length; i++) {
       const d = recent[i] - recent[i - 1];
       if (d >= 10 && d <= 100) intervals.push(d);
     }
-    if (intervals.length < 6) return 30;
+    if (intervals.length < 6) return this.cachedSampleRate || 30;
     const sorted = [...intervals].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)] ?? 33;
-    return this.clamp(1000 / median, 20, 40);
+    this.cachedSampleRate = this.clamp(1000 / median, 20, 40);
+    return this.cachedSampleRate;
   }
 
   private estimatePeriodicity(): { bpm: number; score: number } {
@@ -441,6 +468,10 @@ export class HeartBeatProcessor {
     this.lastPeakValue = 0;
     this.consecutivePeaks = 0;
     this.signalQualityIndex = 0;
+    this.frameTick = 0;
+    this.cachedGateRange = 0;
+    this.cachedSampleRate = 30;
+    this.cachedPeriodicity = { bpm: 0, score: 0 };
   }
 
   dispose(): void {

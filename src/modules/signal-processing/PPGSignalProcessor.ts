@@ -122,6 +122,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   // Cache: PI se calcula una sola vez por frame y se reutiliza en SQI, contact state, etc.
   private cachedPI = 0;
+  // Cache de stats lentas (recomputadas cada N frames): evita slice+sort por frame
+  // sobre ventanas estadísticas de 30-90 muestras que cambian lentamente.
+  private cachedSqi = 0;
 
   // === MULTI-SOURCE RANKING (CHROM eliminado — amplifica ruido sin dedo) ===
   private sourceBuffers: { [key: string]: number[] } = {};
@@ -211,7 +214,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.blueBuffer.shift();
     }
 
-    if (this.redBuffer.length >= 36) {
+    // ACDC over a 36+ sample window changes slowly — recompute every 3 frames
+    // (~10 Hz) instead of every frame to cut 3 slice+sort allocations.
+    if (this.redBuffer.length >= 36 && this.frameCount % 3 === 0) {
       this.calculateACDCPrecise();
     }
     // Calcular PI UNA sola vez por frame — todos los consumidores leen del cache.
@@ -234,7 +239,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     const endSqi = ppgPerf.start('sqi');
-    this.signalQuality = this.calculateSignalQuality();
+    // SQI is a statistical aggregate over 90 samples — recompute every 3 frames
+    // (~10 Hz) instead of every frame. Cached value is reused otherwise.
+    if (this.frameCount % 3 === 0) {
+      this.cachedSqi = this.calculateSignalQuality();
+    }
+    this.signalQuality = this.cachedSqi;
     endSqi();
 
     const perfusionIndex = this.cachedPI;
@@ -409,6 +419,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     if (this.frameIntervalBuffer.length < 8) return;
+
+    // Median FPS drifts slowly — recompute every 10 frames.
+    if (this.frameCount % 10 !== 0) return;
 
     const sorted = [...this.frameIntervalBuffer].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)] ?? 33;
@@ -789,6 +802,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.fingerDetected = false;
     this.contactState = 'NO_CONTACT';
     this.signalQuality = 0;
+    this.cachedSqi = 0;
+    this.cachedPI = 0;
     this.fingerConfidenceCount = 0;
     this.fingerLostCount = 0;
     this.stableContactCount = 0;
