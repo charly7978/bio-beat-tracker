@@ -468,6 +468,10 @@ export class HeartBeatProcessor {
     this.lastPeakValue = 0;
     this.consecutivePeaks = 0;
     this.signalQualityIndex = 0;
+    this.frameTick = 0;
+    this.cachedGateRange = 0;
+    this.cachedSampleRate = 30;
+    this.cachedPeriodicity = { bpm: 0, score: 0 };
   }
 
   dispose(): void {
