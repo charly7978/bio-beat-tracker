@@ -413,6 +413,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     if (this.frameIntervalBuffer.length < 8) return;
 
+    // Median FPS drifts slowly — recompute every 10 frames.
+    if (this.frameCount % 10 !== 0) return;
+
     const sorted = [...this.frameIntervalBuffer].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)] ?? 33;
     const estimatedFps = this.clamp(1000 / median, 20, 40);
