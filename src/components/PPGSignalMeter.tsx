@@ -279,11 +279,8 @@ const PPGSignalMeter = ({
 
   const drawBackground = useCallback((ctx: CanvasRenderingContext2D) => {
     const { width: W, height: H } = layoutRef.current;
-    const grad = ctx.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, COLORS.BG_TOP);
-    grad.addColorStop(1, COLORS.BG_BOTTOM);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
+    // Clearing the main canvas to show the worker's canvas underneath
+    ctx.clearRect(0, 0, W, H);
   }, []);
 
   const drawHeader = useCallback((ctx: CanvasRenderingContext2D, now: number) => {
@@ -1184,8 +1181,7 @@ const PPGSignalMeter = ({
       drawBackground(ctx);
       drawHeader(ctx, now);
       drawMetricsBar(ctx, now);
-      drawECGGrid(ctx);
-      drawSignal(ctx, now);
+      // ECG Grid y Signal ahora los dibuja el Worker para mayor fluidez
       drawTrendStrip(ctx);
       drawPoincare(ctx);
       drawFooter(ctx);

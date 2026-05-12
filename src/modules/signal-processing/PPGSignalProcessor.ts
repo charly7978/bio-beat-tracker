@@ -91,6 +91,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private blueBaseline = 0;
   private estimatedSampleRate = 30;
   private lastFrameTimestamp = 0;
+  
+  // Derivatives for complete cardiac activity (VPG, APG)
+  private lastFiltered = 0;
+  private lastVPG = 0;
 
   private frameCount = 0;
   private lastLogTime = 0;
@@ -199,6 +203,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           message: `BUSCANDO DEDO C:${(roi.coverageRatio * 100).toFixed(0)}%`,
           hasPulsatility: false,
           pulsatilityValue: 0,
+          apg: 0,
         },
       });
       return;
@@ -288,6 +293,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       );
     }
 
+    // Calcular Derivadas (VPG, APG) para "Actividad Total"
+    const vpg = (filtered - this.lastFiltered) * this.estimatedSampleRate;
+    const apg = (vpg - this.lastVPG) * this.estimatedSampleRate;
+    this.lastFiltered = filtered;
+    this.lastVPG = vpg;
+
     this.onSignalReady({
       timestamp,
       rawValue: pulseSource.value,
@@ -307,6 +318,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           `${this.contactState}${motionArtifact ? ' MOV' : ''}`,
         hasPulsatility: this.contactState === 'STABLE_CONTACT' && perfusionIndex >= 0.05 && pulseSource.strength > 1.5,
         pulsatilityValue: this.contactState === 'STABLE_CONTACT' ? Math.max(perfusionIndex, pulseSource.strength * 0.02) : 0,
+        apg: apg,
       },
     });
   }

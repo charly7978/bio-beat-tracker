@@ -4,16 +4,33 @@ import type { ProcessedSignal } from '../../types/signal';
 let processor: PPGSignalProcessor | null = null;
 let canvas: OffscreenCanvas | null = null;
 let ctx: OffscreenCanvasRenderingContext2D | null = null;
+let bgCanvas: OffscreenCanvas | null = null;
+let bgCtx: OffscreenCanvasRenderingContext2D | null = null;
 
 // Internal canvas for pixel extraction (avoids main thread getImageData)
 let extractionCanvas: OffscreenCanvas | null = null;
 let extractionCtx: OffscreenCanvasRenderingContext2D | null = null;
 
 const COLORS = {
-  BG: '#06090f',
+  BG: '#020408',
+  BG_TOP: '#050a14',
+  BG_BOTTOM: '#020408',
   SIGNAL: '#22c55e',
-  GRID: 'rgba(34, 197, 94, 0.1)',
+  SIGNAL_GLOW: 'rgba(34, 197, 94, 0.45)',
+  APG: 'rgba(56, 189, 248, 0.4)', // Azul cielo para la aceleración (APG)
+  GRID: 'rgba(34, 197, 94, 0.08)',
+  HEAD: '#ffffff',
 };
+
+// PERSISTENCIA Y ESCALADO
+let lastX = 0;
+let lastY = 0;
+let lastAPGY = 0;
+let minVal = -20;
+let maxVal = 20;
+let range = 40;
+const SWEEP_SPEED = 2.2;
+const GHOST_WIDTH = 40; // Espacio de borrado delante del cabezal
 
 /**
  * PPG WEB WORKER
@@ -87,18 +104,52 @@ self.onmessage = (event: MessageEvent) => {
     case 'RESET':
       if (processor) processor.reset();
       lastX = 0;
+      minVal = -20; maxVal = 20; range = 40;
       if (ctx && canvas) {
-        ctx.fillStyle = COLORS.BG;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        bgCanvas = null; // Forzar regeneración
+        drawGrid();
       }
       break;
   }
 };
 
-// Lógica de barrido (sweep) simplificada para el worker
-let lastX = 0;
-let lastY = 0;
-const SWEEP_WIDTH = 2;
+function drawGrid() {
+  if (!ctx || !canvas) return;
+  const w = canvas.width;
+  const h = canvas.height;
+  
+  if (!bgCanvas) {
+    bgCanvas = new OffscreenCanvas(w, h);
+    bgCtx = bgCanvas.getContext('2d');
+  }
+  
+  if (!bgCtx) return;
+
+  // Fondo degradado profundo
+  const grad = bgCtx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, COLORS.BG_TOP);
+  grad.addColorStop(1, COLORS.BG_BOTTOM);
+  bgCtx.fillStyle = grad;
+  bgCtx.fillRect(0, 0, w, h);
+  
+  bgCtx.strokeStyle = COLORS.GRID;
+  bgCtx.lineWidth = 1;
+  bgCtx.beginPath();
+  // Líneas horizontales
+  for (let y = 0; y <= h; y += h / 4) {
+    bgCtx.moveTo(0, y);
+    bgCtx.lineTo(w, y);
+  }
+  // Líneas verticales
+  for (let x = 0; x <= w; x += w / 10) {
+    bgCtx.moveTo(x, 0);
+    bgCtx.lineTo(x, h);
+  }
+  bgCtx.stroke();
+
+  // Pintar el fondo inicial
+  ctx.drawImage(bgCanvas, 0, 0);
+}
 
 function drawSignalSweep(signal: ProcessedSignal) {
   if (!ctx || !canvas) return;
@@ -106,29 +157,88 @@ function drawSignalSweep(signal: ProcessedSignal) {
   const w = canvas.width;
   const h = canvas.height;
   const val = signal.filteredValue;
+  const apg = signal.diagnostics?.apg || 0;
+  const quality = signal.quality || 0;
   
-  // Normalización simple para visualización
-  const y = h / 2 - (val * h / 40);
+  // 1. Auto-scaling adaptativo (EMA)
+  const targetMin = Math.min(minVal, val - 2);
+  const targetMax = Math.max(maxVal, val + 2);
+  minVal = minVal * 0.99 + targetMin * 0.01;
+  maxVal = maxVal * 0.99 + targetMax * 0.01;
+  range = Math.max(10, maxVal - minVal);
+
+  // 2. Normalización a coordenadas de canvas
+  const y = h - ((val - minVal) / range) * h;
   
-  const x = lastX + SWEEP_WIDTH;
+  // Normalización APG (escala fija o adaptativa menor)
+  const apgY = h/2 - (apg * h / 800); 
+
+  const x = lastX + SWEEP_SPEED;
   
   if (x >= w) {
     lastX = 0;
-    ctx.fillStyle = COLORS.BG;
-    ctx.fillRect(0, 0, w, h);
+  }
+
+  // 3. Efecto Sweep (borrado por delante usando el buffer de fondo)
+  if (bgCanvas) {
+    ctx.drawImage(bgCanvas, x, 0, GHOST_WIDTH, h, x, 0, GHOST_WIDTH, h);
   } else {
-    // Borrar pequeño margen delante del trazo
     ctx.fillStyle = COLORS.BG;
-    ctx.fillRect(x, 0, SWEEP_WIDTH * 10, h);
-    
+    ctx.fillRect(x, 0, GHOST_WIDTH, h);
+  }
+
+  if (quality > 5) {
+    // 4. Dibujar APG (Aceleración - Sombra informativa)
     ctx.beginPath();
-    ctx.strokeStyle = COLORS.SIGNAL;
-    ctx.lineWidth = 2;
-    ctx.moveTo(lastX, lastY || y);
+    ctx.strokeStyle = COLORS.APG;
+    ctx.lineWidth = 1.5;
+    ctx.moveTo(lastX, lastAPGY || apgY);
+    ctx.lineTo(x, apgY);
+    ctx.stroke();
+
+    // 5. Dibujar Sombra/Resplandor (Glow)
+    ctx.beginPath();
+    ctx.strokeStyle = COLORS.SIGNAL_GLOW;
+    ctx.lineWidth = 4;
+    ctx.lineJoin = 'round';
+    ctx.moveTo(lastX, lastY);
     ctx.lineTo(x, y);
     ctx.stroke();
+
+    // 6. Dibujar Línea Principal
+    ctx.beginPath();
+    ctx.strokeStyle = COLORS.SIGNAL;
+    ctx.lineWidth = 2.5;
+    ctx.moveTo(lastX, lastY);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+
+    // 7. Cabezal de barrido (Spark)
+    ctx.beginPath();
+    ctx.fillStyle = COLORS.HEAD;
+    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
     
-    lastX = x;
-    lastY = y;
+    // Halo del cabezal
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, 8);
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 0.8)');
+    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(x, y, 8, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // Señal de baja calidad: línea punteada o tenue
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.3)';
+    ctx.setLineDash([2, 4]);
+    ctx.moveTo(lastX, h/2);
+    ctx.lineTo(x, h/2);
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
+
+  lastX = x;
+  lastY = y;
+  lastAPGY = apgY;
 }
