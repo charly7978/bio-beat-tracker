@@ -214,7 +214,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.blueBuffer.shift();
     }
 
-    if (this.redBuffer.length >= 36) {
+    // ACDC over a 36+ sample window changes slowly — recompute every 3 frames
+    // (~10 Hz) instead of every frame to cut 3 slice+sort allocations.
+    if (this.redBuffer.length >= 36 && this.frameCount % 3 === 0) {
       this.calculateACDCPrecise();
     }
     // Calcular PI UNA sola vez por frame — todos los consumidores leen del cache.
