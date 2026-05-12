@@ -86,6 +86,12 @@ export class VitalSignsProcessor {
   // RGB para SpO2
   private rgbData: RGBData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
   
+  // Gating de estabilidad (Consistencia)
+  private stableFramesCount: number = 0;
+  private readonly STABILITY_REQUIRED_FRAMES = 90; // ~3 segundos a 30fps
+  private lastCoherentSpO2: number = 0;
+  private lastCoherentBPM: number = 0;
+  
   // Suavizado adaptativo para estabilidad SIN perder respuesta
   // Alpha más bajo = más suavizado = lecturas más estables
   private readonly EMA_ALPHA_STABLE = 0.20;
@@ -117,6 +123,9 @@ export class VitalSignsProcessor {
       signalQuality: 0
     };
     this.signalHistory = [];
+    this.stableFramesCount = 0;
+    this.lastCoherentSpO2 = 0;
+    this.lastCoherentBPM = 0;
   }
 
   forceCalibrationCompletion(): void {
@@ -262,13 +271,35 @@ export class VitalSignsProcessor {
   ): void {
     const minQualityForCalculation = 10;
     if (this.measurements.signalQuality < minQualityForCalculation) {
+      this.stableFramesCount = 0;
       return;
     }
+
+    const confidence = this.getMeasurementConfidence();
+    const isHighlyStable = confidence === 'HIGH' && this.measurements.signalQuality > 50;
+
+    if (isHighlyStable) {
+      this.stableFramesCount++;
+    } else {
+      this.stableFramesCount = Math.max(0, this.stableFramesCount - 2); // Penalización rápida por inestabilidad
+    }
+
+    if (this.frameCount % 60 === 0) {
+      log.info(`[Stability Gating] Count: ${this.stableFramesCount}/${this.STABILITY_REQUIRED_FRAMES} | Confidence: ${confidence}`);
+    }
     
-    // SpO2 — lowest gate, always try first
+    // SpO2 — Gated by stability
     const spo2 = this.calculateSpO2Raw();
     if (spo2 !== 0 && spo2 > 70 && spo2 < 100) {
-      this.measurements.spo2 = this.smoothValue(this.measurements.spo2, spo2, 'stable');
+      // Coherencia fisiológica: SpO2 no cambia instantáneamente más de 2% en reposo
+      const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 3;
+      
+      if (isCoherent || this.stableFramesCount > 300) { // Tras 10s aceptamos nueva base si es coherente
+        this.lastCoherentSpO2 = spo2;
+        if (this.stableFramesCount >= this.STABILITY_REQUIRED_FRAMES) {
+          this.measurements.spo2 = this.smoothValue(this.measurements.spo2, spo2, 'stable');
+        }
+      }
     }
 
     const validRR = rrData.intervals.filter(isPhysiologicalRR);
@@ -282,9 +313,13 @@ export class VitalSignsProcessor {
       );
       this.lastBPConfidence = bpEstimate.confidence;
       this.lastBPFeatureQuality = bpEstimate.featureQuality;
+      
       if (bpEstimate.systolic > 0 && bpEstimate.confidence !== 'INSUFFICIENT') {
-        this.measurements.systolicPressure = this.smoothValue(this.measurements.systolicPressure, bpEstimate.systolic, 'stable');
-        this.measurements.diastolicPressure = this.smoothValue(this.measurements.diastolicPressure, bpEstimate.diastolic, 'stable');
+        // BP Gating: Solo actualizar si hay estabilidad mínima
+        if (this.stableFramesCount >= this.STABILITY_REQUIRED_FRAMES || bpEstimate.confidence === 'HIGH') {
+          this.measurements.systolicPressure = this.smoothValue(this.measurements.systolicPressure, bpEstimate.systolic, 'stable');
+          this.measurements.diastolicPressure = this.smoothValue(this.measurements.diastolicPressure, bpEstimate.diastolic, 'stable');
+        }
       }
     }
 
