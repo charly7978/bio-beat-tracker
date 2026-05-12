@@ -89,19 +89,30 @@ export class HeartBeatProcessor {
       return { bpm: 0, confidence: 0, isPeak: false, filteredValue: 0, sqi: 0 };
     }
 
+    this.frameTick++;
+
     // === GATE: minimum signal energy to reject noise ===
-    const recentForGate = this.signalBuffer.slice(-60);
-    const gSorted = [...recentForGate].sort((a, b) => a - b);
-    const gRange = (gSorted[Math.floor(gSorted.length * 0.9)] ?? 0) - (gSorted[Math.floor(gSorted.length * 0.1)] ?? 0);
-    if (gRange < 0.5) {
+    // Recompute slow stats (gate range, periodicity, SQI) every 4 frames.
+    // Peak detection still runs every frame.
+    if (this.frameTick % 4 === 0 || this.cachedGateRange === 0) {
+      const recentForGate = this.signalBuffer.slice(-60);
+      const gSorted = [...recentForGate].sort((a, b) => a - b);
+      this.cachedGateRange = (gSorted[Math.floor(gSorted.length * 0.9)] ?? 0) - (gSorted[Math.floor(gSorted.length * 0.1)] ?? 0);
+    }
+    if (this.cachedGateRange < 0.5) {
       return { bpm: 0, confidence: 0, isPeak: false, filteredValue: 0, sqi: 0 };
     }
 
     // Adaptive window for normalization
     const windowLen = this.consecutivePeaks < 3 ? 90 : 150;
     const { normalizedValue, range } = this.normalizeSignal(filteredValue, windowLen);
-    
-    const periodicity = this.estimatePeriodicity();
+
+    // Periodicity is an autocorrelation over 120-180 samples — recompute every
+    // 6 frames (~5 Hz). Keep last value otherwise.
+    if (this.frameTick % 6 === 0) {
+      this.cachedPeriodicity = this.estimatePeriodicity();
+    }
+    const periodicity = this.cachedPeriodicity;
     this.periodicityScore = periodicity.score;
 
     if (periodicity.bpm > 0) {
@@ -113,7 +124,9 @@ export class HeartBeatProcessor {
     }
 
     this.updateThreshold(range, this.periodicityScore);
-    this.signalQualityIndex = this.calculateSQI(range, this.periodicityScore);
+    if (this.frameTick % 4 === 0) {
+      this.signalQualityIndex = this.calculateSQI(range, this.periodicityScore);
+    }
 
     const timeSinceLastPeak = this.lastPeakTime > 0 ? now - this.lastPeakTime : Number.MAX_SAFE_INTEGER;
     let isPeak = false;
