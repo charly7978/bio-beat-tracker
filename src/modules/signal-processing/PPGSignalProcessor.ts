@@ -239,7 +239,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     const endSqi = ppgPerf.start('sqi');
-    this.signalQuality = this.calculateSignalQuality();
+    // SQI is a statistical aggregate over 90 samples — recompute every 3 frames
+    // (~10 Hz) instead of every frame. Cached value is reused otherwise.
+    if (this.frameCount % 3 === 0) {
+      this.cachedSqi = this.calculateSignalQuality();
+    }
+    this.signalQuality = this.cachedSqi;
     endSqi();
 
     const perfusionIndex = this.cachedPI;
