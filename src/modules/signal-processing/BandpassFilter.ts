@@ -52,8 +52,8 @@ export class BandpassFilter {
   private computeCoefficients(): void {
     const fs = this.sampleRate;
     
-    // === PASA-ALTOS a 0.3Hz (más permisivo para señales débiles) ===
-    const fcHp = 0.3;
+    // === PASA-ALTOS a 0.6Hz (Elimina respiración y deriva lenta) ===
+    const fcHp = 0.6;
     const wcHp = Math.tan(Math.PI * fcHp / fs);
     const kHp = wcHp;
     const normHp = 1 / (1 + Math.sqrt(2) * kHp + kHp * kHp);
@@ -65,8 +65,8 @@ export class BandpassFilter {
     this.hpfA[1] = 2 * (kHp * kHp - 1) * normHp;
     this.hpfA[2] = (1 - Math.sqrt(2) * kHp + kHp * kHp) * normHp;
     
-    // === PASA-BAJOS a 5Hz (captura hasta 300 BPM por seguridad) ===
-    const fcLp = 5.0;
+    // === PASA-BAJOS a 3.8Hz (Elimina ruido HF, captura hasta 228 BPM) ===
+    const fcLp = 3.8;
     const wcLp = Math.tan(Math.PI * fcLp / fs);
     const kLp = wcLp;
     const normLp = 1 / (1 + Math.sqrt(2) * kLp + kLp * kLp);

@@ -9,8 +9,8 @@
  * 4. Ventanas adaptativas: cortas para señal débil, largas para estable
  */
 export class HeartBeatProcessor {
-  private readonly MIN_PEAK_INTERVAL_MS = 330;
-  private readonly MAX_PEAK_INTERVAL_MS = 2000;
+  private readonly MIN_PEAK_INTERVAL_MS = 340; // ~176 BPM máximo fisiológico en reposo/leve estrés
+  private readonly MAX_PEAK_INTERVAL_MS = 2200;
 
   private signalBuffer: number[] = [];
   private derivativeBuffer: number[] = [];
@@ -131,7 +131,11 @@ export class HeartBeatProcessor {
     const timeSinceLastPeak = this.lastPeakTime > 0 ? now - this.lastPeakTime : Number.MAX_SAFE_INTEGER;
     let isPeak = false;
 
-    if (timeSinceLastPeak >= this.MIN_PEAK_INTERVAL_MS) {
+    // MEJORA: Periodo refractario dinámico (60% del último RR conocido)
+    const expectedRR = this.getExpectedRR();
+    const dynamicRefractory = expectedRR > 0 ? Math.max(this.MIN_PEAK_INTERVAL_MS, expectedRR * 0.55) : this.MIN_PEAK_INTERVAL_MS;
+
+    if (timeSinceLastPeak >= dynamicRefractory) {
       isPeak = this.detectPeakWithScoring(timeSinceLastPeak);
 
       if (isPeak) {
@@ -211,7 +215,7 @@ export class HeartBeatProcessor {
   private normalizeSignal(value: number, windowLen: number = 150): { normalizedValue: number; range: number } {
     const recent = this.signalBuffer.slice(-windowLen);
     const { low, high, range } = this.getRobustBounds(recent);
-    if (range < 0.15) return { normalizedValue: 0, range: 0 };
+    if (range < 0.25) return { normalizedValue: 0, range: 0 }; // Aumentado gate para filtrar ruido de sensor
     const clipped = Math.min(high, Math.max(low, value));
     const normalizedValue = ((clipped - low) / range - 0.5) * 120;
     return { normalizedValue, range };
@@ -362,11 +366,11 @@ export class HeartBeatProcessor {
     // === CANDIDATE SCORING ===
     let score = 0;
 
-    // Prominence gate: reject flat noise but accept real PPG
-    if (prominence < 2.2) return false;
+    // Prominence gate: reject flat noise (estricto para evitar 'latidos acelerados' por ruido)
+    if (prominence < 3.2) return false;
 
-    // Morphology gate: PPG has rising edge
-    if (risingSlope < 0.8) return false;
+    // Morphology gate: PPG has steep rising edge
+    if (risingSlope < 1.2) return false;
 
     // Prominence (0-30 points)
     score += Math.min(30, prominence * 2.5);
