@@ -21,6 +21,7 @@ export interface ProcessedSignal {
     message: string;
     hasPulsatility: boolean;
     pulsatilityValue: number;
+    apg?: number;
   };
 }
 

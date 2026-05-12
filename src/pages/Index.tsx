@@ -156,7 +156,6 @@ const Index = () => {
     getBackpressureConfig,
     setBackpressureConfig,
     currentStride,
-    currentStride,
     setSignalCallback,
     setCanvas,
   } = useSignalProcessor();
@@ -1038,10 +1037,9 @@ const Index = () => {
           </div>
         )}
 
-        <div className="relative z-10 h-full">
-          <div className="flex-1 h-full">
-            <PPGSignalMeter 
-              value={heartbeatSignal}
+        <div className="flex-1 h-full w-full">
+          <PPGSignalMeter 
+            value={heartbeatSignal}
               quality={lastSignal?.quality || 0}
               isFingerDetected={lastSignal?.fingerDetected || false}
               onStartMeasurement={handleToggleMonitoring}
@@ -1064,7 +1062,7 @@ const Index = () => {
             />
           </div>
 
-          {/* RESUMEN ESTADÍSTICO POST-MEDICIÓN */}
+    {/* RESUMEN ESTADÍSTICO POST-MEDICIÓN */}
           {showResults && measurementSummary && (() => {
             const { totalBeats, arrhythmiaBeats, normalPercent } = measurementSummary;
             const normalBeats = totalBeats - arrhythmiaBeats;

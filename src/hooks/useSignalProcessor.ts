@@ -162,6 +162,17 @@ export const useSignalProcessor = () => {
     }
   }, []);
 
+  const getBackpressureConfig = useCallback(() => {
+    return loadBackpressureConfig();
+  }, []);
+
+  const setBackpressureConfig = useCallback((config: Partial<BackpressureConfig>) => {
+    const current = loadBackpressureConfig();
+    const updated = { ...current, ...config };
+    saveBackpressureConfig(updated);
+    // Podríamos enviar este config al worker si fuera necesario
+  }, []);
+
   return {
     isProcessing,
     lastSignal,
@@ -172,6 +183,8 @@ export const useSignalProcessor = () => {
     processFrame,
     getRGBStats,
     getBackpressureState,
+    getBackpressureConfig,
+    setBackpressureConfig,
     setSignalCallback,
     setCanvas
   };

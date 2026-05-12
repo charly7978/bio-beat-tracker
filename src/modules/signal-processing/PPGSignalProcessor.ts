@@ -253,7 +253,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     
     // 3. ALS Baseline Correction (Fase 3 - cada 30 frames para eficiencia)
     if (this.frameCount % 30 === 0 && this.filteredBuffer.length >= 90) {
-      const baseline = AsymmetricLeastSquares.baseline(this.filteredBuffer, 1e5, 0.001, 5);
+      const baseline = AsymmetricLeastSquares.baseline(
+        this.rawBuffer,
+        1e5,
+        0.005,
+        2 // Reducido a 2 iteraciones para mayor velocidad en tiempo real
+      );
       for (let i = 0; i < this.filteredBuffer.length; i++) {
         this.filteredBuffer[i] -= baseline[i];
       }

@@ -68,6 +68,7 @@ const COLORS = {
 };
 
 const FONT_MONO = '"SF Mono", Consolas, "Roboto Mono", monospace';
+const FONT_SANS = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 
 const PPGSignalMeter = ({
   value,
@@ -232,25 +233,25 @@ const PPGSignalMeter = ({
 
     // Compute zones in CSS pixels.
     // Heights are proportional, but with sensible minima.
-    const header = { x: 0, y: 0, w: cssW, h: 36 };
-    const metricsH = Math.max(100, Math.min(120, Math.round(cssH * 0.13)));
+    const header = { x: 0, y: 0, w: cssW, h: 28 }; // Más compacto
+    const metricsH = Math.max(80, Math.min(100, Math.round(cssH * 0.11))); // Más compacto
     const metrics = { x: 0, y: header.h, w: cssW, h: metricsH };
 
-    const lowerH = Math.max(150, Math.round(cssH * 0.22));
-    const footerH = 56;
-    const buttonsH = 48;
+    const lowerH = Math.max(120, Math.round(cssH * 0.18)); // Más compacto
+    const footerH = 48;
+    const buttonsH = 44;
     const plotY = header.h + metricsH;
     const plotH = cssH - plotY - lowerH - footerH - buttonsH;
 
-    const plotX = 56;
-    const plotW = cssW - plotX - 18;
-    const plot = { x: plotX, y: plotY + 8, w: plotW, h: Math.max(150, plotH - 8), centerY: 0 };
+    const plotX = 48; // Menos margen lateral
+    const plotW = cssW - plotX - 12;
+    const plot = { x: plotX, y: plotY + 12, w: plotW, h: Math.max(200, plotH - 12), centerY: 0 };
     plot.centerY = plot.y + plot.h / 2;
 
-    const lowerY = plot.y + plot.h + 6;
-    const poincareW = Math.min(lowerH + 16, Math.round(cssW * 0.35));
-    const trend = { x: plotX, y: lowerY, w: plotW - poincareW - 8, h: lowerH - 8 };
-    const poincare = { x: plotX + trend.w + 8, y: lowerY, w: poincareW, h: lowerH - 8 };
+    const lowerY = plot.y + plot.h + 8;
+    const poincareW = Math.min(lowerH + 32, Math.round(cssW * 0.4));
+    const trend = { x: plotX, y: lowerY, w: plotW - poincareW - 8, h: lowerH - 12 };
+    const poincare = { x: plotX + trend.w + 8, y: lowerY, w: poincareW, h: lowerH - 12 };
 
     const footer = { x: 0, y: cssH - buttonsH - footerH, w: cssW, h: footerH };
 
@@ -304,39 +305,36 @@ const PPGSignalMeter = ({
       ? `rgba(34, 197, 94, ${0.55 + pulse * 0.45})`
       : statusColor;
     ctx.fill();
-
-    ctx.font = `bold 11px ${FONT_MONO}`;
+    ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_PRIMARY;
     ctx.textAlign = 'left';
-    ctx.fillText(isMonitoring ? 'MONITOREANDO' : (preserveResults ? 'RESULTADOS' : 'EN ESPERA'), 28, header.y + 22);
+    ctx.fillText(isMonitoring ? 'MONITOREANDO' : (preserveResults ? 'RESULTADOS' : 'LISTO'), 28, header.y + 17);
 
     // Time + elapsed
     const d = new Date(now);
     const hh = String(d.getHours()).padStart(2, '0');
     const mm = String(d.getMinutes()).padStart(2, '0');
     const ss = String(d.getSeconds()).padStart(2, '0');
-    const t = Math.max(0, Math.floor(elapsed || 0));
-    const em = String(Math.floor(t / 60)).padStart(2, '0');
-    const es = String(t % 60).padStart(2, '0');
-
-    ctx.font = `11px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_SECONDARY;
+    
+    ctx.font = `10px ${FONT_MONO}`;
     ctx.textAlign = 'center';
-    ctx.fillText(`${hh}:${mm}:${ss}`, header.w / 2, header.y + 22);
-
-    // Quality on the right
+    ctx.fillText(`${hh}:${mm}:${ss}`, header.w / 2, header.y + 17);
+    
+    // SQI + Info (Right)
     ctx.textAlign = 'right';
-    const qColor = quality > 60 ? COLORS.TEXT_PRIMARY : quality > 30 ? COLORS.TEXT_WARN : (quality > 0 ? COLORS.TEXT_DANGER : COLORS.TEXT_DIM);
-    ctx.fillStyle = qColor;
-    ctx.fillText(`SQI ${Math.round(quality)}%`, header.w - 16, header.y + 22);
+    ctx.fillStyle = quality >= 8 ? COLORS.SIGNAL : quality >= 5 ? COLORS.TEXT_WARN : COLORS.TEXT_DANGER;
+    ctx.fillText(`SQI: ${quality * 10}%`, header.w - 12, header.y + 17);
 
     // Elapsed badge (left side, secondary)
     if (isMonitoring) {
+      const t = Math.max(0, Math.floor(elapsedTime || 0));
+      const em = String(Math.floor(t / 60)).padStart(2, '0');
+      const es = String(t % 60).padStart(2, '0');
       const elapStr = `⏱ ${em}:${es}`;
       ctx.font = `11px ${FONT_MONO}`;
       ctx.textAlign = 'left';
       ctx.fillStyle = COLORS.TEXT_INFO;
-      ctx.fillText(elapStr, 160, header.y + 22);
+      ctx.fillText(elapStr, 160, header.y + 17);
     }
 
     // Finger detect indicator
@@ -352,22 +350,19 @@ const PPGSignalMeter = ({
 
     // Background row
     ctx.fillStyle = 'rgba(6, 12, 22, 0.85)';
-    ctx.fillRect(metrics.x, metrics.y, metrics.w, metrics.h);
-    ctx.strokeStyle = COLORS.PANEL_BORDER_DIM;
-    ctx.beginPath();
-    ctx.moveTo(0, metrics.y + metrics.h);
-    ctx.lineTo(metrics.w, metrics.y + metrics.h);
-    ctx.stroke();
-
-    // 3 columnas: HR | SpO2 | BP
     const colW = metrics.w / 3;
 
-    // Divisores verticales
-    ctx.strokeStyle = COLORS.PANEL_BORDER_DIM;
+    // Background row con glassmorphism
+    ctx.fillStyle = 'rgba(10, 18, 30, 0.9)';
+    ctx.fillRect(metrics.x, metrics.y, metrics.w, metrics.h);
+    
+    ctx.strokeStyle = COLORS.PANEL_BORDER;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(colW, metrics.y + 8); ctx.lineTo(colW, metrics.y + metrics.h - 8);
-    ctx.moveTo(colW * 2, metrics.y + 8); ctx.lineTo(colW * 2, metrics.y + metrics.h - 8);
+    ctx.moveTo(colW, metrics.y + 10);
+    ctx.lineTo(colW, metrics.y + metrics.h - 10);
+    ctx.moveTo(colW * 2, metrics.y + 10);
+    ctx.lineTo(colW * 2, metrics.y + metrics.h - 10);
     ctx.stroke();
 
     // === HR ===
@@ -375,170 +370,80 @@ const PPGSignalMeter = ({
       : bpm < 50 ? COLORS.TEXT_DANGER
       : bpm < 60 ? COLORS.TEXT_WARN
       : bpm <= 100 ? COLORS.TEXT_PRIMARY
-      : bpm <= 120 ? COLORS.TEXT_WARN
-      : COLORS.TEXT_DANGER;
+      : COLORS.TEXT_WARN;
 
+    ctx.textAlign = 'center';
+    ctx.fillStyle = COLORS.TEXT_INFO;
+    ctx.font = `10px ${FONT_SANS}`;
+    ctx.fillText('FRECUENCIA CARDÍACA', colW / 2, metrics.y + 16);
+    
+    ctx.font = `bold 44px ${FONT_SANS}`; // Aumentado
+    ctx.fillStyle = bpm > 0 ? (bpm > 100 || bpm < 50 ? COLORS.TEXT_WARN : '#fff') : COLORS.TEXT_DIM;
+    ctx.fillText(bpm > 0 ? Math.round(bpm).toString() : '--', colW / 2, metrics.y + 54);
+    
     ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.textAlign = 'left';
-    ctx.fillText('FRECUENCIA CARDÍACA', 16, metrics.y + 18);
-
-    ctx.font = `bold 56px ${FONT_MONO}`;
-    ctx.fillStyle = hrColor;
-    const heartPulse = isMonitoring && bpm > 30 ? (Math.sin(now / (60000 / Math.max(60, bpm)) * 2 * Math.PI) + 1) / 2 : 0;
-    ctx.save();
-    if (heartPulse > 0) {
-      ctx.shadowColor = hrColor;
-      ctx.shadowBlur = 6 + heartPulse * 6;
-    }
-    ctx.fillText(bpm > 0 ? Math.round(bpm).toString() : '--', 16, metrics.y + 70);
-    ctx.restore();
-
-    ctx.font = `12px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.fillText('BPM', 16, metrics.y + 88);
-
-    // Classification
-    let hrLabel = '';
-    if (bpm > 0) {
-      if (bpm < 50) hrLabel = 'BRADICARDIA SEVERA';
-      else if (bpm < 60) hrLabel = 'BRADICARDIA';
-      else if (bpm <= 100) hrLabel = 'NORMAL (SINUSAL)';
-      else if (bpm <= 120) hrLabel = 'TAQUICARDIA LEVE';
-      else if (bpm <= 150) hrLabel = 'TAQUICARDIA';
-      else hrLabel = 'TAQUICARDIA SEVERA';
-    }
-    if (hrLabel) {
-      ctx.font = `bold 10px ${FONT_MONO}`;
-      ctx.fillStyle = hrColor;
-      ctx.textAlign = 'right';
-      ctx.fillText(hrLabel, colW - 12, metrics.y + 88);
-    }
-
-    // BPM min/max mini-bar at top right of col
-    const s = bpmStatsRef.current;
-    if (s.n > 0) {
-      ctx.font = `9px ${FONT_MONO}`;
-      ctx.fillStyle = COLORS.TEXT_DIM;
-      ctx.textAlign = 'right';
-      ctx.fillText(`min ${s.min}  max ${s.max}  x̄ ${Math.round(s.sum / s.n)}`, colW - 12, metrics.y + 18);
-    }
+    ctx.fillStyle = bpm > 100 ? COLORS.TEXT_WARN : COLORS.TEXT_PRIMARY;
+    ctx.fillText(bpm > 0 ? (bpm > 100 ? 'TAQUICARDIA' : (bpm < 50 ? 'BRADICARDIA' : 'NORMAL')) : '---', colW / 2, metrics.y + 70);
 
     // === SpO2 ===
-    const spo2Color = spo2 <= 0 ? COLORS.TEXT_DIM
-      : spo2 >= 95 ? COLORS.SPO2
-      : spo2 >= 90 ? COLORS.TEXT_WARN
-      : COLORS.TEXT_DANGER;
-
-    ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.textAlign = 'left';
-    ctx.fillText('SATURACIÓN O₂', colW + 16, metrics.y + 18);
-
-    ctx.font = `bold 56px ${FONT_MONO}`;
-    ctx.fillStyle = spo2Color;
-    ctx.fillText(spo2 > 0 ? Math.round(spo2).toString() : '--', colW + 16, metrics.y + 70);
-
-    ctx.font = `12px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.fillText('%', colW + 16 + (spo2 > 0 ? 64 : 32), metrics.y + 70);
-
-    // SpO2 sub
-    let spLabel = '';
-    if (spo2 > 0) {
-      if (spo2 >= 95) spLabel = 'NORMOXIA';
-      else if (spo2 >= 90) spLabel = 'HIPOXEMIA LEVE';
-      else if (spo2 >= 85) spLabel = 'HIPOXEMIA MODERADA';
-      else spLabel = 'HIPOXEMIA SEVERA';
-    }
-    ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.fillStyle = spo2Color;
-    ctx.textAlign = 'right';
-    if (spLabel) ctx.fillText(spLabel, colW * 2 - 12, metrics.y + 88);
-
-    // Perfusion Index — sub-line on SpO2 column
-    if (pi > 0) {
-      ctx.font = `9px ${FONT_MONO}`;
-      ctx.fillStyle = COLORS.TEXT_DIM;
-      ctx.textAlign = 'left';
-      ctx.fillText(`PI ${(pi * 100).toFixed(2)}%`, colW + 16, metrics.y + 88);
-    }
+    ctx.fillStyle = COLORS.TEXT_INFO;
+    ctx.font = `10px ${FONT_SANS}`;
+    ctx.fillText('SATURACIÓN O₂', colW + colW / 2, metrics.y + 16);
+    
+    ctx.font = `bold 44px ${FONT_SANS}`; // Aumentado
+    ctx.fillStyle = spo2 > 0 ? (spo2 < 94 ? COLORS.TEXT_WARN : '#fff') : COLORS.TEXT_DIM;
+    ctx.fillText(spo2 > 0 ? `${Math.round(spo2)}` : '--', colW + colW / 2 - 8, metrics.y + 54);
+    
+    ctx.font = `bold 12px ${FONT_MONO}`;
+    ctx.fillText('%', colW + colW / 2 + 22, metrics.y + 54);
 
     // === BP ===
-    const sys = pressure?.systolic || 0;
-    const dia = pressure?.diastolic || 0;
-    const map = sys > 0 && dia > 0 ? Math.round(dia + (sys - dia) / 3) : 0;
-    const pp = sys > 0 && dia > 0 ? sys - dia : 0;
-    const bpConf = pressure?.confidence;
-
-    const bpColor = sys <= 0 ? COLORS.TEXT_DIM
-      : sys >= 140 || dia >= 90 ? COLORS.TEXT_DANGER
-      : sys >= 130 || dia >= 80 ? COLORS.TEXT_WARN
-      : sys < 90 || dia < 60 ? COLORS.TEXT_WARN
-      : COLORS.BP;
-
+    ctx.fillStyle = COLORS.TEXT_INFO;
+    ctx.font = `10px ${FONT_SANS}`;
+    ctx.fillText('PRESIÓN ARTERIAL', colW * 2 + colW / 2, metrics.y + 16);
+    
+    const sys = Math.round(pressure?.systolic || 0);
+    const dia = Math.round(pressure?.diastolic || 0);
+    const hasBP = sys > 0 && dia > 0;
+    
+    ctx.font = `bold 34px ${FONT_SANS}`; // Aumentado
+    ctx.fillStyle = hasBP ? (sys > 140 || dia > 90 ? COLORS.TEXT_PRIMARY : '#fff') : COLORS.TEXT_DIM;
+    ctx.fillText(hasBP ? `${sys}/${dia}` : '--/--', colW * 2 + colW / 2, metrics.y + 54);
+    
     ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.textAlign = 'left';
-    ctx.fillText('PRESIÓN ARTERIAL', colW * 2 + 16, metrics.y + 18);
-
-    ctx.font = `bold 38px ${FONT_MONO}`;
-    ctx.fillStyle = bpColor;
-    ctx.fillText(sys > 0 ? `${sys}/${dia}` : '--/--', colW * 2 + 16, metrics.y + 62);
-
-    ctx.font = `12px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.fillText('mmHg', colW * 2 + 16, metrics.y + 80);
-
-    if (sys > 0) {
-      ctx.font = `9px ${FONT_MONO}`;
-      ctx.fillStyle = COLORS.TEXT_SECONDARY;
-      ctx.textAlign = 'right';
-      ctx.fillText(`MAP ${map}  ·  PP ${pp}`, metrics.w - 16, metrics.y + 62);
-
-      let bpLabel = '';
-      if (sys >= 140 || dia >= 90) bpLabel = 'HIPERTENSIÓN';
-      else if (sys >= 130 || dia >= 80) bpLabel = 'ELEVADA';
-      else if (sys < 90 || dia < 60) bpLabel = 'HIPOTENSIÓN';
-      else bpLabel = 'NORMAL';
-      ctx.font = `bold 10px ${FONT_MONO}`;
-      ctx.fillStyle = bpColor;
-      ctx.fillText(bpLabel, metrics.w - 16, metrics.y + 80);
-
-      if (bpConf && bpConf !== 'INSUFFICIENT') {
-        ctx.font = `9px ${FONT_MONO}`;
-        ctx.fillStyle = bpConf === 'HIGH' ? COLORS.TEXT_PRIMARY : bpConf === 'MEDIUM' ? COLORS.TEXT_WARN : COLORS.TEXT_DIM;
-        ctx.fillText(`conf: ${bpConf}`, metrics.w - 16, metrics.y + 18);
-      }
-    }
+    ctx.fillText('mmHg', colW * 2 + colW / 2, metrics.y + 70);
 
     // === Advanced Biomarkers (Glucose & Arterial) ===
     if (glucose && glucose.value > 0) {
-      ctx.font = `bold 9px ${FONT_MONO}`;
+      ctx.font = `bold 10px ${FONT_MONO}`;
       ctx.fillStyle = COLORS.TEXT_INFO;
       ctx.textAlign = 'left';
-      ctx.fillText(`GLUCOSA: ${glucose.value} mg/dL`, colW * 2 + 16, metrics.y + 88);
+      ctx.fillText(`GLUCOSA: ${glucose.value}`, metrics.x + 12, metrics.y + metrics.h - 10);
+      ctx.font = `8px ${FONT_MONO}`;
+      ctx.fillText(`mg/dL`, metrics.x + 12, metrics.y + metrics.h - 2);
     }
+    
     if (ah && ah.agingIndex !== 0) {
-      ctx.font = `bold 9px ${FONT_MONO}`;
+      ctx.font = `bold 10px ${FONT_MONO}`;
       ctx.fillStyle = ah.agingIndex < 0 ? COLORS.TEXT_PRIMARY : COLORS.TEXT_WARN;
       ctx.textAlign = 'right';
-      ctx.fillText(`AGI: ${ah.agingIndex.toFixed(2)} (${ah.vascularStatus})`, metrics.w - 16, metrics.y + 88);
+      ctx.fillText(`VAS: ${ah.vascularStatus}`, metrics.w - 12, metrics.y + metrics.h - 10);
+      ctx.font = `8px ${FONT_MONO}`;
+      ctx.fillText(`AGI: ${ah.agingIndex.toFixed(2)}`, metrics.w - 12, metrics.y + metrics.h - 2);
     }
 
-    // Arrhythmia banner (overlay top-right of metrics)
+    // Arrhythmia banner (overlay below metrics)
     if (arr?.includes('ARRITMIA')) {
-      const parts = arr.split('|');
-      const count = parts.length > 1 ? parseInt(parts[1]) : 0;
-      const flash = (Math.sin(now / 120) + 1) / 2;
-      ctx.fillStyle = `rgba(239, 68, 68, ${0.18 + flash * 0.22})`;
-      ctx.fillRect(metrics.x + 16, metrics.y + 4, metrics.w - 32, 14);
-      ctx.font = `bold 10px ${FONT_MONO}`;
-      ctx.fillStyle = COLORS.TEXT_DANGER;
+      const bannerH = 18;
+      const bannerY = metrics.y + metrics.h + 2;
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.85)';
+      ctx.fillRect(0, bannerY, metrics.w, bannerH);
+      ctx.font = `bold 10px ${FONT_SANS}`;
+      ctx.fillStyle = '#fff';
       ctx.textAlign = 'center';
-      ctx.fillText(`⚠ ARRITMIA DETECTADA · ${count} evento${count === 1 ? '' : 's'}`, metrics.w / 2, metrics.y + 14);
+      ctx.fillText(arr.replace('|', ' | '), metrics.w / 2, bannerY + 12);
     }
-  }, [isMonitoring]);
+  }, [isMonitoring, pressure]);
 
   const drawECGGrid = useCallback((ctx: CanvasRenderingContext2D) => {
     const { plot } = layoutRef.current;

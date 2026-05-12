@@ -29,8 +29,8 @@ let lastAPGY = 0;
 let minVal = -20;
 let maxVal = 20;
 let range = 40;
-const SWEEP_SPEED = 2.2;
-const GHOST_WIDTH = 40; // Espacio de borrado delante del cabezal
+const SWEEP_SPEED = 3.2; // Más rápido para mayor fluidez
+const GHOST_WIDTH = 50; // Más espacio de borrado
 
 /**
  * PPG WEB WORKER
@@ -160,12 +160,12 @@ function drawSignalSweep(signal: ProcessedSignal) {
   const apg = signal.diagnostics?.apg || 0;
   const quality = signal.quality || 0;
   
-  // 1. Auto-scaling adaptativo (EMA)
-  const targetMin = Math.min(minVal, val - 2);
-  const targetMax = Math.max(maxVal, val + 2);
-  minVal = minVal * 0.99 + targetMin * 0.01;
-  maxVal = maxVal * 0.99 + targetMax * 0.01;
-  range = Math.max(10, maxVal - minVal);
+  // 1. Auto-scaling adaptativo más agresivo
+  const targetMin = Math.min(minVal, val - 3);
+  const targetMax = Math.max(maxVal, val + 3);
+  minVal = minVal * 0.96 + targetMin * 0.04; // Adaptación más rápida
+  maxVal = maxVal * 0.96 + targetMax * 0.04;
+  range = Math.max(12, maxVal - minVal);
 
   // 2. Normalización a coordenadas de canvas
   const y = h - ((val - minVal) / range) * h;
