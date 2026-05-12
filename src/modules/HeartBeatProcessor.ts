@@ -34,6 +34,15 @@ export class HeartBeatProcessor {
   private consecutivePeaks = 0;
   private signalQualityIndex = 0;
 
+  // Per-frame cache: stats over slow-moving windows (gate range, sample rate,
+  // periodicity, SQI) recomputed every N frames to avoid per-frame slice/sort
+  // allocations. Values are statistical aggregates over 60-180 samples, so
+  // updating at ~6-10 Hz instead of 30 Hz is imperceptible.
+  private frameTick = 0;
+  private cachedGateRange = 0;
+  private cachedSampleRate = 30;
+  private cachedPeriodicity: { bpm: number; score: number } = { bpm: 0, score: 0 };
+
   constructor() {
     this.setupAudio();
   }
