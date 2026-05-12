@@ -86,12 +86,6 @@ export class VitalSignsProcessor {
   // RGB para SpO2
   private rgbData: RGBData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
   
-  // Gating de estabilidad (Consistencia)
-  private stableFramesCount: number = 0;
-  private readonly STABILITY_REQUIRED_FRAMES = 45; // Reducido a ~1.5 segundos para respuesta más rápida
-  private lastCoherentSpO2: number = 0;
-  private lastCoherentBPM: number = 0;
-  
   // Suavizado adaptativo para estabilidad SIN perder respuesta
   // Alpha más bajo = más suavizado = lecturas más estables
   private readonly EMA_ALPHA_STABLE = 0.20;
@@ -123,9 +117,6 @@ export class VitalSignsProcessor {
       signalQuality: 0
     };
     this.signalHistory = [];
-    this.stableFramesCount = 0;
-    this.lastCoherentSpO2 = 0;
-    this.lastCoherentBPM = 0;
   }
 
   forceCalibrationCompletion(): void {
@@ -217,10 +208,11 @@ export class VitalSignsProcessor {
     if (range < 0.2) return 2;
     
     const mean = recent.reduce((a, b) => a + b, 0) / recent.length;
-    const snr = range / (stdDev + 0.03); // Más tolerante con señales pequeñas
+    const variance = recent.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / recent.length;
+    const stdDev = Math.sqrt(variance);
+    const snr = range / (stdDev + 0.05);
     
-    // SQI interno más generoso para permitir que los cálculos comiencen
-    return Math.min(100, Math.max(0, snr * 22));
+    return Math.min(100, Math.max(0, snr * 16));
   }
 
   private getMeasurementConfidence(): 'HIGH' | 'MEDIUM' | 'LOW' | 'INVALID' {
@@ -268,38 +260,15 @@ export class VitalSignsProcessor {
     signalValue: number, 
     rrData: RRData
   ): void {
-    const minQualityForCalculation = 5;
+    const minQualityForCalculation = 10;
     if (this.measurements.signalQuality < minQualityForCalculation) {
-      this.stableFramesCount = 0;
       return;
     }
-
-    const confidence = this.getMeasurementConfidence();
-    const isHighlyStable = confidence !== 'INVALID' && this.measurements.signalQuality > 15;
-
-    if (isHighlyStable) {
-      this.stableFramesCount++;
-    } else {
-      this.stableFramesCount = Math.max(0, this.stableFramesCount - 1); // Penalización más suave
-    }
-
-    if (this.frameCount % 60 === 0) {
-      log.info(`[Stability Gating] Count: ${this.stableFramesCount}/${this.STABILITY_REQUIRED_FRAMES} | Confidence: ${confidence}`);
-    }
     
-    // SpO2 — Gated by stability and weighted by SQI
+    // SpO2 — lowest gate, always try first
     const spo2 = this.calculateSpO2Raw();
     if (spo2 !== 0 && spo2 > 70 && spo2 < 100) {
-      // Coherencia fisiológica: SpO2 no cambia instantáneamente más de 2% en reposo
-      const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 3;
-      
-      if (isCoherent || this.stableFramesCount > 300) {
-        this.lastCoherentSpO2 = spo2;
-        if (this.stableFramesCount >= this.STABILITY_REQUIRED_FRAMES) {
-          // Ponderación dinámica por calidad (SQI)
-          this.measurements.spo2 = this.smoothValue(this.measurements.spo2, spo2, 'stable', this.measurements.signalQuality);
-        }
-      }
+      this.measurements.spo2 = this.smoothValue(this.measurements.spo2, spo2, 'stable');
     }
 
     const validRR = rrData.intervals.filter(isPhysiologicalRR);
@@ -313,14 +282,9 @@ export class VitalSignsProcessor {
       );
       this.lastBPConfidence = bpEstimate.confidence;
       this.lastBPFeatureQuality = bpEstimate.featureQuality;
-      
       if (bpEstimate.systolic > 0 && bpEstimate.confidence !== 'INSUFFICIENT') {
-        // BP Gating: Solo actualizar si hay estabilidad mínima y ponderar por SQI
-        if (this.stableFramesCount >= this.STABILITY_REQUIRED_FRAMES || bpEstimate.confidence === 'HIGH') {
-          const sqi = this.measurements.signalQuality;
-          this.measurements.systolicPressure = this.smoothValue(this.measurements.systolicPressure, bpEstimate.systolic, 'stable', sqi);
-          this.measurements.diastolicPressure = this.smoothValue(this.measurements.diastolicPressure, bpEstimate.diastolic, 'stable', sqi);
-        }
+        this.measurements.systolicPressure = this.smoothValue(this.measurements.systolicPressure, bpEstimate.systolic, 'stable');
+        this.measurements.diastolicPressure = this.smoothValue(this.measurements.diastolicPressure, bpEstimate.diastolic, 'stable');
       }
     }
 
@@ -351,104 +315,62 @@ export class VitalSignsProcessor {
    * 
    * VALIDACIÓN: Solo retorna valor si los datos son físicamente plausibles
    */
-  // Buffer para valores R (Ratio-of-Ratios) para filtrado de mediana
-  private rValueHistory: number[] = [];
-  private readonly R_HISTORY_SIZE = 15;
-
-  /**
-   * SpO2 - FÓRMULA RATIO-OF-RATIOS (Estándar Texas Instruments SLAA655)
-   * 
-   * R = (AC_red/DC_red) / (AC_ir/DC_ir)
-   * SpO2 = 110 - 25 * R
-   * 
-   * Para cámaras usamos verde como proxy de IR (mejor SNR que azul)
-   * 
-   * MEJORA: Implementa filtrado de mediana para R y logging de depuración
-   */
   private calculateSpO2Raw(): number {
     const { redAC, redDC, greenAC, greenDC } = this.rgbData;
     
     if (redDC < 15 || greenDC < 15) return 0;
     
+    // Lowered AC thresholds — real pulsatility can be very small
+    if (redAC < 0.08 || greenAC < 0.08) return 0;
+    
     const piRed = (redAC / redDC) * 100;
     const piGreen = (greenAC / greenDC) * 100;
-
-    // Log de depuración para diagnóstico clínico
-    if (this.calibrationSamples % 10 === 0) {
-      log.info(`[SpO2 Debug] ACr:${redAC.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${greenAC.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}%`);
-    }
-    
-    // Umbrales mínimos de pulsatilidad (PI > 0.02% - Muy sensible)
-    if (piRed < 0.02 || piGreen < 0.02) return 0;
+    if (piRed < 0.08 || piGreen < 0.08) return 0;
     
     const ratioRed = redAC / redDC;
     const ratioGreen = greenAC / greenDC;
     if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) return 0;
     
-    const currentR = ratioRed / ratioGreen;
+    const R = ratioRed / ratioGreen;
+    if (R < 0.2 || R > 2.0) return 0;
     
-    // Validar rango físico de R para tejido humano
-    if (currentR < 0.2 || currentR > 2.5) {
-      if (this.calibrationSamples % 5 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
-      return 0;
-    }
-
-    // Acumular R para filtrado de mediana (Mejor práctica clínica)
-    this.rValueHistory.push(currentR);
-    if (this.rValueHistory.length > this.R_HISTORY_SIZE) {
-      this.rValueHistory.shift();
-    }
-
-    if (this.rValueHistory.length < 5) return 0;
-
-    // Calcular mediana de R para estabilidad
-    const sortedR = [...this.rValueHistory].sort((a, b) => a - b);
-    const medianR = sortedR[Math.floor(sortedR.length / 2)];
-    
-    // Curva de calibración optimizada para cámara (Green as IR proxy)
-    // Usamos intercepto 112 para compensar mayor absorción en verde
-    const spo2 = Math.min(100, Math.max(70, 112 - 28 * medianR));
-    
-    if (this.calibrationSamples % 30 === 0) {
-      log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}%`);
-    }
-
+    const spo2 = 109.5 - 24.5 * R;
     return Number.isFinite(spo2) ? spo2 : 0;
   }
 
   /**
-   * Suavizado EMA adaptativo con detección de outliers y ponderación por SQI
+   * Suavizado EMA adaptativo con detección de outliers
    * type: 'stable' para valores que cambian lentamente (SpO2, PA)
    *       'dynamic' para valores más variables (Glucosa)
    * 
-   * MEJORA: Ponderación tipo Kalman (alpha dependiente de la confianza/SQI)
+   * MEJORA: Detecta cambios bruscos y ajusta alpha dinámicamente
    */
-  private smoothValue(current: number, newVal: number, type: 'stable' | 'dynamic' = 'stable', sqi: number = 100): number {
-    if (current === 0 || isNaN(current) || !isFinite(current)) return newVal;
+  private smoothValue(current: number, newVal: number, type: 'stable' | 'dynamic' = 'stable'): number {
+    if (current === 0 || isNaN(current) || !isFinite(current)) return newVal; // Fast initial lock
     if (isNaN(newVal) || !isFinite(newVal)) return current;
     
-    // El peso del nuevo valor depende directamente del SQI (Calidad de señal)
-    // Si SQI es bajo (<30), confiamos poco en el nuevo valor.
-    const confidenceFactor = Math.max(0.1, sqi / 100);
     const baseAlpha = type === 'stable' ? this.EMA_ALPHA_STABLE : this.EMA_ALPHA_DYNAMIC;
     
-    // Cambio relativo
+    // Calcular cambio relativo
     const relativeChange = Math.abs(newVal - current) / (Math.abs(current) + 0.01);
     
-    let adaptiveAlpha = baseAlpha * confidenceFactor;
+    // Si el cambio es muy grande (>50%), podría ser ruido - suavizar más
+    // Si el cambio es moderado (<20%), responder más rápido
+    let adaptiveAlpha = baseAlpha;
     
-    if (relativeChange > 0.4) {
-      adaptiveAlpha *= 0.4; // Gran salto -> desconfiar más
-    } else if (relativeChange < 0.05) {
-      adaptiveAlpha *= 1.2; // Cambio pequeño -> seguir tendencia
+    if (relativeChange > 0.5) {
+      // Cambio muy grande - probablemente ruido, suavizar mucho más
+      adaptiveAlpha = baseAlpha * 0.3;
+    } else if (relativeChange > 0.3) {
+      // Cambio grande - suavizar un poco más
+      adaptiveAlpha = baseAlpha * 0.5;
+    } else if (relativeChange < 0.1) {
+      // Cambio pequeño - responder más rápido para seguir tendencia
+      adaptiveAlpha = baseAlpha * 1.5;
     }
     
-    // Limitar alpha
-    adaptiveAlpha = Math.max(0.02, Math.min(0.5, adaptiveAlpha));
-    
-    if (this.calibrationSamples % 100 === 0 && sqi < 40) {
-      log.info(`[Smoothing Debug] Value erratic, low SQI (${sqi}). Weighting: ${adaptiveAlpha.toFixed(3)}`);
-    }
+    // Limitar alpha entre 0.05 y 0.4
+    adaptiveAlpha = Math.max(0.05, Math.min(0.4, adaptiveAlpha));
     
     return current * (1 - adaptiveAlpha) + newVal * adaptiveAlpha;
   }
@@ -465,14 +387,12 @@ export class VitalSignsProcessor {
     this.measurements.arrhythmiaCount = 0;
     this.measurements.arrhythmiaStatus = "SIN ARRITMIAS|0";
     this.measurements.lastArrhythmiaData = null;
-    this.rValueHistory = [];
     return result.spo2 !== 0 ? result : null;
   }
 
   fullReset(): void {
     this.signalHistory = [];
     this.validPulseCount = 0;
-    this.rValueHistory = [];
     this.measurements = {
       spo2: 0,
       systolicPressure: 0,
