@@ -122,6 +122,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   // Cache: PI se calcula una sola vez por frame y se reutiliza en SQI, contact state, etc.
   private cachedPI = 0;
+  // Cache de stats lentas (recomputadas cada N frames): evita slice+sort por frame
+  // sobre ventanas estadísticas de 30-90 muestras que cambian lentamente.
+  private cachedSqi = 0;
 
   // === MULTI-SOURCE RANKING (CHROM eliminado — amplifica ruido sin dedo) ===
   private sourceBuffers: { [key: string]: number[] } = {};
