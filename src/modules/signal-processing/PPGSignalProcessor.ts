@@ -802,6 +802,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.fingerDetected = false;
     this.contactState = 'NO_CONTACT';
     this.signalQuality = 0;
+    this.cachedSqi = 0;
+    this.cachedPI = 0;
     this.fingerConfidenceCount = 0;
     this.fingerLostCount = 0;
     this.stableContactCount = 0;
