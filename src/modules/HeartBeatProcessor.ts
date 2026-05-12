@@ -228,17 +228,22 @@ export class HeartBeatProcessor {
   }
 
   private estimateSampleRate(): number {
-    if (this.timestampBuffer.length < 10) return 30;
+    if (this.timestampBuffer.length < 10) return this.cachedSampleRate || 30;
+    // Sample rate drifts slowly; recompute every 30 frames (~1 s).
+    if (this.frameTick % 30 !== 0 && this.cachedSampleRate > 0) {
+      return this.cachedSampleRate;
+    }
     const recent = this.timestampBuffer.slice(-50);
     const intervals: number[] = [];
     for (let i = 1; i < recent.length; i++) {
       const d = recent[i] - recent[i - 1];
       if (d >= 10 && d <= 100) intervals.push(d);
     }
-    if (intervals.length < 6) return 30;
+    if (intervals.length < 6) return this.cachedSampleRate || 30;
     const sorted = [...intervals].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)] ?? 33;
-    return this.clamp(1000 / median, 20, 40);
+    this.cachedSampleRate = this.clamp(1000 / median, 20, 40);
+    return this.cachedSampleRate;
   }
 
   private estimatePeriodicity(): { bpm: number; score: number } {
