@@ -288,16 +288,17 @@ export class VitalSignsProcessor {
       log.info(`[Stability Gating] Count: ${this.stableFramesCount}/${this.STABILITY_REQUIRED_FRAMES} | Confidence: ${confidence}`);
     }
     
-    // SpO2 — Gated by stability
+    // SpO2 — Gated by stability and weighted by SQI
     const spo2 = this.calculateSpO2Raw();
     if (spo2 !== 0 && spo2 > 70 && spo2 < 100) {
       // Coherencia fisiológica: SpO2 no cambia instantáneamente más de 2% en reposo
       const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 3;
       
-      if (isCoherent || this.stableFramesCount > 300) { // Tras 10s aceptamos nueva base si es coherente
+      if (isCoherent || this.stableFramesCount > 300) {
         this.lastCoherentSpO2 = spo2;
         if (this.stableFramesCount >= this.STABILITY_REQUIRED_FRAMES) {
-          this.measurements.spo2 = this.smoothValue(this.measurements.spo2, spo2, 'stable');
+          // Ponderación dinámica por calidad (SQI)
+          this.measurements.spo2 = this.smoothValue(this.measurements.spo2, spo2, 'stable', this.measurements.signalQuality);
         }
       }
     }
@@ -315,10 +316,11 @@ export class VitalSignsProcessor {
       this.lastBPFeatureQuality = bpEstimate.featureQuality;
       
       if (bpEstimate.systolic > 0 && bpEstimate.confidence !== 'INSUFFICIENT') {
-        // BP Gating: Solo actualizar si hay estabilidad mínima
+        // BP Gating: Solo actualizar si hay estabilidad mínima y ponderar por SQI
         if (this.stableFramesCount >= this.STABILITY_REQUIRED_FRAMES || bpEstimate.confidence === 'HIGH') {
-          this.measurements.systolicPressure = this.smoothValue(this.measurements.systolicPressure, bpEstimate.systolic, 'stable');
-          this.measurements.diastolicPressure = this.smoothValue(this.measurements.diastolicPressure, bpEstimate.diastolic, 'stable');
+          const sqi = this.measurements.signalQuality;
+          this.measurements.systolicPressure = this.smoothValue(this.measurements.systolicPressure, bpEstimate.systolic, 'stable', sqi);
+          this.measurements.diastolicPressure = this.smoothValue(this.measurements.diastolicPressure, bpEstimate.diastolic, 'stable', sqi);
         }
       }
     }
@@ -416,38 +418,38 @@ export class VitalSignsProcessor {
   }
 
   /**
-   * Suavizado EMA adaptativo con detección de outliers
+   * Suavizado EMA adaptativo con detección de outliers y ponderación por SQI
    * type: 'stable' para valores que cambian lentamente (SpO2, PA)
    *       'dynamic' para valores más variables (Glucosa)
    * 
-   * MEJORA: Detecta cambios bruscos y ajusta alpha dinámicamente
+   * MEJORA: Ponderación tipo Kalman (alpha dependiente de la confianza/SQI)
    */
-  private smoothValue(current: number, newVal: number, type: 'stable' | 'dynamic' = 'stable'): number {
-    if (current === 0 || isNaN(current) || !isFinite(current)) return newVal; // Fast initial lock
+  private smoothValue(current: number, newVal: number, type: 'stable' | 'dynamic' = 'stable', sqi: number = 100): number {
+    if (current === 0 || isNaN(current) || !isFinite(current)) return newVal;
     if (isNaN(newVal) || !isFinite(newVal)) return current;
     
+    // El peso del nuevo valor depende directamente del SQI (Calidad de señal)
+    // Si SQI es bajo (<30), confiamos poco en el nuevo valor.
+    const confidenceFactor = Math.max(0.1, sqi / 100);
     const baseAlpha = type === 'stable' ? this.EMA_ALPHA_STABLE : this.EMA_ALPHA_DYNAMIC;
     
-    // Calcular cambio relativo
+    // Cambio relativo
     const relativeChange = Math.abs(newVal - current) / (Math.abs(current) + 0.01);
     
-    // Si el cambio es muy grande (>50%), podría ser ruido - suavizar más
-    // Si el cambio es moderado (<20%), responder más rápido
-    let adaptiveAlpha = baseAlpha;
+    let adaptiveAlpha = baseAlpha * confidenceFactor;
     
-    if (relativeChange > 0.5) {
-      // Cambio muy grande - probablemente ruido, suavizar mucho más
-      adaptiveAlpha = baseAlpha * 0.3;
-    } else if (relativeChange > 0.3) {
-      // Cambio grande - suavizar un poco más
-      adaptiveAlpha = baseAlpha * 0.5;
-    } else if (relativeChange < 0.1) {
-      // Cambio pequeño - responder más rápido para seguir tendencia
-      adaptiveAlpha = baseAlpha * 1.5;
+    if (relativeChange > 0.4) {
+      adaptiveAlpha *= 0.4; // Gran salto -> desconfiar más
+    } else if (relativeChange < 0.05) {
+      adaptiveAlpha *= 1.2; // Cambio pequeño -> seguir tendencia
     }
     
-    // Limitar alpha entre 0.05 y 0.4
-    adaptiveAlpha = Math.max(0.05, Math.min(0.4, adaptiveAlpha));
+    // Limitar alpha
+    adaptiveAlpha = Math.max(0.02, Math.min(0.5, adaptiveAlpha));
+    
+    if (this.calibrationSamples % 100 === 0 && sqi < 40) {
+      log.info(`[Smoothing Debug] Value erratic, low SQI (${sqi}). Weighting: ${adaptiveAlpha.toFixed(3)}`);
+    }
     
     return current * (1 - adaptiveAlpha) + newVal * adaptiveAlpha;
   }

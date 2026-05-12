@@ -305,8 +305,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
       if (this.fingerConfidenceCount >= this.FINGER_CONFIRM_FRAMES) {
         this.fingerDetected = true;
-        // Require real perfusion for STABLE — not just visual contact
-        this.contactState = (this.stableContactCount >= this.STABLE_THRESHOLD && this.cachedPI > 0.003)
+        
+        // REQUISITO CLÍNICO: Para llegar a STABLE no basta el contacto visual, 
+        // necesitamos detectar pulsatilidad real (AC > 0) durante un tiempo mínimo.
+        const hasPulsatility = this.cachedPI > 0.005;
+        if (hasPulsatility) this.stableContactCount++;
+        else this.stableContactCount = Math.max(0, this.stableContactCount - 0.5);
+
+        this.contactState = (this.stableContactCount >= this.STABLE_THRESHOLD)
           ? 'STABLE_CONTACT'
           : 'UNSTABLE_CONTACT';
       }
@@ -378,31 +384,35 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const notBlownOut = !(r > 253 && g > 252 && b > 252);
 
     // === HEMOGLOBIN SIGNATURE: red MUST dominate and blue MUST be very low ===
-    if (this.fingerDetected) {
-      // MAINTAIN contact — slightly relaxed thresholds
+    // ADAPTATIVO: Si ya tenemos el dedo, somos más estrictos para filtrar ruido.
+    // Si lo estamos buscando, somos un poco más flexibles para facilitar el "lock".
+    const isSearching = !this.fingerDetected;
+    
+    if (!isSearching) {
+      // MAINTAIN contact — stricter to reject motion artifacts
       const maintainContact =
-        r > 45 &&
-        rgRatio > 1.05 &&
-        rbRatio > 1.25 &&
-        redDominance > 10 &&
-        this.smoothedCoverage > 0.15 &&
+        r > 40 &&
+        rgRatio > 1.08 &&
+        rbRatio > 1.35 &&
+        redDominance > 12 &&
+        this.smoothedCoverage > 0.18 &&
         notBlownOut;
       return maintainContact;
     } else {
-      // ACQUIRE contact — strict hemoglobin thresholds (literature validated)
+      // ACQUIRE contact — slightly more flexible thresholds for acquisition
       const acquireContact =
-        r > 75 &&
-        rgRatio > 1.15 &&
-        rbRatio > 1.45 &&
-        redDominance > 18 &&
-        totalIntensity > 110 && totalIntensity < 750 &&
-        this.smoothedCoverage > 0.30 &&
-        this.smoothedFingerScore > 0.35 &&
-        this.motionScore < 1.2 &&
+        r > 65 &&
+        rgRatio > 1.10 &&
+        rbRatio > 1.30 &&
+        redDominance > 15 &&
+        totalIntensity > 100 && totalIntensity < 780 &&
+        this.smoothedCoverage > 0.25 &&
+        this.smoothedFingerScore > 0.30 &&
+        this.motionScore < 1.4 &&
         notBlownOut;
       
       if (acquireContact && this.frameCount % 30 === 0) {
-        log.info(`[Finger Acquisition] R:${r.toFixed(1)} G:${g.toFixed(1)} B:${b.toFixed(1)} R/G:${rgRatio.toFixed(2)} R/B:${rbRatio.toFixed(2)}`);
+        log.info(`[Tissue Sync] R:${r.toFixed(0)} R/G:${rgRatio.toFixed(2)} R/B:${rbRatio.toFixed(2)} PI:${this.cachedPI.toFixed(3)}`);
       }
       return acquireContact;
     }
@@ -613,7 +623,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     const value = this.clamp(sources[this.activeSource] ?? sources['RG'], -80, 80);
-    const strength = Math.max(Math.abs(rPulse), Math.abs(gPulse)) * 1000;
+    
+    // Normalización de amplitud para el display (mejor visibilidad)
+    const displayGain = this.contactState === 'STABLE_CONTACT' ? 1.0 : 0.6;
+    const strength = Math.max(Math.abs(rPulse), Math.abs(gPulse)) * 1000 * displayGain;
 
     return { value, label: this.activeSource, strength };
   }
