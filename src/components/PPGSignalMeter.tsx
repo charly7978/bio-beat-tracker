@@ -356,7 +356,7 @@ const PPGSignalMeter = ({
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
     ctx.textAlign = 'left';
-    ctx.fillText('FRECUENCIA CARDÍACA', 16, metrics.y + 18);
+    ctx.fillText('FRECUENCIA CARDÍACA', 16, metrics.y + 26); // Shifted down
 
     ctx.font = `bold 56px ${FONT_MONO}`;
     ctx.fillStyle = hrColor;
@@ -366,12 +366,12 @@ const PPGSignalMeter = ({
       ctx.shadowColor = hrColor;
       ctx.shadowBlur = 6 + heartPulse * 6;
     }
-    ctx.fillText(bpm > 0 ? Math.round(bpm).toString() : '--', 16, metrics.y + 70);
+    ctx.fillText(bpm > 0 ? Math.round(bpm).toString() : '--', 16, metrics.y + 72);
     ctx.restore();
 
     ctx.font = `12px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.fillText('BPM', 16, metrics.y + 88);
+    ctx.fillText('BPM', 16, metrics.y + 90);
 
     // Classification
     let hrLabel = '';
@@ -387,7 +387,7 @@ const PPGSignalMeter = ({
       ctx.font = `bold 10px ${FONT_MONO}`;
       ctx.fillStyle = hrColor;
       ctx.textAlign = 'right';
-      ctx.fillText(hrLabel, colW - 12, metrics.y + 88);
+      ctx.fillText(hrLabel, colW - 12, metrics.y + 90);
     }
 
     // BPM min/max mini-bar at top right of col
@@ -396,7 +396,7 @@ const PPGSignalMeter = ({
       ctx.font = `9px ${FONT_MONO}`;
       ctx.fillStyle = COLORS.TEXT_DIM;
       ctx.textAlign = 'right';
-      ctx.fillText(`min ${s.min}  max ${s.max}  x̄ ${Math.round(s.sum / s.n)}`, colW - 12, metrics.y + 18);
+      ctx.fillText(`min:${s.min} max:${s.max}`, colW - 12, metrics.y + 26);
     }
 
     // === SpO2 ===
@@ -408,15 +408,15 @@ const PPGSignalMeter = ({
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
     ctx.textAlign = 'left';
-    ctx.fillText('SATURACIÓN O₂', colW + 16, metrics.y + 18);
+    ctx.fillText('SATURACIÓN O₂', colW + 16, metrics.y + 26);
 
     ctx.font = `bold 56px ${FONT_MONO}`;
     ctx.fillStyle = spo2Color;
-    ctx.fillText(spo2 > 0 ? Math.round(spo2).toString() : '--', colW + 16, metrics.y + 70);
+    ctx.fillText(spo2 > 0 ? Math.round(spo2).toString() : '--', colW + 16, metrics.y + 72);
 
     ctx.font = `12px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.fillText('%', colW + 16 + (spo2 > 0 ? 64 : 32), metrics.y + 70);
+    ctx.fillText('%', colW + 16 + (spo2 > 0 ? 64 : 32), metrics.y + 72);
 
     // SpO2 sub
     let spLabel = '';
@@ -429,14 +429,14 @@ const PPGSignalMeter = ({
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = spo2Color;
     ctx.textAlign = 'right';
-    if (spLabel) ctx.fillText(spLabel, colW * 2 - 12, metrics.y + 88);
+    if (spLabel) ctx.fillText(spLabel, colW * 2 - 12, metrics.y + 90);
 
     // Perfusion Index — sub-line on SpO2 column
     if (pi > 0) {
       ctx.font = `9px ${FONT_MONO}`;
       ctx.fillStyle = COLORS.TEXT_DIM;
       ctx.textAlign = 'left';
-      ctx.fillText(`PI ${(pi * 100).toFixed(2)}%`, colW + 16, metrics.y + 88);
+      ctx.fillText(`PI ${(pi * 100).toFixed(2)}%`, colW + 16, metrics.y + 90);
     }
 
     // === BP ===
@@ -455,21 +455,21 @@ const PPGSignalMeter = ({
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
     ctx.textAlign = 'left';
-    ctx.fillText('PRESIÓN ARTERIAL', colW * 2 + 16, metrics.y + 18);
+    ctx.fillText('PRESIÓN ARTERIAL', colW * 2 + 16, metrics.y + 26);
 
-    ctx.font = `bold 38px ${FONT_MONO}`;
+    ctx.font = `bold 32px ${FONT_MONO}`; // Reduced from 38px
     ctx.fillStyle = bpColor;
-    ctx.fillText(sys > 0 ? `${sys}/${dia}` : '--/--', colW * 2 + 16, metrics.y + 62);
+    ctx.fillText(sys > 0 ? `${sys}/${dia}` : '--/--', colW * 2 + 16, metrics.y + 68);
 
     ctx.font = `12px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.fillText('mmHg', colW * 2 + 16, metrics.y + 80);
+    ctx.fillText('mmHg', colW * 2 + 16, metrics.y + 90);
 
     if (sys > 0) {
       ctx.font = `9px ${FONT_MONO}`;
       ctx.fillStyle = COLORS.TEXT_SECONDARY;
       ctx.textAlign = 'right';
-      ctx.fillText(`MAP ${map}  ·  PP ${pp}`, metrics.w - 16, metrics.y + 62);
+      ctx.fillText(`MAP ${map} · PP ${pp}`, metrics.w - 12, metrics.y + 68);
 
       let bpLabel = '';
       if (sys >= 140 || dia >= 90) bpLabel = 'HIPERTENSIÓN';
@@ -478,12 +478,12 @@ const PPGSignalMeter = ({
       else bpLabel = 'NORMAL';
       ctx.font = `bold 10px ${FONT_MONO}`;
       ctx.fillStyle = bpColor;
-      ctx.fillText(bpLabel, metrics.w - 16, metrics.y + 80);
+      ctx.fillText(bpLabel, metrics.w - 12, metrics.y + 90);
 
       if (bpConf && bpConf !== 'INSUFFICIENT') {
         ctx.font = `9px ${FONT_MONO}`;
         ctx.fillStyle = bpConf === 'HIGH' ? COLORS.TEXT_PRIMARY : bpConf === 'MEDIUM' ? COLORS.TEXT_WARN : COLORS.TEXT_DIM;
-        ctx.fillText(`conf: ${bpConf}`, metrics.w - 16, metrics.y + 18);
+        ctx.fillText(`conf: ${bpConf}`, metrics.w - 12, metrics.y + 26);
       }
     }
 
@@ -493,11 +493,11 @@ const PPGSignalMeter = ({
       const count = parts.length > 1 ? parseInt(parts[1]) : 0;
       const flash = (Math.sin(now / 120) + 1) / 2;
       ctx.fillStyle = `rgba(239, 68, 68, ${0.18 + flash * 0.22})`;
-      ctx.fillRect(metrics.x + 16, metrics.y + 4, metrics.w - 32, 14);
+      ctx.fillRect(metrics.x + 16, metrics.y, metrics.w - 32, 14);
       ctx.font = `bold 10px ${FONT_MONO}`;
       ctx.fillStyle = COLORS.TEXT_DANGER;
       ctx.textAlign = 'center';
-      ctx.fillText(`⚠ ARRITMIA DETECTADA · ${count} evento${count === 1 ? '' : 's'}`, metrics.w / 2, metrics.y + 14);
+      ctx.fillText(`⚠ ARRITMIA DETECTADA · ${count} evento${count === 1 ? '' : 's'}`, metrics.w / 2, metrics.y + 10);
     }
   }, [isMonitoring]);
 
@@ -921,7 +921,7 @@ const PPGSignalMeter = ({
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_PRIMARY;
     ctx.textAlign = 'left';
-    ctx.fillText('POINCARÉ · RRₙ vs RRₙ₊₁', poincare.x + 8, poincare.y + 14);
+    ctx.fillText('POINCARÉ', poincare.x + 8, poincare.y + 14);
 
     // Subtitle: HRV summary
     const hrv = hrvDisplayRef.current;
@@ -942,7 +942,7 @@ const PPGSignalMeter = ({
       return;
     }
 
-    const padL = 28, padR = 8, padT = 22, padB = 16;
+    const padL = 28, padR = 8, padT = 26, padB = 16;
     const innerX = poincare.x + padL;
     const innerY = poincare.y + padT;
     const innerW = poincare.w - padL - padR;
@@ -1049,18 +1049,18 @@ const PPGSignalMeter = ({
       { label: 'SDNN', value: hrv.sdnn > 0 ? `${hrv.sdnn}ms` : '--', color: COLORS.TEXT_SECONDARY },
       { label: 'RMSSD', value: hrv.rmssd > 0 ? `${hrv.rmssd}ms` : '--', color: COLORS.TEXT_SECONDARY },
       { label: 'pNN50', value: hrv.pnn50 > 0 ? `${hrv.pnn50}%` : '--', color: COLORS.TEXT_SECONDARY },
-      { label: 'CV', value: hrv.cv > 0 ? hrv.cv.toFixed(3) : '--', color: COLORS.TEXT_SECONDARY },
+      { label: 'CV', value: hrv.cv > 0 ? hrv.cv.toFixed(2) : '--', color: COLORS.TEXT_SECONDARY },
     ];
 
-    const totalWidth = footer.w - 24;
-    const cellW = totalWidth / cells.length;
+    const hrvSectionWidth = footer.w * 0.55; // Constrain HRV to left half
+    const cellW = hrvSectionWidth / cells.length;
     cells.forEach((c, i) => {
       const cx = footer.x + 12 + i * cellW;
       ctx.font = `8px ${FONT_MONO}`;
       ctx.fillStyle = COLORS.TEXT_DIM;
       ctx.textAlign = 'left';
       ctx.fillText(c.label, cx, footer.y + 32);
-      ctx.font = `bold 13px ${FONT_MONO}`;
+      ctx.font = `bold 12px ${FONT_MONO}`;
       ctx.fillStyle = c.color;
       ctx.fillText(c.value, cx, footer.y + 48);
     });
@@ -1086,15 +1086,15 @@ const PPGSignalMeter = ({
       ctx.fillText('● SIN ALARMAS', footer.x + footer.w - 12, footer.y + 16);
     }
 
-    // Beat history dots — bottom row
+    // Beat history dots — right side, below alarms
     const beats = beatHistoryRef.current;
     if (beats.length > 0) {
       const showN = Math.min(beats.length, 30);
-      const dotSize = 5;
-      const gap = 4;
+      const dotSize = 4; // Smaller dots to fit better
+      const gap = 3;
       const totalW = showN * (dotSize * 2 + gap) - gap;
       const startX = footer.x + footer.w - 12 - totalW;
-      const dy = footer.y + 44;
+      const dy = footer.y + 34; // Moved up to not overlap with bottom
       for (let i = 0; i < showN; i++) {
         const beat = beats[beats.length - showN + i];
         const cx = startX + i * (dotSize * 2 + gap) + dotSize;
@@ -1107,7 +1107,7 @@ const PPGSignalMeter = ({
       ctx.fillStyle = COLORS.TEXT_DIM;
       ctx.textAlign = 'right';
       const arrCount = beats.filter(b => b.isArrhythmia).length;
-      ctx.fillText(`Últimos ${showN} · N:${beats.length - arrCount} A:${arrCount}`, footer.x + footer.w - 12, dy - 8);
+      ctx.fillText(`Últimos ${showN} · N:${beats.length - arrCount} A:${arrCount}`, footer.x + footer.w - 12, dy + 14);
     }
   }, []);
 
