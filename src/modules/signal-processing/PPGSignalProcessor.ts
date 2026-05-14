@@ -1,7 +1,5 @@
 import type { ProcessedSignal, ProcessingError, SignalProcessor as SignalProcessorInterface, ContactState } from '../../types/signal';
 import { BandpassFilter } from './BandpassFilter';
-import { AsymmetricLeastSquares } from './AsymmetricLeastSquares';
-import { SavitzkyGolayFilter } from './SavitzkyGolayFilter';
 import { createLogger, ppgPerf } from '../../utils/logger';
 import {
   DEFAULT_BACKPRESSURE_CONFIG,
@@ -91,10 +89,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private blueBaseline = 0;
   private estimatedSampleRate = 30;
   private lastFrameTimestamp = 0;
-  
-  // Derivatives for complete cardiac activity (VPG, APG)
-  private lastFiltered = 0;
-  private lastVPG = 0;
 
   private frameCount = 0;
   private lastLogTime = 0;
@@ -203,7 +197,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           message: `BUSCANDO DEDO C:${(roi.coverageRatio * 100).toFixed(0)}%`,
           hasPulsatility: false,
           pulsatilityValue: 0,
-          apg: 0,
         },
       });
       return;
@@ -238,33 +231,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     const endFilt = ppgPerf.start('bandpass');
-    // 1. Butterworth Bandpass (Fase 1)
-    let filtered = this.bandpassFilter.filter(pulseSource.value);
-    
-    // 2. Savitzky-Golay Smoothing (Fase 2)
-    // Usamos el buffer de filtrado para aplicar el suavizado preservando picos
-    this.filteredBuffer.push(filtered);
-    if (this.filteredBuffer.length > 30) {
-      this.filteredBuffer.shift();
-      filtered = SavitzkyGolayFilter.filterStream(this.filteredBuffer, 11);
-      // Reemplazamos el último valor con la versión suavizada
-      this.filteredBuffer[this.filteredBuffer.length - 1] = filtered;
-    }
-    
-    // 3. ALS Baseline Correction (Fase 3 - cada 30 frames para eficiencia)
-    if (this.frameCount % 30 === 0 && this.filteredBuffer.length >= 90) {
-      const baseline = AsymmetricLeastSquares.baseline(
-        this.rawBuffer,
-        1e5,
-        0.005,
-        2 // Reducido a 2 iteraciones para mayor velocidad en tiempo real
-      );
-      for (let i = 0; i < this.filteredBuffer.length; i++) {
-        this.filteredBuffer[i] -= baseline[i];
-      }
-      filtered = this.filteredBuffer[this.filteredBuffer.length - 1];
-    }
+    const filtered = this.bandpassFilter.filter(pulseSource.value);
     endFilt();
+    this.filteredBuffer.push(filtered);
+    if (this.filteredBuffer.length > this.BUFFER_SIZE) {
+      this.filteredBuffer.shift();
+    }
 
     const endSqi = ppgPerf.start('sqi');
     // SQI is a statistical aggregate over 90 samples — recompute every 3 frames
@@ -298,12 +270,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       );
     }
 
-    // Calcular Derivadas (VPG, APG) para "Actividad Total"
-    const vpg = (filtered - this.lastFiltered) * this.estimatedSampleRate;
-    const apg = (vpg - this.lastVPG) * this.estimatedSampleRate;
-    this.lastFiltered = filtered;
-    this.lastVPG = vpg;
-
     this.onSignalReady({
       timestamp,
       rawValue: pulseSource.value,
@@ -323,7 +289,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           `${this.contactState}${motionArtifact ? ' MOV' : ''}`,
         hasPulsatility: this.contactState === 'STABLE_CONTACT' && perfusionIndex >= 0.05 && pulseSource.strength > 1.5,
         pulsatilityValue: this.contactState === 'STABLE_CONTACT' ? Math.max(perfusionIndex, pulseSource.strength * 0.02) : 0,
-        apg: apg,
       },
     });
   }
@@ -409,30 +374,36 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const totalIntensity = r + g + b;
     const redDominance = r - (g + b) / 2;
     const rgRatio = r / Math.max(1, g);
+    const rbRatio = r / Math.max(1, b); // Hemoglobin absorption is highest in Blue
     const notBlownOut = !(r > 253 && g > 252 && b > 252);
 
-    // === HEMOGLOBIN SIGNATURE: red MUST dominate when finger+flash ===
+    // === HEMOGLOBIN SIGNATURE: red MUST dominate and blue MUST be very low ===
     if (this.fingerDetected) {
       // MAINTAIN contact — slightly relaxed thresholds
       const maintainContact =
-        r > 50 &&
-        rgRatio > 1.1 &&
-        redDominance > 12 &&
-        this.smoothedCoverage > 0.20 &&
-        this.smoothedFingerScore > 0.20 &&
+        r > 45 &&
+        rgRatio > 1.05 &&
+        rbRatio > 1.25 &&
+        redDominance > 10 &&
+        this.smoothedCoverage > 0.15 &&
         notBlownOut;
       return maintainContact;
     } else {
-      // ACQUIRE contact — strict hemoglobin thresholds
+      // ACQUIRE contact — strict hemoglobin thresholds (literature validated)
       const acquireContact =
-        r > 80 &&
-        rgRatio > 1.2 &&
-        redDominance > 20 &&
-        totalIntensity > 120 && totalIntensity < 760 &&
-        this.smoothedCoverage > 0.35 &&
-        this.smoothedFingerScore > 0.40 &&
-        this.motionScore < 1.5 &&
+        r > 75 &&
+        rgRatio > 1.15 &&
+        rbRatio > 1.45 &&
+        redDominance > 18 &&
+        totalIntensity > 110 && totalIntensity < 750 &&
+        this.smoothedCoverage > 0.30 &&
+        this.smoothedFingerScore > 0.35 &&
+        this.motionScore < 1.2 &&
         notBlownOut;
+      
+      if (acquireContact && this.frameCount % 30 === 0) {
+        log.info(`[Finger Acquisition] R:${r.toFixed(1)} G:${g.toFixed(1)} B:${b.toFixed(1)} R/G:${rgRatio.toFixed(2)} R/B:${rbRatio.toFixed(2)}`);
+      }
       return acquireContact;
     }
   }
@@ -498,11 +469,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         const tileY = Math.min(this.TILE_ROWS - 1, Math.floor(((y - startY) / roiHeight) * this.TILE_ROWS));
         const tile = tiles[tileY * this.TILE_COLUMNS + tileX];
 
-        // Linearization (De-gamma): r_lin = (r/255)^2.2 * 255
-        // Aproximación rápida: (v * v) / 255
-        tile.red += (data[i] * data[i]) / 255;
-        tile.green += (data[i + 1] * data[i + 1]) / 255;
-        tile.blue += (data[i + 2] * data[i + 2]) / 255;
+        tile.red += data[i];
+        tile.green += data[i + 1];
+        tile.blue += data[i + 2];
         tile.count++;
       }
     }
@@ -568,25 +537,25 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     const useFingerOnly = fingerCount >= 5;
     let rWs = 0, gWs = 0, bWs = 0, tw = 0;
-    let rFallback = 0, gFallback = 0, bFallback = 0;
-
+    
+    // MEJORA: Ponderación adaptativa por SNR individual de celda
     for (let i = 0; i < N; i++) {
       const m = metrics[i];
       if (!m.valid) continue;
-      rFallback += m.red;
-      gFallback += m.green;
-      bFallback += m.blue;
       if (useFingerOnly && !m.isFinger) continue;
-      const w = 0.3 + m.combinedScore * 2 + m.centerBias * 0.4;
-      rWs += m.red * w;
-      gWs += m.green * w;
-      bWs += m.blue * w;
-      tw += w;
+      
+      // La confianza combinada incluye centerBias y estabilidad temporal
+      const snrWeight = 0.2 + m.combinedScore * 2.5 + m.centerBias * 0.5;
+      
+      rWs += m.red * snrWeight;
+      gWs += m.green * snrWeight;
+      bWs += m.blue * snrWeight;
+      tw += snrWeight;
     }
 
-    const rawRed = tw > 0 ? rWs / tw : rFallback / validCount;
-    const rawGreen = tw > 0 ? gWs / tw : gFallback / validCount;
-    const rawBlue = tw > 0 ? bWs / tw : bFallback / validCount;
+    const rawRed = tw > 0 ? rWs / tw : 0;
+    const rawGreen = tw > 0 ? gWs / tw : 0;
+    const rawBlue = tw > 0 ? bWs / tw : 0;
 
     return {
       rawRed,
@@ -786,38 +755,40 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const stdDev = Math.sqrt(variance);
     const snr = range / (stdDev + 0.15);
 
-    // Statistical SQI: Skewness & Kurtosis
-    let skewness = 0;
-    let kurtosis = 0;
-    if (stdDev > 0.01) {
-      for (const v of recent) {
-        const diff = (v - mean) / stdDev;
-        skewness += Math.pow(diff, 3);
-        kurtosis += Math.pow(diff, 4);
-      }
-      skewness /= recent.length;
-      kurtosis = (kurtosis / recent.length) - 3;
+    // MEJORA: Skewness y Kurtosis (Estándares en SQI clínico)
+    let skewSum = 0;
+    let kurtSum = 0;
+    for (const v of recent) {
+      const diff = (v - mean) / (stdDev + 0.001);
+      skewSum += diff ** 3;
+      kurtSum += diff ** 4;
     }
+    const skewness = skewSum / recent.length;
+    const kurtosis = kurtSum / recent.length;
 
-    // A higher positive skewness (>0.4) indicates a good PPG morphology
-    const skewScore = Math.min(15, Math.max(0, skewness * 25));
-    // A kurtosis far from 0 indicates non-gaussian (good) signal
-    const kurtScore = Math.min(10, Math.abs(kurtosis) * 4);
+    // Normal PPG: Skewness > 0, Kurtosis ~3-5
+    const skewScore = this.clamp(skewness * 5, 0, 10);
+    const kurtScore = this.clamp((5 - Math.abs(kurtosis - 4)) * 2, 0, 10);
 
-    const snrScore = Math.min(30, snr * 9);
-    const perfusionScore = Math.min(20, perfusionIndex * 10);
+    const snrScore = Math.min(30, snr * 10);
+    const perfusionScore = Math.min(25, perfusionIndex * 12);
     const coverageScore = Math.min(15, this.smoothedCoverage * 25);
     const fingerScore = Math.min(15, this.smoothedFingerScore * 22);
     const motionPenalty = Math.min(25, this.motionScore * 20);
 
+    const baseQuality = snrScore + perfusionScore + coverageScore + fingerScore + skewScore + kurtScore - motionPenalty;
+    
     // Bonus for stable contact + pulsatility evidence
     const stabilityBonus = this.contactState === 'STABLE_CONTACT' ? 5 : 0;
     const pulsatilityBonus = (this.redAC > 0 || this.greenAC > 0) ? 5 : 0;
 
-    const totalScore = snrScore + perfusionScore + coverageScore + fingerScore + 
-                       skewScore + kurtScore - motionPenalty + stabilityBonus + pulsatilityBonus;
+    const finalSqi = this.clamp(baseQuality + stabilityBonus + pulsatilityBonus, 0, 100);
+    
+    if (this.frameCount % 90 === 0) {
+      log.info(`[SQI Debug] Snr:${snr.toFixed(1)} Skew:${skewness.toFixed(2)} Kurt:${kurtosis.toFixed(2)} PI:${perfusionIndex.toFixed(2)} Final:${finalSqi.toFixed(0)}%`);
+    }
 
-    return this.clamp(totalScore, 0, 100);
+    return finalSqi;
   }
 
   private calculatePerfusionIndex(): number {

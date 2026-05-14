@@ -46,8 +46,6 @@ export const useVitalSignsProcessor = () => {
     const defaultResult: VitalSignsResult = {
       spo2: 0, 
       pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
-      glucose: { value: 0, trend: 'STABLE', confidence: 0 },
-      arterialHealth: { agingIndex: 0, stiffness: 0, vascularStatus: 'UNKNOWN' },
       arrhythmiaCount: 0, 
       arrhythmiaStatus: "SIN ARRITMIAS|0",
       isCalibrating: false, 

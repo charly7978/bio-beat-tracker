@@ -14,7 +14,6 @@
  */
 
 import { calculateHRV } from '../../utils/physio';
-import { MFCCProcessor } from '../signal-processing/MFCCProcessor';
 
 // ═══════════════════════════════════════════
 // TYPES
@@ -65,12 +64,6 @@ export interface CycleFeatures {
   
   // APG (second derivative)
   apg: APGFeatures;
-  
-  // SDFMFCC (for Glucose)
-  sdfmfcc: {
-    systolic: number[];
-    diastolic: number[];
-  };
   
   // Quality
   quality: number; // 0-1
@@ -210,9 +203,6 @@ export class PPGFeatureExtractor {
     const cycleSegment = buffer.slice(onset, nextOnset + 1);
     const apg = this.extractAPGFromSegment(cycleSegment);
 
-    // ── SDFMFCC features (Glucose) ──
-    const sdfmfcc = this.extractSDFMFCC(buffer, fiducials, sampleRate);
-
     // ── Quality assessment ──
     const quality = this.assessCycleQuality(
       amplitude, sutMs, diastolicTimeMs, pw50Ms, dicroticNotch >= 0
@@ -225,7 +215,7 @@ export class PPGFeatureExtractor {
       systolicAmplitude, diastolicAmplitude, dicroticDepth,
       systolicArea, diastolicArea, areaRatio, ipaRatio,
       stiffnessIndex, augmentationIndex, pwvProxy,
-      apg, sdfmfcc, quality
+      apg, quality
     };
   }
 
@@ -460,25 +450,6 @@ export class PPGFeatureExtractor {
     if (hasDicroticNotch) q += 0.25;
 
     return Math.min(1, q);
-  }
-
-  /**
-   * Extract SDFMFCC (Systolic-Diastolic Framing MFCC)
-   */
-  private static extractSDFMFCC(
-    buffer: number[], 
-    fiducials: FiducialPoints, 
-    sampleRate: number
-  ): { systolic: number[]; diastolic: number[] } {
-    const { onset, systolicPeak, nextOnset } = fiducials;
-    
-    const systolicSegment = buffer.slice(onset, systolicPeak + 1);
-    const diastolicSegment = buffer.slice(systolicPeak, nextOnset + 1);
-    
-    return {
-      systolic: MFCCProcessor.calculate(systolicSegment, sampleRate),
-      diastolic: MFCCProcessor.calculate(diastolicSegment, sampleRate)
-    };
   }
 
   static extractRRVariability(intervals: number[]): { sdnn: number; rmssd: number; cv: number } {

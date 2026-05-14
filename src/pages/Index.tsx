@@ -45,8 +45,6 @@ const Index = () => {
     pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
     arrhythmiaCount: 0,
     arrhythmiaStatus: "SIN ARRITMIAS|0",
-    glucose: { value: 0, trend: 'STABLE', confidence: 0 },
-    arterialHealth: { agingIndex: 0, stiffness: 0, vascularStatus: 'CALIBRANDO' },
     isCalibrating: false,
     calibrationProgress: 0,
     lastArrhythmiaData: undefined,
@@ -157,8 +155,6 @@ const Index = () => {
     setBackpressureConfig,
     currentStride,
     setSignalCallback,
-    setCanvas,
-    sendResize,
   } = useSignalProcessor();
   
   const { 
@@ -339,23 +335,11 @@ const Index = () => {
         return;
       }
       try {
-        // Opción optimizada: Usar ImageBitmap (Transferable)
-        // Esto evita el getImageData en el hilo principal.
-        createImageBitmap(video).then(bitmap => {
-          if (!isProcessingRef.current) {
-            bitmap.close();
-            return;
-          }
-          processFrame(bitmap as any, frameTimestampMs);
-        }).catch(() => {
-          // Fallback a canvas local si falla
-          if (!isProcessingRef.current) return;
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          processFrame(imageData, frameTimestampMs);
-        });
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        processFrame(imageData, frameTimestampMs);
       } catch {
-        /* drawImage can throw if the video tears down mid-frame */
+        /* drawImage / getImageData can throw if the video tears down mid-frame */
       }
       scheduleNext(video);
     };
@@ -564,8 +548,6 @@ const Index = () => {
       pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
       arrhythmiaCount: 0,
       arrhythmiaStatus: "SIN ARRITMIAS|0",
-      glucose: { value: 0, trend: 'STABLE', confidence: 0 },
-      arterialHealth: { agingIndex: 0, stiffness: 0, vascularStatus: 'CALIBRANDO' },
       isCalibrating: false,
       calibrationProgress: 0,
       lastArrhythmiaData: undefined,
@@ -648,8 +630,6 @@ const Index = () => {
                 pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
                 arrhythmiaCount: 0,
                 arrhythmiaStatus: "SIN ARRITMIAS|0",
-                glucose: { value: 0, trend: 'STABLE', confidence: 0 },
-                arterialHealth: { agingIndex: 0, stiffness: 0, vascularStatus: 'CALIBRANDO' },
                 lastArrhythmiaData: undefined,
                 signalQuality: 0,
                 measurementConfidence: 'INVALID'
@@ -1038,9 +1018,10 @@ const Index = () => {
           </div>
         )}
 
-        <div className="flex-1 h-full w-full">
-          <PPGSignalMeter 
-            value={heartbeatSignal}
+        <div className="relative z-10 h-full">
+          <div className="flex-1 h-full">
+            <PPGSignalMeter 
+              value={heartbeatSignal}
               quality={lastSignal?.quality || 0}
               isFingerDetected={lastSignal?.fingerDetected || false}
               onStartMeasurement={handleToggleMonitoring}
@@ -1057,14 +1038,10 @@ const Index = () => {
               elapsedTime={elapsedTime}
               perfusionIndex={lastSignal?.perfusionIndex || 0}
               pressure={vitalSigns.pressure}
-              glucose={vitalSigns.glucose}
-              arterialHealth={vitalSigns.arterialHealth}
-              onCanvasReady={setCanvas}
-              onResize={sendResize}
             />
           </div>
 
-    {/* RESUMEN ESTADÍSTICO POST-MEDICIÓN */}
+          {/* RESUMEN ESTADÍSTICO POST-MEDICIÓN */}
           {showResults && measurementSummary && (() => {
             const { totalBeats, arrhythmiaBeats, normalPercent } = measurementSummary;
             const normalBeats = totalBeats - arrhythmiaBeats;
@@ -1187,7 +1164,7 @@ const Index = () => {
                                 fill="none"
                                 className={`${statusColor === 'emerald' ? 'stroke-emerald-400' : statusColor === 'yellow' ? 'stroke-yellow-400' : 'stroke-red-400'}`}
                                 strokeWidth="3"
-                                strokeDasharray={normalPercent + ", 100"}
+                                strokeDasharray={`${normalPercent}, 100`}
                                 strokeLinecap="round" />
                         </svg>
                         <div className="absolute inset-0 flex items-center justify-center">
@@ -1261,6 +1238,7 @@ const Index = () => {
             </div>
           )}
 
+        </div>
       </div>
     </div>
   );

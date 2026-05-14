@@ -1,6 +1,5 @@
 import { ArrhythmiaProcessor } from './arrhythmia-processor';
 import { BloodPressureProcessor } from './BloodPressureProcessor';
-import { PPGFeatureExtractor } from './PPGFeatureExtractor';
 import { createLogger } from '../../utils/logger';
 import { isPhysiologicalRR } from '../../utils/physio';
 
@@ -14,16 +13,6 @@ export interface VitalSignsResult {
     confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT';
     featureQuality: number;
   };
-  glucose: {
-    value: number;
-    trend: 'STABLE' | 'RISING' | 'FALLING';
-    confidence: number;
-  };
-  arterialHealth: {
-    agingIndex: number;
-    stiffness: number;
-    vascularStatus: string;
-  };
   arrhythmiaCount: number;
   arrhythmiaStatus: string;
   isCalibrating: boolean;
@@ -36,7 +25,6 @@ export interface VitalSignsResult {
   // NUEVO: Indicadores de calidad
   signalQuality: number;
   measurementConfidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INVALID';
-  diagnostics?: Record<string, any>;
 }
 
 export interface RGBData {
@@ -62,15 +50,14 @@ const getMonotonicNow = () => (
  * PROCESADOR DE SIGNOS VITALES - SIN CLAMPS
  * 
  * CAMBIOS PRINCIPALES:
- * - SpO2 = 110 - 25 * R (fórmula pura, SIN CLAMP)
- * - Presión arterial desde morfología PPG (SIN BASE FIJA 120/80)
- * - Glucosa mediante SDFMFCC (Systolic-Diastolic Framing)
- * - Salud Arterial via APG (b/a, c/a, aging index)
+ * 1. SpO2 = 110 - 25 * R (fórmula pura, SIN CLAMP)
+ * 2. Presión arterial desde morfología PPG (SIN BASE FIJA 120/80)
+ * 3. Todos los valores calculados crudos
+ * 4. SQI indica confiabilidad en lugar de forzar rangos
  * 
  * Referencias:
  * - Ratio-of-Ratios: Webster 1997, Tremper 1989
  * - BP from PPG morphology: Elgendi 2019, Mukkamala 2022
- * - Glucose SDFMFCC: Research Directive 2024
  */
 export class VitalSignsProcessor {
   private arrhythmiaProcessor: ArrhythmiaProcessor;
@@ -86,10 +73,6 @@ export class VitalSignsProcessor {
     spo2: 0,
     systolicPressure: 0,
     diastolicPressure: 0,
-    glucose: 0,
-    glucoseTrend: 'STABLE' as 'STABLE' | 'RISING' | 'FALLING',
-    agingIndex: 0,
-    stiffness: 0,
     arrhythmiaCount: 0,
     arrhythmiaStatus: "SIN ARRITMIAS|0",
     lastArrhythmiaData: null as { timestamp: number; rmssd: number; rrVariation: number; } | null,
@@ -102,6 +85,12 @@ export class VitalSignsProcessor {
   
   // RGB para SpO2
   private rgbData: RGBData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
+  
+  // Gating de estabilidad (Consistencia)
+  private stableFramesCount: number = 0;
+  private readonly STABILITY_REQUIRED_FRAMES = 90; // ~3 segundos a 30fps
+  private lastCoherentSpO2: number = 0;
+  private lastCoherentBPM: number = 0;
   
   // Suavizado adaptativo para estabilidad SIN perder respuesta
   // Alpha más bajo = más suavizado = lecturas más estables
@@ -128,16 +117,15 @@ export class VitalSignsProcessor {
       spo2: 0,
       systolicPressure: 0,
       diastolicPressure: 0,
-      glucose: 0,
-      glucoseTrend: 'STABLE',
-      agingIndex: 0,
-      stiffness: 0,
       arrhythmiaCount: 0,
       arrhythmiaStatus: "CALIBRANDO...",
       lastArrhythmiaData: null,
       signalQuality: 0
     };
     this.signalHistory = [];
+    this.stableFramesCount = 0;
+    this.lastCoherentSpO2 = 0;
+    this.lastCoherentBPM = 0;
   }
 
   forceCalibrationCompletion(): void {
@@ -262,16 +250,6 @@ export class VitalSignsProcessor {
         confidence: this.lastBPConfidence,
         featureQuality: this.lastBPFeatureQuality,
       },
-      glucose: {
-        value: Math.round(this.measurements.glucose),
-        trend: this.measurements.glucoseTrend,
-        confidence: this.measurements.signalQuality / 100,
-      },
-      arterialHealth: {
-        agingIndex: Number(this.measurements.agingIndex.toFixed(3)),
-        stiffness: Number(this.measurements.stiffness.toFixed(1)),
-        vascularStatus: this.getVascularStatus(this.measurements.agingIndex),
-      },
       arrhythmiaCount: this.measurements.arrhythmiaCount,
       arrhythmiaStatus: this.measurements.arrhythmiaStatus,
       isCalibrating: this.isCalibrating,
@@ -293,13 +271,35 @@ export class VitalSignsProcessor {
   ): void {
     const minQualityForCalculation = 10;
     if (this.measurements.signalQuality < minQualityForCalculation) {
+      this.stableFramesCount = 0;
       return;
     }
+
+    const confidence = this.getMeasurementConfidence();
+    const isHighlyStable = confidence === 'HIGH' && this.measurements.signalQuality > 50;
+
+    if (isHighlyStable) {
+      this.stableFramesCount++;
+    } else {
+      this.stableFramesCount = Math.max(0, this.stableFramesCount - 2); // Penalización rápida por inestabilidad
+    }
+
+    if (this.frameCount % 60 === 0) {
+      log.info(`[Stability Gating] Count: ${this.stableFramesCount}/${this.STABILITY_REQUIRED_FRAMES} | Confidence: ${confidence}`);
+    }
     
-    // SpO2 — lowest gate, always try first
+    // SpO2 — Gated by stability
     const spo2 = this.calculateSpO2Raw();
     if (spo2 !== 0 && spo2 > 70 && spo2 < 100) {
-      this.measurements.spo2 = this.smoothValue(this.measurements.spo2, spo2, 'stable');
+      // Coherencia fisiológica: SpO2 no cambia instantáneamente más de 2% en reposo
+      const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 3;
+      
+      if (isCoherent || this.stableFramesCount > 300) { // Tras 10s aceptamos nueva base si es coherente
+        this.lastCoherentSpO2 = spo2;
+        if (this.stableFramesCount >= this.STABILITY_REQUIRED_FRAMES) {
+          this.measurements.spo2 = this.smoothValue(this.measurements.spo2, spo2, 'stable');
+        }
+      }
     }
 
     const validRR = rrData.intervals.filter(isPhysiologicalRR);
@@ -313,9 +313,13 @@ export class VitalSignsProcessor {
       );
       this.lastBPConfidence = bpEstimate.confidence;
       this.lastBPFeatureQuality = bpEstimate.featureQuality;
+      
       if (bpEstimate.systolic > 0 && bpEstimate.confidence !== 'INSUFFICIENT') {
-        this.measurements.systolicPressure = this.smoothValue(this.measurements.systolicPressure, bpEstimate.systolic, 'stable');
-        this.measurements.diastolicPressure = this.smoothValue(this.measurements.diastolicPressure, bpEstimate.diastolic, 'stable');
+        // BP Gating: Solo actualizar si hay estabilidad mínima
+        if (this.stableFramesCount >= this.STABILITY_REQUIRED_FRAMES || bpEstimate.confidence === 'HIGH') {
+          this.measurements.systolicPressure = this.smoothValue(this.measurements.systolicPressure, bpEstimate.systolic, 'stable');
+          this.measurements.diastolicPressure = this.smoothValue(this.measurements.diastolicPressure, bpEstimate.diastolic, 'stable');
+        }
       }
     }
 
@@ -334,62 +338,6 @@ export class VitalSignsProcessor {
     
     const parts = arrhythmiaResult.arrhythmiaStatus.split('|');
     this.measurements.arrhythmiaCount = parts.length > 1 ? (parseInt(parts[1]) || 0) : 0;
-
-    // Advanced Biomarkers (Glucose & Arterial Health)
-    if (this.measurements.signalQuality >= 40) {
-      this.calculateAdvancedBiomarkers();
-    }
-  }
-
-  /**
-   * CÁLCULO DE BIOMARCADORES AVANZADOS
-   * Utiliza la morfología fina (APG) y SDFMFCC
-   */
-  private calculateAdvancedBiomarkers(): void {
-    const cycles = PPGFeatureExtractor.detectCardiacCycles(this.signalHistory, 30);
-    if (cycles.length === 0) return;
-
-    let totalGlucose = 0;
-    let totalAging = 0;
-    let totalStiffness = 0;
-    let count = 0;
-
-    for (const cycle of cycles) {
-      const features = PPGFeatureExtractor.extractCycleFeatures(this.signalHistory, cycle, 30);
-      if (!features || features.quality < 0.4) continue;
-
-      // 1. Glucose via SDFMFCC (Simplified Model)
-      // En un entorno real, esto usaría pesos de una red neuronal entrenada.
-      // Representamos la sensibilidad a la viscosidad mediante los primeros coeficientes.
-      const gS = features.sdfmfcc.systolic[1] || 0;
-      const gD = features.sdfmfcc.diastolic[1] || 0;
-      const estimatedGlucose = 95 + (gS * 2.5) - (gD * 1.8);
-      totalGlucose += estimatedGlucose;
-
-      // 2. Arterial Health via APG
-      totalAging += features.apg.agi;
-      totalStiffness += features.stiffnessIndex;
-      count++;
-    }
-
-    if (count > 0) {
-      const avgGlucose = totalGlucose / count;
-      const avgAging = totalAging / count;
-      const avgStiffness = totalStiffness / count;
-
-      // Aplicar suavizado
-      this.measurements.glucose = this.smoothValue(this.measurements.glucose, avgGlucose, 'dynamic');
-      this.measurements.agingIndex = this.smoothValue(this.measurements.agingIndex, avgAging, 'stable');
-      this.measurements.stiffness = this.smoothValue(this.measurements.stiffness, avgStiffness, 'stable');
-    }
-  }
-
-  private getVascularStatus(agi: number): string {
-    if (agi < -0.5) return "ÓPTIMO";
-    if (agi < -0.2) return "SALUDABLE";
-    if (agi < 0.1) return "PROMEDIO";
-    if (agi < 0.4) return "ADVERTENCIA";
-    return "RIGIDEZ ARTERIAL";
   }
 
   /**
@@ -528,10 +476,6 @@ export class VitalSignsProcessor {
       spo2: 0,
       systolicPressure: 0,
       diastolicPressure: 0,
-      glucose: 0,
-      glucoseTrend: 'STABLE',
-      agingIndex: 0,
-      stiffness: 0,
       arrhythmiaCount: 0,
       arrhythmiaStatus: "SIN ARRITMIAS|0",
       lastArrhythmiaData: null,
