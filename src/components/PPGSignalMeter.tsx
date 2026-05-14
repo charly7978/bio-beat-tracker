@@ -26,8 +26,8 @@ interface PPGSignalMeterProps {
   pressure?: { systolic: number; diastolic: number; confidence?: string; featureQuality?: number };
 }
 
-const TARGET_FPS = 30;
-const WINDOW_MS = 3600;          // 3.6s ondas aún más holgadas (antes 4800)
+const TARGET_FPS = 60;            // (ANTES 30)
+const WINDOW_MS = 2800;          // 2.8s ondas aún más holgadas (antes 3600)
 const BUFFER_SIZE = 1800;        // Incrementar buffer para soportar hasta 300 FPS sin perder la cola
 const TREND_WINDOW_MS = 60_000;  // 60 s de tendencia BPM
 const TREND_MAX_POINTS = 240;
