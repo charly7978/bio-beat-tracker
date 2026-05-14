@@ -690,38 +690,59 @@ const PPGSignalMeter = ({
     ctx.fill();
     ctx.restore();
 
-    // Stroke segments — group by arrhythmia for fewer state changes
+    // Stroke segments — Smooth electric curve
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
+
+    // Función auxiliar para dibujar un segmento suave
+    const drawSmoothSegment = (startIdx: number, endIdx: number) => {
+      ctx.beginPath();
+      ctx.moveTo(coords[startIdx].x, coords[startIdx].y);
+      for (let k = startIdx; k < endIdx - 1; k++) {
+        const xc = (coords[k].x + coords[k + 1].x) / 2;
+        const yc = (coords[k].y + coords[k + 1].y) / 2;
+        ctx.quadraticCurveTo(coords[k].x, coords[k].y, xc, yc);
+      }
+      ctx.lineTo(coords[endIdx - 1].x, coords[endIdx - 1].y);
+    };
+
     let i = 0;
     while (i < coords.length - 1) {
       const isArr = coords[i].isArr;
-      ctx.beginPath();
-      ctx.moveTo(coords[i].x, coords[i].y);
-      
-      // Dibujar hasta que cambie el estado o lleguemos al final
-      // Incluimos el punto de transición para evitar huecos en la onda
-      while (i < coords.length - 1 && coords[i].isArr === isArr) {
-        i++;
-        ctx.lineTo(coords[i].x, coords[i].y);
+      let j = i;
+      while (j < coords.length - 1 && coords[j].isArr === isArr) {
+        j++;
       }
       
-      if (isArr) {
-        ctx.strokeStyle = COLORS.SIGNAL_ARR;
-        ctx.shadowColor = COLORS.SIGNAL_ARR_GLOW;
-        ctx.shadowBlur = 14;
-        ctx.lineWidth = 3;
-      } else {
-        ctx.strokeStyle = COLORS.SIGNAL;
-        ctx.shadowColor = COLORS.SIGNAL_GLOW;
-        ctx.shadowBlur = 10;
-        ctx.lineWidth = 2;
-      }
+      // 1. Neon Outer Glow
+      drawSmoothSegment(i, j + 1 > coords.length ? j : j + 1);
+      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.4)' : 'rgba(34, 197, 94, 0.4)';
+      ctx.lineWidth = 6;
+      ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
+      ctx.shadowBlur = 18;
       ctx.stroke();
-      ctx.shadowBlur = 0;
-      // No necesitamos incrementar i manualmente aquí, el bucle interno ya lo hizo
-      // i ahora apunta al primer punto del siguiente segmento o al final de coords.
+
+      // 2. Bright Inner Core
+      ctx.strokeStyle = isArr ? '#fca5a5' : '#86efac'; // Lighter color for electric core
+      ctx.lineWidth = 2.5;
+      ctx.shadowBlur = 4;
+      ctx.stroke();
+      
+      i = j;
     }
+
+    // Scanning Head (Punto brillante en la punta de la onda)
+    const head = coords[coords.length - 1];
+    if (head) {
+      const pulse = (Math.sin(now / 50) + 1) / 2;
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, 4 + pulse * 2, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = head.isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
+      ctx.shadowBlur = 12 + pulse * 8;
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
 
     // Peaks markers
     const visiblePeaks: { x: number; y: number; isArr: boolean; time: number }[] = [];
