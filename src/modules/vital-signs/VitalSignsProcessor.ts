@@ -284,7 +284,7 @@ export class VitalSignsProcessor {
       this.stableFramesCount = Math.max(0, this.stableFramesCount - 2); // Penalización rápida por inestabilidad
     }
 
-    if (this.frameCount % 60 === 0) {
+    if (this.stableFramesCount % 60 === 0) {
       log.info(`[Stability Gating] Count: ${this.stableFramesCount}/${this.STABILITY_REQUIRED_FRAMES} | Confidence: ${confidence}`);
     }
     
