@@ -27,7 +27,7 @@ interface PPGSignalMeterProps {
 }
 
 const TARGET_FPS = 30;
-const WINDOW_MS = 4800;          // 4.8s ondas más holgadas (antes 6000)
+const WINDOW_MS = 3600;          // 3.6s ondas aún más holgadas (antes 4800)
 const BUFFER_SIZE = 1800;        // Incrementar buffer para soportar hasta 300 FPS sin perder la cola
 const TREND_WINDOW_MS = 60_000;  // 60 s de tendencia BPM
 const TREND_MAX_POINTS = 240;
@@ -649,8 +649,9 @@ const PPGSignalMeter = ({
       }
       const range = Math.max(40, mx - mn);
       const stats = amplitudeStatsRef.current;
-      stats.min = stats.min * 0.95 + (mn - range * 0.1) * 0.05;
-      stats.max = stats.max * 0.95 + (mx + range * 0.1) * 0.05;
+      // Ampliamos el margen de escala (0.25) para que la onda no choque contra el techo/piso y se vea menos "vertical"
+      stats.min = stats.min * 0.95 + (mn - range * 0.25) * 0.05;
+      stats.max = stats.max * 0.95 + (mx + range * 0.25) * 0.05;
       stats.range = stats.max - stats.min;
     }
 
