@@ -243,7 +243,7 @@ export class HeartBeatProcessor {
     if (intervals.length < 6) return this.cachedSampleRate || 30;
     const sorted = [...intervals].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)] ?? 33;
-    this.cachedSampleRate = this.clamp(1000 / median, 20, 40);
+    this.cachedSampleRate = clamp(1000 / median, 20, 40);
     return this.cachedSampleRate;
   }
 
@@ -289,7 +289,7 @@ export class HeartBeatProcessor {
     }
 
     if (bestLag === 0 || bestScore < 0.2) return { bpm: 0, score: Math.max(0, bestScore) };
-    return { bpm: (60 * sampleRate) / bestLag, score: this.clamp(bestScore, 0, 1) };
+    return { bpm: (60 * sampleRate) / bestLag, score: clamp(bestScore, 0, 1) };
   }
 
   private calculateSQI(range: number, periodicityScore: number): number {
@@ -313,12 +313,12 @@ export class HeartBeatProcessor {
     const peakFactor = Math.min(1, this.consecutivePeaks / 4) * 20;
     const periodicityFactor = periodicityScore * 22;
 
-    return this.clamp(rangeFactor + slopeFactor + rrFactor + peakFactor + periodicityFactor, 0, 100);
+    return clamp(rangeFactor + slopeFactor + rrFactor + peakFactor + periodicityFactor, 0, 100);
   }
 
   private updateThreshold(range: number, periodicityScore: number): void {
     const base = periodicityScore > 0.35 ? 3.0 : 4.0;
-    const target = this.clamp(base + range * 0.3, 2.5, 7.5);
+    const target = clamp(base + range * 0.3, 2.5, 7.5);
     this.peakThreshold = this.peakThreshold * 0.8 + target * 0.2;
   }
 
@@ -413,15 +413,15 @@ export class HeartBeatProcessor {
     const peakSupport = Math.min(1, this.consecutivePeaks / 5);
 
     if (this.rrIntervals.length < 2) {
-      return this.clamp(sqiFactor * 0.22 + peakSupport * 0.2 + this.periodicityScore * 0.3, 0, 0.6);
+      return clamp(sqiFactor * 0.22 + peakSupport * 0.2 + this.periodicityScore * 0.3, 0, 0.6);
     }
 
     const mean = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
     const variance = this.rrIntervals.reduce((a, rr) => a + (rr - mean) ** 2, 0) / this.rrIntervals.length;
     const cv = Math.sqrt(variance) / Math.max(1, mean);
-    const rrStability = this.clamp(1 - cv * 1.7, 0, 1);
+    const rrStability = clamp(1 - cv * 1.7, 0, 1);
 
-    return this.clamp(rrStability * 0.32 + peakSupport * 0.24 + sqiFactor * 0.2 + this.periodicityScore * 0.24, 0, 1);
+    return clamp(rrStability * 0.32 + peakSupport * 0.24 + sqiFactor * 0.2 + this.periodicityScore * 0.24, 0, 1);
   }
 
   private vibrate(): void {
