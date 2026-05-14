@@ -106,8 +106,9 @@ const PPGSignalMeter = ({
   const ibiDisplayRef = useRef<number>(0);
   const hrvDisplayRef = useRef<{ sdnn: number; rmssd: number; pnn50: number; cv: number }>({ sdnn: 0, rmssd: 0, pnn50: 0, cv: 0 });
   const bpmStatsRef = useRef<{ min: number; max: number; sum: number; n: number }>({ min: 0, max: 0, sum: 0, n: 0 });
-  const bpmTrendRef = useRef<{ t: number; bpm: number }[]>([]);
+  const bpmTrendRef = useRef<{ t: number; bpm: number; isArr: boolean }[]>([]);
   const lastBpmSampleRef = useRef<number>(0);
+  const pendingTrendArrRef = useRef(false);
 
   // Layout — recomputed on resize, DPR-aware
   const layoutRef = useRef({
@@ -141,6 +142,11 @@ const PPGSignalMeter = ({
     }
 
     const nowMs = Date.now();
+    // Track if any arrhythmia happened during this interval
+    if (beatArrhythmiaRef.current) {
+      pendingTrendArrRef.current = true;
+    }
+
     if (bpm > 30 && bpm < 220 && nowMs - lastBpmSampleRef.current > 500) {
       lastBpmSampleRef.current = nowMs;
       const s = bpmStatsRef.current;
@@ -150,7 +156,10 @@ const PPGSignalMeter = ({
         if (bpm > s.max) s.max = bpm;
       }
       s.sum += bpm; s.n += 1;
-      bpmTrendRef.current.push({ t: nowMs, bpm });
+      
+      bpmTrendRef.current.push({ t: nowMs, bpm, isArr: pendingTrendArrRef.current });
+      pendingTrendArrRef.current = false; // Reset for next point
+
       // Drop trend points older than window
       const cutoff = nowMs - TREND_WINDOW_MS;
       while (bpmTrendRef.current.length > 0 && bpmTrendRef.current[0].t < cutoff) {
@@ -163,6 +172,7 @@ const PPGSignalMeter = ({
     if (!isFingerDetected && !preserveResults) {
       bpmStatsRef.current = { min: 0, max: 0, sum: 0, n: 0 };
       bpmTrendRef.current = [];
+      pendingTrendArrRef.current = false;
     }
   }, [value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure]);
 
@@ -893,18 +903,32 @@ const PPGSignalMeter = ({
     const tStart = now - TREND_WINDOW_MS;
     const xToPx = (t: number) => innerX + ((t - tStart) / TREND_WINDOW_MS) * innerW;
 
-    // Line + area
-    ctx.beginPath();
-    ctx.strokeStyle = COLORS.SIGNAL;
-    ctx.lineWidth = 1.6;
-    let first = true;
-    for (const p of data) {
-      const x = xToPx(p.t);
-      const y = yToPx(p.bpm);
-      if (first) { ctx.moveTo(x, y); first = false; }
-      else ctx.lineTo(x, y);
+    // Line segments
+    ctx.lineWidth = 1.8;
+    for (let i = 1; i < data.length; i++) {
+      const p1 = data[i - 1];
+      const p2 = data[i];
+      const x1 = xToPx(p1.t);
+      const y1 = yToPx(p1.bpm);
+      const x2 = xToPx(p2.t);
+      const y2 = yToPx(p2.bpm);
+
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      
+      if (p2.isArr) {
+        ctx.strokeStyle = COLORS.SIGNAL_ARR;
+        ctx.shadowColor = COLORS.SIGNAL_ARR_GLOW;
+        ctx.shadowBlur = 6;
+      } else {
+        ctx.strokeStyle = COLORS.SIGNAL;
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
+    ctx.shadowBlur = 0;
 
     // Last marker
     const last = data[data.length - 1];
