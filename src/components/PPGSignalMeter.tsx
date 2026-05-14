@@ -221,8 +221,8 @@ const PPGSignalMeter = ({
     const plotY = header.h + metricsH;
     const plotH = cssH - plotY - lowerH - footerH - buttonsH;
 
-    const plotX = 56;
-    const plotW = cssW - plotX - 18;
+    const plotX = 24; // Reducido para ocupar más ancho (antes 56)
+    const plotW = cssW - plotX - 8;
     const plot = { x: plotX, y: plotY + 8, w: plotW, h: Math.max(150, plotH - 8), centerY: 0 };
     plot.centerY = plot.y + plot.h / 2;
 
@@ -452,18 +452,21 @@ const PPGSignalMeter = ({
       : sys < 90 || dia < 60 ? COLORS.TEXT_WARN
       : COLORS.BP;
 
+    // Shift left slightly (+4 instead of +16) to avoid clipping on narrow screens
+    const bpX = colW * 2 + 4; 
+
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
     ctx.textAlign = 'left';
-    ctx.fillText('PRESIÓN ART.', colW * 2 + 16, metrics.y + 26);
+    ctx.fillText('PRESIÓN ART.', bpX, metrics.y + 26);
 
-    ctx.font = `bold 32px ${FONT_MONO}`;
+    ctx.font = `bold 28px ${FONT_MONO}`; // Reduced to fit safely
     ctx.fillStyle = bpColor;
-    ctx.fillText(sys > 0 ? `${sys}/${dia}` : '--/--', colW * 2 + 16, metrics.y + 68);
+    ctx.fillText(sys > 0 ? `${sys}/${dia}` : '--/--', bpX, metrics.y + 68);
 
     ctx.font = `12px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.fillText('mmHg', colW * 2 + 16, metrics.y + 90);
+    ctx.fillText('mmHg', bpX, metrics.y + 90);
 
     if (sys > 0) {
       ctx.font = `9px ${FONT_MONO}`;
@@ -478,7 +481,6 @@ const PPGSignalMeter = ({
       else bpLabel = 'NORMAL';
       ctx.font = `bold 10px ${FONT_MONO}`;
       ctx.fillStyle = bpColor;
-      // Dibujar la etiqueta de clasificación un poco más abajo para que no choque con mmHg
       ctx.fillText(bpLabel, metrics.w - 12, metrics.y + 102);
     }
 
