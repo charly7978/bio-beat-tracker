@@ -28,7 +28,7 @@ interface PPGSignalMeterProps {
 
 const TARGET_FPS = 30;
 const WINDOW_MS = 6000;          // 6 segundos de onda visible (sweep clínico)
-const BUFFER_SIZE = 720;         // ~120 puntos/seg * 6s
+const BUFFER_SIZE = 1800;         // Incrementar buffer para soportar hasta 300 FPS sin perder la cola
 const TREND_WINDOW_MS = 60_000;  // 60 s de tendencia BPM
 const TREND_MAX_POINTS = 240;
 const BEAT_HISTORY_MAX = 30;
@@ -455,9 +455,9 @@ const PPGSignalMeter = ({
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
     ctx.textAlign = 'left';
-    ctx.fillText('PRESIÓN ARTERIAL', colW * 2 + 16, metrics.y + 26);
+    ctx.fillText('PRESIÓN ART.', colW * 2 + 16, metrics.y + 26);
 
-    ctx.font = `bold 32px ${FONT_MONO}`; // Reduced from 38px
+    ctx.font = `bold 32px ${FONT_MONO}`;
     ctx.fillStyle = bpColor;
     ctx.fillText(sys > 0 ? `${sys}/${dia}` : '--/--', colW * 2 + 16, metrics.y + 68);
 
@@ -478,13 +478,8 @@ const PPGSignalMeter = ({
       else bpLabel = 'NORMAL';
       ctx.font = `bold 10px ${FONT_MONO}`;
       ctx.fillStyle = bpColor;
-      ctx.fillText(bpLabel, metrics.w - 12, metrics.y + 90);
-
-      if (bpConf && bpConf !== 'INSUFFICIENT') {
-        ctx.font = `9px ${FONT_MONO}`;
-        ctx.fillStyle = bpConf === 'HIGH' ? COLORS.TEXT_PRIMARY : bpConf === 'MEDIUM' ? COLORS.TEXT_WARN : COLORS.TEXT_DIM;
-        ctx.fillText(`conf: ${bpConf}`, metrics.w - 12, metrics.y + 26);
-      }
+      // Dibujar la etiqueta de clasificación un poco más abajo para que no choque con mmHg
+      ctx.fillText(bpLabel, metrics.w - 12, metrics.y + 102);
     }
 
     // Arrhythmia banner (overlay top-right of metrics)
@@ -929,7 +924,8 @@ const PPGSignalMeter = ({
     ctx.textAlign = 'right';
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
     if (hrv.sdnn > 0) {
-      ctx.fillText(`SDNN ${hrv.sdnn}ms · RMSSD ${hrv.rmssd}ms`, poincare.x + poincare.w - 8, poincare.y + 14);
+      // Mover a una nueva línea para evitar colisión con el título
+      ctx.fillText(`SDNN ${hrv.sdnn}ms · RMSSD ${hrv.rmssd}ms`, poincare.x + poincare.w - 8, poincare.y + 26);
     }
 
     // Data
@@ -942,7 +938,7 @@ const PPGSignalMeter = ({
       return;
     }
 
-    const padL = 28, padR = 8, padT = 26, padB = 16;
+    const padL = 28, padR = 8, padT = 36, padB = 16;
     const innerX = poincare.x + padL;
     const innerY = poincare.y + padT;
     const innerW = poincare.w - padL - padR;
@@ -1089,12 +1085,12 @@ const PPGSignalMeter = ({
     // Beat history dots — right side, below alarms
     const beats = beatHistoryRef.current;
     if (beats.length > 0) {
-      const showN = Math.min(beats.length, 30);
-      const dotSize = 4; // Smaller dots to fit better
+      const showN = Math.min(beats.length, 18); // Limitar a 18 para no pisar las métricas HRV
+      const dotSize = 3; // Puntos más pequeños
       const gap = 3;
       const totalW = showN * (dotSize * 2 + gap) - gap;
       const startX = footer.x + footer.w - 12 - totalW;
-      const dy = footer.y + 34; // Moved up to not overlap with bottom
+      const dy = footer.y + 36; // Alinear verticalmente en la mitad derecha
       for (let i = 0; i < showN; i++) {
         const beat = beats[beats.length - showN + i];
         const cx = startX + i * (dotSize * 2 + gap) + dotSize;
