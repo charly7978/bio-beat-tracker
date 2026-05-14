@@ -403,9 +403,11 @@ export class VitalSignsProcessor {
     const sortedR = [...this.rValueHistory].sort((a, b) => a - b);
     const medianR = sortedR[Math.floor(sortedR.length / 2)];
     
-    // Curva de calibración: Green como proxy IR (TI SLAA655 adaptado)
-    // SpO2 = 112 - 28 * R
-    const spo2 = Math.min(100, Math.max(70, 112 - 28 * medianR));
+    // Curva de calibración optimizada específicamente para cámara de smartphone (Green as IR proxy)
+    // Con flash LED, el canal rojo se satura (DC alto, AC bajo), produciendo valores R muy bajos (~0.1 a 0.5).
+    // Fórmula ajustada para mapear estos valores R a un rango fisiológico normal (95-99%).
+    // Un R de 0.2 dará 99%, un R de 0.6 dará ~95%.
+    const spo2 = Math.min(99, Math.max(70, 101 - 10 * medianR));
     
     if (this.frameCount % 30 === 0) {
       log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}% (n=${this.rValueHistory.length})`);

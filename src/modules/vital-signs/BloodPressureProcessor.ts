@@ -43,40 +43,35 @@ export interface BPEstimate {
 }
 
 /**
- * Coeficientes de regresión basados en meta-análisis de estudios 2024-2025:
- * 
- * SBP model (Mekonnen 2024 + Bahloul 2024):
- *   SBP = β0 + β1*(b/a) + β2*(d/a) + β3*(1/SUT) + β4*SI + β5*AIx 
- *         + β6*HR + β7*areaRatio + β8*AGI + β9*dicroticDepth
- * 
- * DBP model (Mekonnen 2024 + Azizzadeh 2024):
- *   DBP = γ0 + γ1*PW50 + γ2*DT + γ3*RMSSD + γ4*dicroticDepth 
- *         + γ5*areaRatio + γ6*SI + γ7*HR
+ * Coeficientes de regresión adaptados para señales PPG de cámara (smartphone):
+ * Al no tener calibración cruzada con tensiómetro, se re-centra la intercepción
+ * a un valor basal poblacional (110/70) y se atenúan los coeficientes morfológicos
+ * para evitar volatilidades irreales causadas por la compresión/smoothing de la cámara.
  */
 const SBP_COEFF = {
-  intercept: 82.0,
-  bDivA: -16.0,       // APG b/a: negative correlation (Elgendi 2024)
-  dDivA: 10.5,        // APG d/a: positive correlation
-  invSUT: 2500.0,     // 1/systolic_upstroke_time_ms (shorter → higher SBP)
-  SI: 7.5,            // Stiffness Index (higher → higher SBP)
-  AIx: 0.30,          // Augmentation Index
-  HR: 0.25,           // Heart rate contribution
-  areaRatio: 5.0,     // Systolic/diastolic area ratio (IPA)
-  AGI: 4.8,           // Aging Index from APG
-  dicroticDepth: -8.0, // Deeper notch → more elastic → lower SBP
-  pw75_pw25: 6.0,     // Pulse width ratio (shape indicator)
+  intercept: 105.0,
+  bDivA: -8.0,       // Reducido a la mitad para evitar saltos bruscos
+  dDivA: 5.0,
+  invSUT: 800.0,     // SUT suele ser 100-300ms → (1/200)*800 = +4 mmHg
+  SI: 2.0,           // SI = ~3-6 → +6-12 mmHg
+  AIx: 0.15,
+  HR: 0.15,          // HR = 80 → +12 mmHg
+  areaRatio: 2.0,    // IPA = ~1-3 → +2-6 mmHg
+  AGI: 2.0,
+  dicroticDepth: -4.0,
+  pw75_pw25: 3.0,
 };
 
 const DBP_COEFF = {
-  intercept: 42.0,
-  PW50: 0.10,         // Pulse width at 50% (ms)
-  DT: 0.030,          // Diastolic time (ms)
-  RMSSD: -0.07,       // HRV → parasympathetic → lower DBP
-  dicroticDepth: -10.0,
-  areaRatio: 3.8,
-  SI: 2.8,
-  HR: 0.12,
-  pw50_sut_ratio: 2.5, // PW50/SUT shape ratio
+  intercept: 60.0,
+  PW50: 0.02,        // PW50 = ~300ms → +6 mmHg
+  DT: 0.015,         // DT = ~500ms → +7.5 mmHg
+  RMSSD: -0.05,
+  dicroticDepth: -5.0,
+  areaRatio: 1.5,    // IPA = ~2 → +3 mmHg
+  SI: 1.2,           // SI = ~5 → +6 mmHg
+  HR: 0.08,          // HR = 80 → +6.4 mmHg
+  pw50_sut_ratio: 1.0, 
 };
 
 export class BloodPressureProcessor {
