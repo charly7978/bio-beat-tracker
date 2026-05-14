@@ -27,8 +27,8 @@ interface PPGSignalMeterProps {
 }
 
 const TARGET_FPS = 60;            // (ANTES 30)
-const WINDOW_MS = 2800;          // 2.8s ondas aún más holgadas (antes 3600)
-const BUFFER_SIZE = 1800;        // Incrementar buffer para soportar hasta 300 FPS sin perder la cola
+const WINDOW_MS = 2000;          // 2.0s ondas aún más holgadas (antes 3600)
+const BUFFER_SIZE = 2500;        // Incrementar buffer para soportar hasta 300 FPS sin perder la cola
 const TREND_WINDOW_MS = 60_000;  // 60 s de tendencia BPM
 const TREND_MAX_POINTS = 240;
 const BEAT_HISTORY_MAX = 30;
