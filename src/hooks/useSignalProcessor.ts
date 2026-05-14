@@ -101,16 +101,7 @@ export const useSignalProcessor = () => {
     lastUiPushRef.current = 0;
   }, []);
 
-  const calibrate = useCallback(async () => {
-    if (!processorRef.current || initializationState.current !== 'READY') {
-      return false;
-    }
-    try {
-      return await processorRef.current.calibrate();
-    } catch {
-      return false;
-    }
-  }, []);
+
 
   const processFrame = useCallback((imageData: ImageData, frameTimestampMs?: number) => {
     if (!processorRef.current || initializationState.current !== 'READY' || !isProcessingRef.current) {
@@ -188,7 +179,6 @@ export const useSignalProcessor = () => {
     currentStride,
     startProcessing,
     stopProcessing,
-    calibrate,
     processFrame,
     getRGBStats,
     getBackpressureState,

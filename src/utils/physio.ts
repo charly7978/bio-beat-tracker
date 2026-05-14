@@ -1,11 +1,17 @@
 /**
  * Constantes y utilidades fisiológicas centralizadas.
- * Única fuente de verdad para rangos RR, cálculos HRV y umbrales.
+ * Única fuente de verdad para rangos RR, cálculos HRV, umbrales y helpers temporales.
  */
 
 // Rango fisiológico único para intervalos RR (ms)
 export const RR_MIN_MS = 270;
 export const RR_MAX_MS = 2200;
+
+/** Timestamp monotónico de alta resolución (sin riesgo de saltos de reloj). */
+export const getMonotonicNow = (): number =>
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
 
 export function isPhysiologicalRR(ms: number): boolean {
   return ms >= RR_MIN_MS && ms <= RR_MAX_MS;

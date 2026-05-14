@@ -17,7 +17,6 @@ interface PPGSignalMeterProps {
     rrVariation: number;
   } | null;
   preserveResults?: boolean;
-  diagnosticMessage?: string;
   isPeak?: boolean;
   bpm?: number;
   spo2?: number;

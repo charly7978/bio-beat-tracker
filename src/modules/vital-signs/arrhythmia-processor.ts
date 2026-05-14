@@ -1,13 +1,9 @@
 import { createLogger } from '../../utils/logger';
-import { isPhysiologicalRR, calculateHRV, RR_MIN_MS, RR_MAX_MS } from '../../utils/physio';
+import { isPhysiologicalRR, calculateHRV, getMonotonicNow, RR_MIN_MS, RR_MAX_MS } from '../../utils/physio';
 
 const log = createLogger('ArrhythmiaProcessor');
 
-const getMonotonicNow = () => (
-  typeof performance !== 'undefined' && typeof performance.now === 'function'
-    ? performance.now()
-    : Date.now()
-);
+// getMonotonicNow importado desde utils/physio.ts
 
 interface RRData {
   intervals: number[];

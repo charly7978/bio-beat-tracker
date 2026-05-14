@@ -280,15 +280,6 @@ export class BloodPressureProcessor {
     return Math.min(100, score);
   }
 
-  private assessConfidence(
-    featureQuality: number, cycleCount: number
-  ): 'HIGH' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT' {
-    if (featureQuality >= 75 && cycleCount >= 8) return 'HIGH';
-    if (featureQuality >= 50 && cycleCount >= 5) return 'MEDIUM';
-    if (featureQuality >= 30 && cycleCount >= 3) return 'LOW';
-    return 'INSUFFICIENT';
-  }
-
   reset(): void {
     this.lastSBP = 0;
     this.lastDBP = 0;

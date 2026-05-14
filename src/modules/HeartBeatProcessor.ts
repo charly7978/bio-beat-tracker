@@ -8,6 +8,7 @@
  * 3. Scoring de candidatos de pico por prominencia + pendiente + consistencia RR
  * 4. Ventanas adaptativas: cortas para señal débil, largas para estable
  */
+import { clamp } from '../utils/math';
 export class HeartBeatProcessor {
   private readonly MIN_PEAK_INTERVAL_MS = 330;
   private readonly MAX_PEAK_INTERVAL_MS = 2000;
@@ -448,9 +449,7 @@ export class HeartBeatProcessor {
     } catch {}
   }
 
-  private clamp(value: number, min: number, max: number): number {
-    return Math.min(max, Math.max(min, value));
-  }
+  // clamp() importado desde utils/math.ts
 
   getRRIntervals(): number[] { return [...this.rrIntervals]; }
   getLastPeakTime(): number { return this.lastPeakTime; }

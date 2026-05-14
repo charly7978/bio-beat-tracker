@@ -1,7 +1,7 @@
 import { ArrhythmiaProcessor } from './arrhythmia-processor';
 import { BloodPressureProcessor } from './BloodPressureProcessor';
 import { createLogger } from '../../utils/logger';
-import { isPhysiologicalRR } from '../../utils/physio';
+import { isPhysiologicalRR, getMonotonicNow } from '../../utils/physio';
 
 const log = createLogger('VitalSignsProcessor');
 
@@ -40,11 +40,7 @@ interface RRData {
   timestampNow?: number;
 }
 
-const getMonotonicNow = () => (
-  typeof performance !== 'undefined' && typeof performance.now === 'function'
-    ? performance.now()
-    : Date.now()
-);
+// getMonotonicNow importado desde utils/physio.ts
 
 /**
  * PROCESADOR DE SIGNOS VITALES - SIN CLAMPS
@@ -90,7 +86,6 @@ export class VitalSignsProcessor {
   private stableFramesCount: number = 0;
   private readonly STABILITY_REQUIRED_FRAMES = 90; // ~3 segundos a 30fps
   private lastCoherentSpO2: number = 0;
-  private lastCoherentBPM: number = 0;
   
   // Suavizado adaptativo para estabilidad SIN perder respuesta
   // Alpha más bajo = más suavizado = lecturas más estables
@@ -125,7 +120,6 @@ export class VitalSignsProcessor {
     this.signalHistory = [];
     this.stableFramesCount = 0;
     this.lastCoherentSpO2 = 0;
-    this.lastCoherentBPM = 0;
   }
 
   forceCalibrationCompletion(): void {
@@ -341,29 +335,23 @@ export class VitalSignsProcessor {
   }
 
   /**
-   * SpO2 - FÓRMULA RATIO-OF-RATIOS (Estándar Texas Instruments SLAA655)
+   * SpO2 - FÓRMULA RATIO-OF-RATIOS
    * 
-   * R = (AC_red/DC_red) / (AC_ir/DC_ir)
-   * SpO2 = 110 - 25 * R
+   * Basado en Beer-Lambert / TI SLAA655, calibrado para cámara smartphone:
+   * R = (AC_red/DC_red) / (AC_green/DC_green)
+   * SpO2 = 112 - 28 * R   (coeficientes empíricos para green como proxy IR)
    * 
-   * Para cámaras usamos verde como proxy de IR (mejor SNR que azul)
+   * Verde se usa como proxy de IR porque ofrece mejor SNR en la yema del dedo
+   * con LED flash blanco que el canal azul.
    * 
-   * VALIDACIÓN: Solo retorna valor si los datos son físicamente plausibles
+   * Mejoras implementadas:
+   * - Filtrado de mediana sobre ventana de R para estabilidad
+   * - Gating por PI mínimo (perfusión) antes de calcular
+   * - Validación del rango físico de R (0.2-2.5 para tejido humano)
    */
   // Buffer para valores R (Ratio-of-Ratios) para filtrado de mediana
   private rValueHistory: number[] = [];
   private readonly R_HISTORY_SIZE = 15;
-
-  /**
-   * SpO2 - FÓRMULA RATIO-OF-RATIOS (Estándar Texas Instruments SLAA655)
-   * 
-   * R = (AC_red/DC_red) / (AC_ir/DC_ir)
-   * SpO2 = 110 - 25 * R
-   * 
-   * Para cámaras usamos verde como proxy de IR (mejor SNR que azul)
-   * 
-   * MEJORA: Implementa filtrado de mediana para R y logging de depuración
-   */
   private calculateSpO2Raw(): number {
     const { redAC, redDC, greenAC, greenDC } = this.rgbData;
     

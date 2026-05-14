@@ -1030,7 +1030,6 @@ const Index = () => {
               arrhythmiaStatus={vitalSigns.arrhythmiaStatus}
               rawArrhythmiaData={lastArrhythmiaData.current}
               preserveResults={showResults}
-              diagnosticMessage={lastSignal?.diagnostics?.message}
               isPeak={beatMarker === 1}
               bpm={heartRate}
               spo2={vitalSigns.spo2}

@@ -1,6 +1,7 @@
 import type { ProcessedSignal, ProcessingError, SignalProcessor as SignalProcessorInterface, ContactState } from '../../types/signal';
 import { BandpassFilter } from './BandpassFilter';
 import { createLogger, ppgPerf } from '../../utils/logger';
+import { clamp } from '../../utils/math';
 import {
   DEFAULT_BACKPRESSURE_CONFIG,
   sanitizeBackpressureConfig,
@@ -431,7 +432,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     const sorted = [...this.frameIntervalBuffer].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)] ?? 33;
-    const estimatedFps = this.clamp(1000 / median, 20, 40);
+    const estimatedFps = clamp(1000 / median, 20, 40);
 
     if (Math.abs(estimatedFps - this.estimatedSampleRate) > 2) {
       this.estimatedSampleRate = estimatedFps;
@@ -504,11 +505,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const dx = normX - 0.5;
       const dy = normY - 0.5;
       const distanceFromCenter = Math.sqrt(dx * dx + dy * dy);
-      const centerBias = this.clamp(1 - distanceFromCenter * 1.2, 0.3, 1);
+      const centerBias = clamp(1 - distanceFromCenter * 1.2, 0.3, 1);
 
-      const brightnessScore = this.clamp((total - 120) / 220, 0, 1);
-      const redRatioScore = this.clamp((rednessRatio - 1.02) / 0.85, 0, 1);
-      const dominanceScore = this.clamp((redDominance - 10) / 35, 0, 1);
+      const brightnessScore = clamp((total - 120) / 220, 0, 1);
+      const redRatioScore = clamp((rednessRatio - 1.02) / 0.85, 0, 1);
+      const dominanceScore = clamp((redDominance - 10) / 35, 0, 1);
       const frameScore = redRatioScore * 0.45 + dominanceScore * 0.4 + brightnessScore * 0.15;
 
       this.tileConfidence[i] = this.tileConfidence[i] * 0.75 + frameScore * centerBias * 0.25;
@@ -588,9 +589,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const gNorm = this.greenBaseline > 0 ? (this.greenBaseline - rawGreen) / this.greenBaseline : 0;
     const bNorm = this.blueBaseline > 0 ? (this.blueBaseline - rawBlue) / this.blueBaseline : 0;
 
-    const clamp = (v: number) => this.clamp(v, -0.04, 0.04);
-    const rPulse = clamp(rNorm);
-    const gPulse = clamp(gNorm);
+    const clampPulse = (v: number) => clamp(v, -0.04, 0.04);
+    const rPulse = clampPulse(rNorm);
+    const gPulse = clampPulse(gNorm);
 
     // Source candidates (CHROM removed — amplifies noise without finger)
     const sources: { [key: string]: number } = {
@@ -612,7 +613,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.rankSources();
     }
 
-    const value = this.clamp(sources[this.activeSource] ?? sources['RG'], -80, 80);
+    const value = clamp(sources[this.activeSource] ?? sources['RG'], -80, 80);
     const strength = Math.max(Math.abs(rPulse), Math.abs(gPulse)) * 1000;
 
     return { value, label: this.activeSource, strength };
@@ -627,14 +628,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     let redWeight = 0.45;
 
     if (piSum > 0) {
-      greenWeight = this.clamp(greenPI / piSum, 0.25, 0.8);
+      greenWeight = clamp(greenPI / piSum, 0.25, 0.8);
       redWeight = 1 - greenWeight;
     }
 
     // Clipping penalties
     if (rawGreen > 245) { greenWeight *= 0.4; redWeight = 1 - greenWeight; }
     if (rawRed > 245) { redWeight *= 0.4; greenWeight = 1 - redWeight; }
-    if (motionArtifact) { greenWeight = this.clamp(greenWeight + 0.05, 0.3, 0.8); redWeight = 1 - greenWeight; }
+    if (motionArtifact) { greenWeight = clamp(greenWeight + 0.05, 0.3, 0.8); redWeight = 1 - greenWeight; }
 
     return rPulse * redWeight + gPulse * greenWeight;
   }
@@ -767,8 +768,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const kurtosis = kurtSum / recent.length;
 
     // Normal PPG: Skewness > 0, Kurtosis ~3-5
-    const skewScore = this.clamp(skewness * 5, 0, 10);
-    const kurtScore = this.clamp((5 - Math.abs(kurtosis - 4)) * 2, 0, 10);
+    const skewScore = clamp(skewness * 5, 0, 10);
+    const kurtScore = clamp((5 - Math.abs(kurtosis - 4)) * 2, 0, 10);
 
     const snrScore = Math.min(30, snr * 10);
     const perfusionScore = Math.min(25, perfusionIndex * 12);
@@ -782,7 +783,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const stabilityBonus = this.contactState === 'STABLE_CONTACT' ? 5 : 0;
     const pulsatilityBonus = (this.redAC > 0 || this.greenAC > 0) ? 5 : 0;
 
-    const finalSqi = this.clamp(baseQuality + stabilityBonus + pulsatilityBonus, 0, 100);
+    const finalSqi = clamp(baseQuality + stabilityBonus + pulsatilityBonus, 0, 100);
     
     if (this.frameCount % 90 === 0) {
       log.info(`[SQI Debug] Snr:${snr.toFixed(1)} Skew:${skewness.toFixed(2)} Kurt:${kurtosis.toFixed(2)} PI:${perfusionIndex.toFixed(2)} Final:${finalSqi.toFixed(0)}%`);
@@ -909,9 +910,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.motionScore = 0;
   }
 
-  private clamp(value: number, min: number, max: number): number {
-    return Math.min(max, Math.max(min, value));
-  }
+  // clamp() importado desde utils/math.ts
 
   /**
    * Backpressure: si el fps real cae por debajo de 20 durante > 3s, sube el
