@@ -129,6 +129,7 @@ export class VitalSignsProcessor {
       systolicPressure: 0,
       diastolicPressure: 0,
       glucose: 0,
+      glucoseTrend: 'STABLE',
       agingIndex: 0,
       stiffness: 0,
       arrhythmiaCount: 0,
