@@ -289,17 +289,15 @@ export class VitalSignsProcessor {
       log.info(`[Stability] ${this.stableFramesCount} frames | ${confidence} | SQI:${this.measurements.signalQuality}`);
     }
     
-    // === SpO2 — Gated: requiere MEDIUM+ confidence y estabilidad mínima ===
+    // === SpO2 — Basado en física (Beer-Lambert), no estadística ===
+    // SpO2 usa ratios ópticos AC/DC directamente de la cámara.
+    // Solo necesita datos RGB válidos y confidence no-INVALID.
     const spo2 = this.calculateSpO2Raw();
-    if (spo2 !== 0 && spo2 > 70 && spo2 <= 100) {
-      const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 4;
-      
-      if (isCoherent || this.stableFramesCount > 180) {
+    if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && confidence !== 'INVALID') {
+      const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 5;
+      if (isCoherent || this.frameCount > 300) {
         this.lastCoherentSpO2 = spo2;
-        // SpO2 se actualiza con MEDIUM+ confidence tras estabilidad mínima
-        if (this.stableFramesCount >= this.STABILITY_SPO2_FRAMES && confidence !== 'INVALID') {
-          this.measurements.spo2 = this.smoothValue(this.measurements.spo2, spo2, 'stable');
-        }
+        this.measurements.spo2 = this.smoothValue(this.measurements.spo2, spo2, 'stable');
       }
     }
 
@@ -361,22 +359,23 @@ export class VitalSignsProcessor {
    */
   // Buffer para valores R (Ratio-of-Ratios) para filtrado de mediana
   private rValueHistory: number[] = [];
-  private readonly R_HISTORY_SIZE = 15;
+  private readonly R_HISTORY_SIZE = 7;  // Ventana corta: convergencia rápida, mediana estable
   private calculateSpO2Raw(): number {
     const { redAC, redDC, greenAC, greenDC } = this.rgbData;
     
-    if (redDC < 15 || greenDC < 15) return 0;
+    // DC mínimo: necesitamos baseline de canal suficiente
+    if (redDC < 10 || greenDC < 5) return 0;
     
-    const piRed = (redAC / redDC) * 100;
+    const piRed = (redAC / redDC) * 100;   // como %
     const piGreen = (greenAC / greenDC) * 100;
 
-    // Log de depuración para diagnóstico clínico (cada ~0.3s)
+    // Log de depuración (~cada 0.3s)
     if (this.frameCount % 10 === 0) {
       log.info(`[SpO2 Debug] ACr:${redAC.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${greenAC.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}%`);
     }
     
-    // Umbrales mínimos de pulsatilidad (PI > 0.05%)
-    if (piRed < 0.05 || piGreen < 0.05) return 0;
+    // Umbral mínimo de pulsatilidad: PI > 0.02% (relajado para cámara)
+    if (piRed < 0.02 || piGreen < 0.02) return 0;
     
     const ratioRed = redAC / redDC;
     const ratioGreen = greenAC / greenDC;
@@ -384,30 +383,32 @@ export class VitalSignsProcessor {
     
     const currentR = ratioRed / ratioGreen;
     
-    // Validar rango físico de R para tejido humano
-    if (currentR < 0.2 || currentR > 2.5) {
+    // Rango físico de R para tejido humano con cámara+flash:
+    // Con dedo en flash blanco, rojo está cerca de saturación → R puede ser bajo (0.1+)
+    if (currentR < 0.1 || currentR > 2.5) {
       if (this.frameCount % 15 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
       return 0;
     }
 
-    // Acumular R para filtrado de mediana (Mejor práctica clínica)
+    // Acumular R para filtrado de mediana
     this.rValueHistory.push(currentR);
     if (this.rValueHistory.length > this.R_HISTORY_SIZE) {
       this.rValueHistory.shift();
     }
 
-    if (this.rValueHistory.length < 5) return 0;
+    // Solo necesitamos 3 muestras para mediana estable
+    if (this.rValueHistory.length < 3) return 0;
 
-    // Calcular mediana de R para estabilidad
+    // Mediana de R: robusto ante outliers
     const sortedR = [...this.rValueHistory].sort((a, b) => a - b);
     const medianR = sortedR[Math.floor(sortedR.length / 2)];
     
-    // Curva de calibración optimizada para cámara (Green as IR proxy)
-    // Usamos intercepto 112 para compensar mayor absorción en verde
+    // Curva de calibración: Green como proxy IR (TI SLAA655 adaptado)
+    // SpO2 = 112 - 28 * R
     const spo2 = Math.min(100, Math.max(70, 112 - 28 * medianR));
     
     if (this.frameCount % 30 === 0) {
-      log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}%`);
+      log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}% (n=${this.rValueHistory.length})`);
     }
 
     return Number.isFinite(spo2) ? spo2 : 0;
