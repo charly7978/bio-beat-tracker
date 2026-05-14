@@ -170,11 +170,12 @@ export const useSignalProcessor = () => {
     return loadBackpressureConfig();
   }, []);
 
-  const setBackpressureConfig = useCallback((config: Partial<BackpressureConfig>) => {
+  const setBackpressureConfig = useCallback((config: Partial<BackpressureConfig>): BackpressureConfig => {
     const current = loadBackpressureConfig();
     const updated = { ...current, ...config };
     saveBackpressureConfig(updated);
     // Podríamos enviar este config al worker si fuera necesario
+    return updated;
   }, []);
 
   return {
