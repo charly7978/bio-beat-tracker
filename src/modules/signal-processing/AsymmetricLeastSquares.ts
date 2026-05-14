@@ -22,7 +22,7 @@ export class AsymmetricLeastSquares {
     if (n < 3) return [...y];
 
     let w = new Float64Array(n).fill(1);
-    let z = new Float64Array(n);
+    let z: Float64Array = new Float64Array(n);
     
     // Matriz de diferencias de segundo orden (D)
     // En JS, para optimizar, realizamos la actualización iterativa directamente.
