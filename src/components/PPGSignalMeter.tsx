@@ -27,8 +27,8 @@ interface PPGSignalMeterProps {
 }
 
 const TARGET_FPS = 30;
-const WINDOW_MS = 6000;          // 6 segundos de onda visible (sweep clínico)
-const BUFFER_SIZE = 1800;         // Incrementar buffer para soportar hasta 300 FPS sin perder la cola
+const WINDOW_MS = 4800;          // 4.8s ondas más holgadas (antes 6000)
+const BUFFER_SIZE = 1800;        // Incrementar buffer para soportar hasta 300 FPS sin perder la cola
 const TREND_WINDOW_MS = 60_000;  // 60 s de tendencia BPM
 const TREND_MAX_POINTS = 240;
 const BEAT_HISTORY_MAX = 30;
@@ -604,6 +604,10 @@ const PPGSignalMeter = ({
     if (preserve && !detected) return;
 
     const scaledValue = signalValue * 2;
+    // La detección de picos en HeartBeatProcessor evalúa muestras pasadas (índice 5 de 11).
+    // A 30 FPS, esto representa un delay algorítmico de ~166ms.
+    // Aplicamos este offset visual para que el "BEEP" coincida milimétricamente con la parte más alta de la onda visible.
+    const VISUAL_DELAY_MS = 166; 
 
     if (peak) {
       const currentCount = arrStatus ? parseInt(arrStatus.split('|')[1] || '0') : 0;
@@ -614,20 +618,16 @@ const PPGSignalMeter = ({
       if (currentCount > lastArrhythmiaCountRef.current) {
         beatArrhythmiaRef.current = true;
         lastArrhythmiaCountRef.current = currentCount;
-        // Para retro-marking necesitamos una duración sensata: el RR real si existe,
-        // 800 ms como fallback razonable para cubrir la fase de subida del latido.
         const retroRR = lastRR > 0 ? lastRR : 800;
         const retroDuration = Math.min(Math.max(retroRR, 400), 1500);
         buffer.markArrhythmiaBack(retroDuration);
       } else {
         beatArrhythmiaRef.current = false;
       }
-      // rr=0 indica "RR aún no disponible" (típico del primer latido); el Poincaré plot
-      // lo descarta vía isPhysiologicalRR, lo cual es correcto.
       const storedRR = Math.round(lastRR);
       beatHistoryRef.current.push({
         isArrhythmia: beatArrhythmiaRef.current,
-        time: now,
+        time: now - VISUAL_DELAY_MS, // Sincronizar el latido con el pico real
         rr: storedRR,
       });
       if (beatHistoryRef.current.length > BEAT_HISTORY_MAX) {
@@ -665,7 +665,7 @@ const PPGSignalMeter = ({
     const coords: { x: number; y: number; isArr: boolean }[] = [];
     for (let i = 0; i < points.length; i++) {
       const pt = points[i];
-      const age = now - pt.time;
+      const age = now - pt.time - VISUAL_DELAY_MS; // Offset para sincronizar audio/video
       if (age > WINDOW_MS) continue;
       const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
       if (x < plot.x || x > plot.x + plot.w) continue;
@@ -747,7 +747,7 @@ const PPGSignalMeter = ({
     // Peaks markers
     const visiblePeaks: { x: number; y: number; isArr: boolean; time: number }[] = [];
     for (const beat of beatHistoryRef.current) {
-      const age = now - beat.time;
+      const age = now - beat.time - VISUAL_DELAY_MS;
       if (age > WINDOW_MS || age < 0) continue;
       const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
       if (x < plot.x || x > plot.x + plot.w) continue;
