@@ -793,8 +793,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private calculatePerfusionIndex(): number {
-    if (this.greenDC > 0) return (this.greenAC / this.greenDC) * 100;
-    if (this.redDC > 0) return (this.redAC / this.redDC) * 100;
+    // PI como ratio (0.0-1.0), NO porcentaje. La UI multiplica *100 para display.
+    if (this.greenDC > 0) return this.greenAC / this.greenDC;
+    if (this.redDC > 0) return this.redAC / this.redDC;
     return 0;
   }
 
