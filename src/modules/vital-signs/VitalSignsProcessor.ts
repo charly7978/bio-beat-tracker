@@ -78,13 +78,15 @@ export class VitalSignsProcessor {
   // Historial de señal
   private signalHistory: number[] = [];
   private readonly HISTORY_SIZE = 90;
+  private frameCount = 0;  // Contador continuo para logging/diagnóstico
   
   // RGB para SpO2
   private rgbData: RGBData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
   
   // Gating de estabilidad (Consistencia)
   private stableFramesCount: number = 0;
-  private readonly STABILITY_REQUIRED_FRAMES = 90; // ~3 segundos a 30fps
+  private readonly STABILITY_SPO2_FRAMES = 45;  // ~1.5s para SpO2 (actualización rápida)
+  private readonly STABILITY_BP_FRAMES = 60;    // ~2s para BP (necesita más ciclos)
   private lastCoherentSpO2: number = 0;
   
   // Suavizado adaptativo para estabilidad SIN perder respuesta
@@ -141,6 +143,7 @@ export class VitalSignsProcessor {
     if (this.signalHistory.length > this.HISTORY_SIZE) {
       this.signalHistory.shift();
     }
+    this.frameCount++;
 
     // Control de calibración
     if (this.isCalibrating) {
@@ -263,34 +266,38 @@ export class VitalSignsProcessor {
     signalValue: number, 
     rrData: RRData
   ): void {
-    const minQualityForCalculation = 10;
+    const minQualityForCalculation = 8;
     if (this.measurements.signalQuality < minQualityForCalculation) {
-      this.stableFramesCount = 0;
+      this.stableFramesCount = Math.max(0, this.stableFramesCount - 1);
       return;
     }
 
     const confidence = this.getMeasurementConfidence();
-    const isHighlyStable = confidence === 'HIGH' && this.measurements.signalQuality > 50;
 
-    if (isHighlyStable) {
-      this.stableFramesCount++;
+    // Gating progresivo: HIGH avanza rápido, MEDIUM avanza, LOW mantiene
+    if (confidence === 'HIGH') {
+      this.stableFramesCount = Math.min(this.stableFramesCount + 2, 600);
+    } else if (confidence === 'MEDIUM') {
+      this.stableFramesCount = Math.min(this.stableFramesCount + 1, 600);
+    } else if (confidence === 'LOW') {
+      // LOW: no avanza ni retrocede — mantiene estado
     } else {
-      this.stableFramesCount = Math.max(0, this.stableFramesCount - 2); // Penalización rápida por inestabilidad
+      this.stableFramesCount = Math.max(0, this.stableFramesCount - 2);
     }
 
-    if (this.stableFramesCount % 60 === 0) {
-      log.info(`[Stability Gating] Count: ${this.stableFramesCount}/${this.STABILITY_REQUIRED_FRAMES} | Confidence: ${confidence}`);
+    if (this.stableFramesCount % 60 === 0 && this.stableFramesCount > 0) {
+      log.info(`[Stability] ${this.stableFramesCount} frames | ${confidence} | SQI:${this.measurements.signalQuality}`);
     }
     
-    // SpO2 — Gated by stability
+    // === SpO2 — Gated: requiere MEDIUM+ confidence y estabilidad mínima ===
     const spo2 = this.calculateSpO2Raw();
-    if (spo2 !== 0 && spo2 > 70 && spo2 < 100) {
-      // Coherencia fisiológica: SpO2 no cambia instantáneamente más de 2% en reposo
-      const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 3;
+    if (spo2 !== 0 && spo2 > 70 && spo2 <= 100) {
+      const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 4;
       
-      if (isCoherent || this.stableFramesCount > 300) { // Tras 10s aceptamos nueva base si es coherente
+      if (isCoherent || this.stableFramesCount > 180) {
         this.lastCoherentSpO2 = spo2;
-        if (this.stableFramesCount >= this.STABILITY_REQUIRED_FRAMES) {
+        // SpO2 se actualiza con MEDIUM+ confidence tras estabilidad mínima
+        if (this.stableFramesCount >= this.STABILITY_SPO2_FRAMES && confidence !== 'INVALID') {
           this.measurements.spo2 = this.smoothValue(this.measurements.spo2, spo2, 'stable');
         }
       }
@@ -300,7 +307,7 @@ export class VitalSignsProcessor {
     const avgRR = validRR.length > 0 ? validRR.reduce((a, b) => a + b, 0) / validRR.length : 0;
     const hr = avgRR > 0 ? 60000 / avgRR : 0;
 
-    // BP — try with 2+ valid RR
+    // === BP — requiere 2+ RR válidos y estabilidad moderada ===
     if (validRR.length >= 2) {
       const bpEstimate = this.bloodPressureProcessor.estimate(
         this.signalHistory, validRR, 30
@@ -309,8 +316,11 @@ export class VitalSignsProcessor {
       this.lastBPFeatureQuality = bpEstimate.featureQuality;
       
       if (bpEstimate.systolic > 0 && bpEstimate.confidence !== 'INSUFFICIENT') {
-        // BP Gating: Solo actualizar si hay estabilidad mínima
-        if (this.stableFramesCount >= this.STABILITY_REQUIRED_FRAMES || bpEstimate.confidence === 'HIGH') {
+        // BP se actualiza con MEDIUM+ confidence tras estabilidad mínima
+        // HIGH confidence pasa inmediatamente (suficientes ciclos PPG de calidad)
+        const bpReady = bpEstimate.confidence === 'HIGH' ||
+          (this.stableFramesCount >= this.STABILITY_BP_FRAMES && confidence !== 'INVALID');
+        if (bpReady) {
           this.measurements.systolicPressure = this.smoothValue(this.measurements.systolicPressure, bpEstimate.systolic, 'stable');
           this.measurements.diastolicPressure = this.smoothValue(this.measurements.diastolicPressure, bpEstimate.diastolic, 'stable');
         }
@@ -360,8 +370,8 @@ export class VitalSignsProcessor {
     const piRed = (redAC / redDC) * 100;
     const piGreen = (greenAC / greenDC) * 100;
 
-    // Log de depuración para diagnóstico clínico
-    if (this.calibrationSamples % 10 === 0) {
+    // Log de depuración para diagnóstico clínico (cada ~0.3s)
+    if (this.frameCount % 10 === 0) {
       log.info(`[SpO2 Debug] ACr:${redAC.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${greenAC.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}%`);
     }
     
@@ -376,7 +386,7 @@ export class VitalSignsProcessor {
     
     // Validar rango físico de R para tejido humano
     if (currentR < 0.2 || currentR > 2.5) {
-      if (this.calibrationSamples % 5 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
+      if (this.frameCount % 15 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
       return 0;
     }
 
@@ -396,7 +406,7 @@ export class VitalSignsProcessor {
     // Usamos intercepto 112 para compensar mayor absorción en verde
     const spo2 = Math.min(100, Math.max(70, 112 - 28 * medianR));
     
-    if (this.calibrationSamples % 30 === 0) {
+    if (this.frameCount % 30 === 0) {
       log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}%`);
     }
 
@@ -460,6 +470,9 @@ export class VitalSignsProcessor {
     this.signalHistory = [];
     this.validPulseCount = 0;
     this.rValueHistory = [];
+    this.frameCount = 0;
+    this.stableFramesCount = 0;
+    this.lastCoherentSpO2 = 0;
     this.measurements = {
       spo2: 0,
       systolicPressure: 0,
