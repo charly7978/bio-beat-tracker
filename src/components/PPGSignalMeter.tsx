@@ -91,7 +91,8 @@ const PPGSignalMeter = ({
   elapsedTime = 0,
   perfusionIndex = 0,
   pressure,
-  arrhythmiaCount = 0
+  arrhythmiaCount = 0,
+  diagnostics
 }: PPGSignalMeterProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);

@@ -40,7 +40,12 @@ type ExtendedCapabilities = MediaTrackCapabilities & {
   focusMode?: string[];
   frameRate?: { min?: number; max?: number };
 };
-type ExtendedSettings = MediaTrackSettings & { torch?: boolean };
+type ExtendedSettings = MediaTrackSettings & { 
+  torch?: boolean;
+  exposureMode?: string;
+  whiteBalanceMode?: string;
+  focusMode?: string;
+};
 
 const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
   onStreamReady,

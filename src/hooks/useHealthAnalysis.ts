@@ -18,7 +18,7 @@ export const useHealthAnalysis = () => {
 
     const { heartRate, vitalSigns, quality } = data;
 
-    if (heartRate <= 0 && vitalSigns.spo2 <= 0) {
+    if (heartRate <= 0 && vitalSigns.spo2.value <= 0) {
       toast({
         title: "Datos insuficientes",
         description: "Se necesitan datos de medición válidos para el análisis.",
@@ -35,9 +35,9 @@ export const useHealthAnalysis = () => {
       arrhythmiaCount: vitalSigns.arrhythmiaCount,
     };
     if (heartRate > 0) bodyPayload.heartRate = heartRate;
-    if (vitalSigns.spo2 > 0) bodyPayload.spo2 = vitalSigns.spo2;
-    if (vitalSigns.pressure?.systolic > 0) bodyPayload.systolic = vitalSigns.pressure.systolic;
-    if (vitalSigns.pressure?.diastolic > 0) bodyPayload.diastolic = vitalSigns.pressure.diastolic;
+    if (vitalSigns.spo2.value > 0) bodyPayload.spo2 = vitalSigns.spo2.value;
+    if (vitalSigns.bloodPressure.value.systolic > 0) bodyPayload.systolic = vitalSigns.bloodPressure.value.systolic;
+    if (vitalSigns.bloodPressure.value.diastolic > 0) bodyPayload.diastolic = vitalSigns.bloodPressure.value.diastolic;
 
     setIsAnalyzing(true);
     setAnalysis(null);

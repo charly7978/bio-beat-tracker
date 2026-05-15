@@ -70,6 +70,11 @@ export class HeartBeatProcessor {
     isPeak: boolean;
     filteredValue: number;
     sqi: number;
+    consensusReason?: string;
+    rrData?: {
+      intervals: number[];
+      lastPeakTime: number;
+    };
   } {
     const now = timestamp ?? (typeof performance !== 'undefined' ? performance.now() : Date.now());
 

@@ -30,6 +30,11 @@ export interface VitalSignsResult extends VitalSignsDetailedResult {
   arrhythmiaCount: number;
   arrhythmiaStatus: string;
   measurementConfidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INVALID';
+  lastArrhythmiaData?: {
+    timestamp: number;
+    rmssd: number;
+    rrVariation: number;
+  } | null;
 }
 
 export interface RGBData {
@@ -279,7 +284,8 @@ export class VitalSignsProcessor {
       },
       arrhythmiaCount: this.measurements.arrhythmiaCount,
       arrhythmiaStatus: this.measurements.arrhythmiaStatus,
-      measurementConfidence: confidence
+      measurementConfidence: confidence,
+      lastArrhythmiaData: this.measurements.lastArrhythmiaData
     };
 
     return res;
@@ -496,7 +502,7 @@ export class VitalSignsProcessor {
     this.measurements.arrhythmiaStatus = "SIN ARRITMIAS|0";
     this.measurements.lastArrhythmiaData = null;
     this.rValueHistory = [];
-    return result.spo2 !== 0 ? result : null;
+    return result.spo2.value !== 0 ? result : null;
   }
 
   fullReset(): void {

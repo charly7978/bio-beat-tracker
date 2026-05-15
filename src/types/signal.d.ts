@@ -21,6 +21,8 @@ export interface ProcessedSignal {
     message: string;
     hasPulsatility: boolean;
     pulsatilityValue: number;
+    status?: import('./measurements').MeasurementStatus;
+    sqm?: Partial<import('./measurements').SignalQualityMetrics>;
   };
 }
 

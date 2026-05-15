@@ -220,7 +220,7 @@ const Index = () => {
         fingerDetected: !!lastSignal?.fingerDetected,
         perfusionIndex: lastSignal?.perfusionIndex ?? 0,
         bpm: heartRate,
-        spo2: vitalSigns.spo2,
+        spo2: vitalSigns.spo2.value,
         confidence: vitalSigns.measurementConfidence,
         backpressure: getBackpressureState(),
       }),
@@ -667,8 +667,8 @@ const Index = () => {
         arrhythmiaDetectedRef.current = false;
         setVitalSigns(prev => (
           prev.measurementConfidence === 'INVALID' &&
-          prev.spo2 === 0 &&
-          prev.pressure.systolic === 0
+          prev.spo2.value === 0 &&
+          prev.bloodPressure.value.systolic === 0
             ? prev
             : {
                 ...prev,
@@ -1010,7 +1010,7 @@ const Index = () => {
                       <div className="bg-slate-900/80 rounded-xl p-3 text-center border border-slate-800/50">
                         <Activity className="w-4 h-4 text-cyan-400 mx-auto mb-1" />
                         <div className="text-white text-2xl font-bold leading-none">
-                          {vitalSigns.spo2 > 0 ? vitalSigns.spo2 : '--'}
+                          {vitalSigns.spo2.value > 0 ? Math.round(vitalSigns.spo2.value) : '--'}
                           <span className="text-sm text-slate-400">%</span>
                         </div>
                         <div className="text-slate-500 text-[9px] mt-1 font-medium">SpO₂</div>
@@ -1018,24 +1018,20 @@ const Index = () => {
                     </div>
 
                     {/* Presión arterial */}
-                    {vitalSigns.pressure?.systolic > 0 && (
+                    {vitalSigns.bloodPressure.value.systolic > 0 && (
                       <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-800/50 flex items-center gap-3">
                         <Shield className="w-5 h-5 text-blue-400" />
                         <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <div className="text-slate-500 text-[9px] font-medium">PRESIÓN ARTERIAL</div>
-                            {vitalSigns.pressure.confidence && vitalSigns.pressure.confidence !== 'INSUFFICIENT' && (
-                              <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded-full ${
-                                vitalSigns.pressure.confidence === 'HIGH' ? 'bg-emerald-500/20 text-emerald-400' :
-                                vitalSigns.pressure.confidence === 'MEDIUM' ? 'bg-yellow-500/20 text-yellow-400' :
-                                'bg-orange-500/20 text-orange-400'
-                              }`}>
-                                {vitalSigns.pressure.confidence}
-                              </span>
+                          <div className="flex items-center gap-2 mb-1">
+                            <div className="text-slate-500 text-[9px] font-medium tracking-tight">PRESIÓN ARTERIAL</div>
+                            {vitalSigns.bloodPressure.calibration?.available ? (
+                              <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">CALIBRADO</span>
+                            ) : (
+                              <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-orange-500/20 text-orange-400">SIN CALIBRAR</span>
                             )}
                           </div>
                           <div className="text-white text-lg font-bold">
-                            {vitalSigns.pressure.systolic}/{vitalSigns.pressure.diastolic}
+                            {Math.round(vitalSigns.bloodPressure.value.systolic)}/{Math.round(vitalSigns.bloodPressure.value.diastolic)}
                             <span className="text-xs text-slate-500 ml-1">mmHg</span>
                           </div>
                         </div>
