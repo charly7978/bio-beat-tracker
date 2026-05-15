@@ -422,17 +422,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (delta < 10 || delta > 100) return;
 
     this.frameIntervalBuffer.push(delta);
-    if (this.frameIntervalBuffer.length > 30) {
-      this.frameIntervalBuffer.shift();
-    }
 
     if (this.frameIntervalBuffer.length < 8) return;
 
     // Median FPS drifts slowly — recompute every 10 frames.
     if (this.frameCount % 10 !== 0) return;
 
-    const sorted = [...this.frameIntervalBuffer].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)] ?? 33;
+    const fiTail = this.frameIntervalBuffer.tail(this.frameIntervalBuffer.length);
+    fiTail.sort((a, b) => a - b);
+    const median = fiTail[Math.floor(fiTail.length / 2)] ?? 33;
     const estimatedFps = clamp(1000 / median, 20, 40);
 
     if (Math.abs(estimatedFps - this.estimatedSampleRate) > 2) {
