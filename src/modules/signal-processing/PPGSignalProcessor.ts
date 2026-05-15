@@ -9,6 +9,8 @@ import {
   type BackpressureConfig,
 } from '../../lib/perf/backpressureConfig';
 import type { MeasurementStatus, SignalQualityMetrics } from '../../types/measurements';
+import { SignalQualityIndex } from '../signal-quality/SignalQualityIndex';
+import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -117,7 +119,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private stableContactCount = 0;
   private readonly FINGER_CONFIRM_FRAMES = 5;   // ~170ms @ 30fps — balance velocidad/estabilidad
   private readonly FINGER_LOST_FRAMES = 90;     // ~3s tolerancia antes de degradar
-  private readonly STABLE_THRESHOLD = 30;       // ~1s para STABLE — evitar parpadeo
   private readonly UNSTABLE_GRACE = 120;        // ~4s antes de NO_CONTACT total
 
   // Suavizado temporal — más lentos = más estable
@@ -133,7 +134,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private motionScore = 0;
   private motionListenerActive = false;
   private lastAcceleration = { x: 0, y: 0, z: 0 };
-  private readonly MOTION_THRESHOLD = 0.6;
+  private readonly MOTION_THRESHOLD = VITAL_THRESHOLDS.QUALITY.MAX_MOTION;
 
   // Cache: PI se calcula una sola vez por frame y se reutiliza en SQI, contact state, etc.
   private cachedPI = 0;
@@ -275,11 +276,20 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.filteredBuffer.push(filtered);
 
     const endSqi = ppgPerf.start('sqi');
-    // SQI is a statistical aggregate over 90 samples — recompute every 3 frames
-    // (~10 Hz) instead of every frame. Cached value is reused otherwise.
-    if (this.frameCount % 3 === 0) {
-      this.cachedSqi = this.calculateSignalQuality();
-    }
+    // SQI unificado basado en múltiples dimensiones técnicas
+    const metrics: SignalQualityMetrics = {
+      sqi: 0, // Placeholder
+      perfusionIndex: this.cachedPI,
+      snr: pulseSource.strength,
+      periodicity: this.calculatePeriodicity(), // Nuevo método centralizado
+      motionScore: this.motionScore,
+      saturationRatio: (roi.rawRed > 250 ? 1 : 0),
+      frameDropRatio: ppgPerf.snapshot().droppedEstimate / this.frameCount,
+      fpsEffective: this.estimatedSampleRate,
+      timestampJitterMs: ppgPerf.snapshot().jitterMs,
+    };
+    
+    this.cachedSqi = SignalQualityIndex.calculate(metrics);
     this.signalQuality = this.cachedSqi;
     endSqi();
 
@@ -325,9 +335,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
           `PI:${perfusionIndex.toFixed(2)} C:${(this.smoothedCoverage * 100).toFixed(0)} ` +
           `${this.contactState}${motionArtifact ? ' MOV' : ''}`,
-        hasPulsatility: this.contactState === 'STABLE_CONTACT' && perfusionIndex >= 0.002 && pulseSource.strength > 1.2,
+        hasPulsatility: SignalQualityIndex.isClinicallyValid(this.signalQuality, perfusionIndex),
         pulsatilityValue: this.contactState === 'STABLE_CONTACT' ? Math.max(perfusionIndex, pulseSource.strength * 0.02) : 0,
-        status: rejectionStatus || (gatedQuality > 50 ? "VALID" : "LOW_SIGNAL_QUALITY") as MeasurementStatus,
+        status: rejectionStatus || (this.signalQuality > 45 ? "VALID" : "LOW_SIGNAL_QUALITY") as MeasurementStatus,
         sqm: {
           sqi: this.signalQuality,
           perfusionIndex: perfusionIndex,
@@ -336,7 +346,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           saturationRatio: (roi.rawRed > 250 ? 1 : 0),
           fpsEffective: this.estimatedSampleRate,
           timestampJitterMs: ppgPerf.snapshot().jitterMs,
-        } as Partial<SignalQualityMetrics>,
+        } as SignalQualityMetrics,
       },
     });
   }
@@ -354,7 +364,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       if (this.fingerConfidenceCount >= this.FINGER_CONFIRM_FRAMES) {
         this.fingerDetected = true;
         // Require real perfusion for STABLE — not just visual contact
-        this.contactState = (this.stableContactCount >= this.STABLE_THRESHOLD && this.cachedPI > 0.0015)
+        this.contactState = (this.stableContactCount >= VITAL_THRESHOLDS.QUALITY.STABLE_FRAMES_REQ && this.cachedPI > VITAL_THRESHOLDS.QUALITY.MIN_PI)
           ? 'STABLE_CONTACT'
           : 'UNSTABLE_CONTACT';
       }
@@ -439,12 +449,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     } else {
       // ACQUIRE contact — strict hemoglobin thresholds (literature validated)
       const acquireContact =
-        r > 40 &&
-        rgRatio > 1.08 &&
+        r > VITAL_THRESHOLDS.FINGER.MIN_RED_INTENSITY &&
+        rgRatio > VITAL_THRESHOLDS.FINGER.MIN_RG_RATIO &&
         rbRatio > 1.30 &&
-        redDominance > 10 &&
+        redDominance > VITAL_THRESHOLDS.FINGER.MIN_RED_DOMINANCE &&
         totalIntensity > 70 && totalIntensity < 760 &&
-        this.smoothedCoverage > 0.20 &&
+        this.smoothedCoverage > VITAL_THRESHOLDS.FINGER.MIN_COVERAGE &&
         this.smoothedFingerScore > 0.25 &&
         this.motionScore < 1.5 &&
         notBlownOut;
@@ -783,22 +793,41 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
   }
 
+  /**
+   * Calcula la periodicidad de la señal mediante autocorrelación simplificada.
+   * Un valor cercano a 1 indica una señal rítmica (pulso cardíaco).
+   * ZERO-ALLOCATION: Usa copyTailInto para evitar alocar number[] en cada frame.
+   */
+  private calculatePeriodicity(): number {
+    const nReq = 90;
+    if (this.filteredBuffer.length < nReq) return 0;
+    
+    // Usamos sortedScratch como buffer temporal para no alocar
+    const n = this.filteredBuffer.copyTailInto(this.sortedScratch, nReq);
+    const data = this.sortedScratch;
+    
+    // Autocorrelación para el lag de un pulso típico (0.5s a 1.2s @ 30fps -> lag 15 a 36)
+    let maxCorr = 0;
+    for (let lag = 15; lag <= 36; lag++) {
+      let dot = 0;
+      let magA = 0;
+      let magB = 0;
+      for (let i = 0; i < n - lag; i++) {
+        dot += data[i] * data[i + lag];
+        magA += data[i] * data[i];
+        magB += data[i + lag] * data[i + lag];
+      }
+      if (magA > 0 && magB > 0) {
+        const corr = dot / Math.sqrt(magA * magB);
+        if (corr > maxCorr) maxCorr = corr;
+      }
+    }
+    return maxCorr;
+  }
+
   // === SQI UNIFICADO - ÚNICA FUENTE DE VERDAD ===
-  private calculateSignalQuality(): number {
-    if (this.filteredBuffer.length < 24) return 0;
-    if (this.contactState === 'NO_CONTACT') return 0;
-
-    const perfusionIndex = this.cachedPI;
-    const redDominance = this.smoothedRed - (this.smoothedGreen + this.smoothedBlue) / 2;
-
-    // Gate: no perfusion = no real signal
-    if (perfusionIndex < 0.001) return Math.min(8, this.smoothedCoverage * 10);
-    // Gate: red must dominate (hemoglobin signature)
-    if (redDominance < 8) return 0;
-
-    const recent = this.filteredBuffer.tail(90);
-    const sortedView = this.sortedScratch.subarray(0, recent.length);
-    for (let i = 0; i < recent.length; i++) sortedView[i] = recent[i];
+  private calculateSignalQuality(recent: number[], perfusionIndex: number): number {
+    const sortedView = Float32Array.from(recent);
     sortedView.sort();
     const sorted = sortedView;
     const p10 = sorted[Math.floor((sorted.length - 1) * 0.1)] ?? 0;

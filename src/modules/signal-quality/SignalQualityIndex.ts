@@ -1,0 +1,71 @@
+import { SignalQualityMetrics } from '../../types/measurements';
+import { clamp } from '../../utils/math';
+
+/**
+ * CENTRAL SIGNAL QUALITY INDEX (SQI)
+ * 
+ * Unifica todos los criterios de calidad técnica en un único motor.
+ * Basado en:
+ * - Perfusión (PI)
+ * - Relación Señal-Ruido (SNR)
+ * - Periodicidad (Autocorrelación)
+ * - Estabilidad Temporal
+ * - Artefactos de Movimiento
+ */
+export class SignalQualityIndex {
+  /**
+   * Calcula el SQI unificado (0-100)
+   */
+  static calculate(metrics: SignalQualityMetrics): number {
+    const {
+      perfusionIndex,
+      snr,
+      periodicity,
+      motionScore,
+      saturationRatio,
+      frameDropRatio,
+      fpsEffective,
+      timestampJitterMs
+    } = metrics;
+
+    if (perfusionIndex < 0.001) return 0;
+    if (saturationRatio > 0.8) return 5;
+
+    let score = 0;
+
+    // 1. Perfusión (30%) - Driver principal de señal real
+    // PI humano normal en dedo: 0.1% a 10%.
+    const piScore = clamp((perfusionIndex - 0.002) / 0.015, 0, 1) * 30;
+    score += piScore;
+
+    // 2. SNR (25%) - Claridad del pulso
+    const snrVal = snr ?? 0;
+    const snrScore = clamp((snrVal - 1.2) / 2.5, 0, 1) * 25;
+    score += snrScore;
+
+    // 3. Periodicidad (20%) - Ritmicidad cardíaca
+    const pVal = periodicity ?? 0;
+    const pScore = clamp((pVal - 0.4) / 0.4, 0, 1) * 20;
+    score += pScore;
+
+    // 4. Penalizaciones por Estabilidad y Artefactos (-X)
+    const motionPenalty = (motionScore ?? 0) * 45;
+    const jitterPenalty = clamp((timestampJitterMs - 15) / 50, 0, 1) * 30;
+    const dropPenalty = frameDropRatio * 150;
+    const lowFpsPenalty = fpsEffective < 25 ? (25 - fpsEffective) * 5 : 0;
+
+    score = Math.max(0, score - motionPenalty - jitterPenalty - dropPenalty - lowFpsPenalty);
+
+    // 5. Bonus por consistencia (si PI y SNR son altos)
+    if (perfusionIndex > 0.008 && snrVal > 2.5) score += 15;
+
+    return Math.round(clamp(score, 0, 100));
+  }
+
+  /**
+   * Determina si la señal es apta para cálculos clínicos de alta precisión
+   */
+  static isClinicallyValid(sqi: number, pi: number): boolean {
+    return sqi >= 55 && pi >= 0.002;
+  }
+}

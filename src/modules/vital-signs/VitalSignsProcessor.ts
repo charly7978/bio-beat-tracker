@@ -2,8 +2,11 @@ import { ArrhythmiaProcessor } from './arrhythmia-processor';
 import { BloodPressureProcessor } from './BloodPressureProcessor';
 import { createLogger } from '../../utils/logger';
 import { isPhysiologicalRR, getMonotonicNow } from '../../utils/physio';
-import { VitalMeasurement, MeasurementStatus } from '../../types/measurements';
+import { VitalMeasurement, MeasurementStatus, SignalQualityMetrics } from '../../types/measurements';
 import { CalibrationManager } from './CalibrationManager';
+import { SignalQualityIndex } from '../signal-quality/SignalQualityIndex';
+import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import { RingF32 } from '../../utils/RingBuffer';
 
 const log = createLogger('VitalSignsProcessor');
 
@@ -75,8 +78,8 @@ export class VitalSignsProcessor {
   };
   
   // Historial de señal
-  private signalHistory: number[] = [];
   private readonly HISTORY_SIZE = 90;
+  private signalHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
   private frameCount = 0;  // Contador continuo para logging/diagnóstico
   
   // RGB para SpO2
@@ -143,9 +146,6 @@ export class VitalSignsProcessor {
 
     // Actualizar historial de señal para análisis morfológico (BP)
     this.signalHistory.push(signalValue);
-    if (this.signalHistory.length > this.HISTORY_SIZE) {
-      this.signalHistory.shift();
-    }
     // Control de calibración
     if (this.isCalibrating) {
       this.calibrationSamples++;
@@ -219,50 +219,83 @@ export class VitalSignsProcessor {
   private getFormattedResult(): VitalSignsResult {
     const calib = CalibrationManager.getInstance();
     const now = Date.now();
-    const confidence = this.getMeasurementConfidence();
     const sqi = this.measurements.signalQuality;
+    const pi = this.rgbData.greenDC > 0 ? this.rgbData.greenAC / this.rgbData.greenDC : 0;
+    const isClinicallyValid = SignalQualityIndex.isClinicallyValid(sqi, pi);
+
+    const commonSQM: SignalQualityMetrics = {
+      sqi,
+      perfusionIndex: pi,
+      snr: null, // Proporcionado por PPGSignalProcessor si se mapea
+      periodicity: null,
+      motionScore: null,
+      saturationRatio: 0,
+      frameDropRatio: 0,
+      fpsEffective: 30,
+      timestampJitterMs: 0
+    };
 
     const res: VitalSignsResult = {
       heartRate: {
-        name: "Heart Rate", value: Math.round(this.measurements.signalQuality > 0 ? this.lastBPM : 0),
-        unit: "bpm", timestamp: now, confidence: confidence === 'HIGH' ? 0.9 : 0.6,
-        status: (confidence === 'INVALID' || this.lastBPM === 0) ? "NO_VALID_SIGNAL" : "VALID",
-        reason: "Calculated from PPG peaks",
-        signalQuality: { sqi, perfusionIndex: 0, snr: 0, periodicity: 0, motionScore: 0, saturationRatio: 0, frameDropRatio: 0, fpsEffective: 30, timestampJitterMs: 0 },
-        diagnostics: {}
+        name: "Heart Rate", 
+        value: sqi > 15 ? Math.round(this.lastBPM) : null,
+        unit: "bpm", 
+        timestamp: now, 
+        confidence: isClinicallyValid ? 0.98 : (sqi > 25 ? 0.7 : 0.3),
+        status: sqi < 15 ? "LOW_SIGNAL_QUALITY" : "VALID",
+        reason: sqi < 15 ? "Signal quality too low for reliable peak detection" : "Pulse detected via Elgendi TMA",
+        signalQuality: { ...commonSQM },
+        diagnostics: { bpmRaw: this.lastBPM }
       },
       spo2: {
-        name: "SpO2", value: Math.round(this.measurements.spo2),
-        unit: "%", timestamp: now, confidence: confidence === 'HIGH' ? 0.95 : 0.7,
-        status: this.measurements.spo2 === 0 ? "NO_VALID_SIGNAL" : (calib.getActiveProfile('SPO2') ? "VALID" : "REQUIRES_CALIBRATION"),
+        name: "SpO2", 
+        value: isClinicallyValid ? Math.round(this.measurements.spo2) : null,
+        unit: "%", 
+        timestamp: now, 
+        confidence: isClinicallyValid ? 0.95 : 0.4,
+        status: !isClinicallyValid ? "LOW_SIGNAL_QUALITY" : (calib.getActiveProfile('SPO2') ? "VALID" : "REQUIRES_CALIBRATION"),
         reason: "Beer-Lambert ratio-of-ratios",
-        signalQuality: { sqi } as any,
-        diagnostics: {},
+        signalQuality: { ...commonSQM },
+        diagnostics: { rValue: this.rValueHistory[this.rValueHistory.length - 1] },
         calibration: calib.getCalibrationInfo('SPO2')
       },
       bloodPressure: {
-        name: "Blood Pressure", value: { systolic: Math.round(this.measurements.systolicPressure), diastolic: Math.round(this.measurements.diastolicPressure) },
-        unit: "mmHg", timestamp: now, confidence: this.lastBPConfidence === 'HIGH' ? 0.9 : 0.5,
-        status: this.measurements.systolicPressure === 0 ? "NO_VALID_SIGNAL" : (calib.getActiveProfile('BP') ? "VALID" : "REQUIRES_CALIBRATION"),
-        reason: "Pulse Wave Analysis (PWA)",
-        signalQuality: { sqi } as any,
+        name: "Blood Pressure", 
+        value: (isClinicallyValid && calib.getActiveProfile('BP')) ? { systolic: Math.round(this.measurements.systolicPressure), diastolic: Math.round(this.measurements.diastolicPressure) } : null,
+        unit: "mmHg", 
+        timestamp: now, 
+        confidence: (isClinicallyValid && this.lastBPConfidence === 'HIGH') ? 0.92 : 0.4,
+        status: !isClinicallyValid ? "LOW_SIGNAL_QUALITY" : (calib.getActiveProfile('BP') ? "VALID" : "REQUIRES_CALIBRATION"),
+        reason: "Pulse Wave Analysis (PWA) from morphological features",
+        signalQuality: { ...commonSQM },
         diagnostics: { featureQuality: this.lastBPFeatureQuality },
         calibration: calib.getCalibrationInfo('BP')
       },
       respiration: {
-        name: "Respiration", value: 0, unit: "rpm", timestamp: now, confidence: 0,
-        status: "INSUFFICIENT_WINDOW", reason: "Requires 45s window",
-        signalQuality: { sqi } as any, diagnostics: {}
+        name: "Respiration", 
+        value: null, 
+        unit: "rpm", 
+        timestamp: now, 
+        confidence: 0,
+        status: "INSUFFICIENT_WINDOW", 
+        reason: "Respiratory rate extraction requires 45s of stable signal",
+        signalQuality: { ...commonSQM }, 
+        diagnostics: {}
       },
       arrhythmia: {
-        name: "Arrhythmia", value: { count: this.measurements.arrhythmiaCount, status: this.measurements.arrhythmiaStatus },
-        unit: "event", timestamp: now, confidence: 0.8,
-        status: "VALID", reason: "RR interval analysis",
-        signalQuality: { sqi } as any, diagnostics: {}
+        name: "Pulse Regularity", 
+        value: { count: this.measurements.arrhythmiaCount, status: this.measurements.arrhythmiaStatus },
+        unit: "events", 
+        timestamp: now, 
+        confidence: isClinicallyValid ? 0.85 : 0.2,
+        status: isClinicallyValid ? "VALID" : "LOW_SIGNAL_QUALITY", 
+        reason: "RR interval variability analysis (RMSSD/Shannon)",
+        signalQuality: { ...commonSQM }, 
+        diagnostics: { rmssd: this.measurements.lastArrhythmiaData?.rmssd }
       },
       signalQuality: Math.round(sqi),
       isCalibrating: this.isCalibrating,
-      calibrationProgress: Math.min(100, Math.round((this.calibrationSamples / this.CALIBRATION_REQUIRED) * 100)),
+      calibrationProgress: this.getCalibrationProgress(),
       lastArrhythmiaData: this.measurements.lastArrhythmiaData
     };
 
@@ -324,7 +357,7 @@ export class VitalSignsProcessor {
     // === BP ===
     if (validRR.length >= 2) {
       const bpEstimate = this.bloodPressureProcessor.estimate(
-        this.signalHistory, validRR, 30
+        this.signalHistory.tail(this.HISTORY_SIZE), validRR, 30
       );
 
       this.lastBPConfidence = bpEstimate.confidence;
@@ -400,7 +433,7 @@ export class VitalSignsProcessor {
     
     // Rango físico de R para tejido humano con cámara+flash:
     // Con dedo en flash blanco, rojo está cerca de saturación → R puede ser bajo (0.1+)
-    if (currentR < 0.1 || currentR > 2.5) {
+    if (currentR < VITAL_THRESHOLDS.SPO2.R_VALUE_MIN || currentR > VITAL_THRESHOLDS.SPO2.R_VALUE_MAX) {
       if (this.frameCount % 15 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
       return 0;
     }
@@ -474,7 +507,7 @@ export class VitalSignsProcessor {
 
   reset(): VitalSignsResult | null {
     const result = this.getFormattedResult();
-    this.signalHistory = [];
+    this.signalHistory.reset();
     this.validPulseCount = 0;
     this.arrhythmiaProcessor.reset();
     this.measurements.arrhythmiaCount = 0;
@@ -485,7 +518,7 @@ export class VitalSignsProcessor {
   }
 
   fullReset(): void {
-    this.signalHistory = [];
+    this.signalHistory.reset();
     this.validPulseCount = 0;
     this.rValueHistory = [];
     this.frameCount = 0;

@@ -31,6 +31,7 @@
  */
 
 import { PPGFeatureExtractor, CycleFeatures } from './PPGFeatureExtractor';
+import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 
 export interface BPEstimate {
   systolic: number;
@@ -149,8 +150,8 @@ export class BloodPressureProcessor {
     }
 
     // 7. Límites Clínicos y Coherencia (Fidelity Guard)
-    let sbp = Math.min(250, Math.max(75, rawSBP));
-    let dbp = Math.min(150, Math.max(35, rawDBP));
+    let sbp = Math.min(VITAL_THRESHOLDS.BP.SYSTOLIC_MAX, Math.max(VITAL_THRESHOLDS.BP.SYSTOLIC_MIN, rawSBP));
+    let dbp = Math.min(VITAL_THRESHOLDS.BP.DIASTOLIC_MAX, Math.max(VITAL_THRESHOLDS.BP.DIASTOLIC_MIN, rawDBP));
 
     // 8. Validación de Calidad Final
     let confidence: BPEstimate['confidence'] = 'LOW';
@@ -158,7 +159,7 @@ export class BloodPressureProcessor {
     if (fq >= 80) confidence = 'HIGH';
     else if (fq >= 55) confidence = 'MEDIUM';
     
-    if (dbp >= sbp || (sbp - dbp) < 18) {
+    if (dbp >= sbp || (sbp - dbp) < VITAL_THRESHOLDS.BP.MIN_PP) {
       confidence = 'INSUFFICIENT';
     }
 

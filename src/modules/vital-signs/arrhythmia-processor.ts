@@ -1,5 +1,6 @@
 import { createLogger } from '../../utils/logger';
-import { isPhysiologicalRR, calculateHRV, getMonotonicNow, RR_MIN_MS, RR_MAX_MS } from '../../utils/physio';
+import { isPhysiologicalRR, calculateHRV, getMonotonicNow } from '../../utils/physio';
+import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 
 const log = createLogger('ArrhythmiaProcessor');
 
@@ -28,8 +29,8 @@ export class ArrhythmiaProcessor {
   
   // Minimum time between arrhythmias to reduce false positives
   private readonly MIN_ARRHYTHMIA_INTERVAL = 3500;
-  private readonly MIN_VALID_RR_MS = RR_MIN_MS;  // 270 ms
-  private readonly MAX_VALID_RR_MS = RR_MAX_MS;  // 2200 ms
+  private readonly MIN_VALID_RR_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS;
+  private readonly MAX_VALID_RR_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS;
 
   // State variables
   private rrIntervals: number[] = [];

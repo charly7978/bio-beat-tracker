@@ -8,11 +8,15 @@
  * 3. Scoring de candidatos de pico por prominencia + pendiente + consistencia RR
  * 4. Ventanas adaptativas: cortas para señal débil, largas para estable
  */
-import { clamp } from '../utils/math';
+import { createLogger } from '../utils/logger';
 import { RingF32 } from '../utils/RingBuffer';
+import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
+
+const log = createLogger('HeartBeatProcessor');
+
 export class HeartBeatProcessor {
-  private readonly MIN_PEAK_INTERVAL_MS = 330;
-  private readonly MAX_PEAK_INTERVAL_MS = 2000;
+  private readonly MIN_PEAK_INTERVAL_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS;
+  private readonly MAX_PEAK_INTERVAL_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS;
 
   private signalBuffer: number[] = [];
   private derivativeBuffer: number[] = [];
