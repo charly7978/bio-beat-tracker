@@ -68,14 +68,25 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     valid: false, isFinger: false,
   }));
 
-  // Buffers
-  private rawBuffer: number[] = [];
-  private filteredBuffer: number[] = [];
-  private redBuffer: number[] = [];
-  private greenBuffer: number[] = [];
-  private blueBuffer: number[] = [];
+  // Buffers (ring buffers Float32 — sin Array.shift O(n) por frame)
+  private readonly rawBuffer = new RingF32(this.BUFFER_SIZE);
+  private readonly filteredBuffer = new RingF32(this.BUFFER_SIZE);
+  private readonly redBuffer = new RingF32(this.BUFFER_SIZE);
+  private readonly greenBuffer = new RingF32(this.BUFFER_SIZE);
+  private readonly blueBuffer = new RingF32(this.BUFFER_SIZE);
   private tileConfidence: number[] = new Array(25).fill(0);
-  private frameIntervalBuffer: number[] = [];
+  private readonly frameIntervalBuffer = new RingF32(30);
+
+  // Scratch buffers reusables para stats (ACDC, SQI, source-score) — evita
+  // `[...arr].sort()` por frame. Tamaño máximo = ACDC_WINDOW.
+  private readonly statScratch = new Float32Array(this.ACDC_WINDOW);
+  private readonly sortedScratch = new Float32Array(this.ACDC_WINDOW);
+
+  // LUTs de teselado: cachean Math.floor((px / roiSize) * cols) por píxel
+  // del ROI. Se reconstruyen sólo cuando cambia el tamaño del ROI.
+  private tileXLut: Int8Array | null = null;
+  private tileYLut: Int8Array | null = null;
+  private tileLutKey = '';
 
   // AC/DC
   private redDC = 0;
