@@ -602,13 +602,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       RG: this.blendRG(rPulse, gPulse, rawRed, rawGreen, motionArtifact) * 3200,
     };
 
-    // Update per-source buffers
-    for (const key of Object.keys(sources)) {
-      this.sourceBuffers[key].push(sources[key]);
-      if (this.sourceBuffers[key].length > 120) {
-        this.sourceBuffers[key].shift();
-      }
-    }
+    // Update per-source buffers (ring auto-evicts más viejo)
+    this.sourceBuffers.R.push(sources.R);
+    this.sourceBuffers.G.push(sources.G);
+    this.sourceBuffers.RG.push(sources.RG);
 
     // Rank sources every ~1 second (30 frames)
     if (this.frameCount % 30 === 0 && this.redBuffer.length >= 60) {
