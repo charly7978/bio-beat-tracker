@@ -11,6 +11,7 @@ import {
 import type { MeasurementStatus, SignalQualityMetrics } from '../../types/measurements';
 
 const log = createLogger('PPGSignalProcessor');
+// BUILD_STAMP: 2026-05-15 18:32:00
 
 interface ROIMetrics {
   rawRed: number;
