@@ -35,6 +35,7 @@ import {
 } from "@/lib/sanity/sanityAuditLog";
 
 import { supabase } from "@/integrations/supabase/client";
+import { VITAL_THRESHOLDS } from "@/config/vitalThresholds";
 
 const Index = () => {
   // ESTADOS PRINCIPALES
@@ -631,7 +632,7 @@ const Index = () => {
     const stableHumanSignal =
       hasUsableContact &&
       (lastSignal.quality || 0) >= 3 &&
-      (lastSignal.perfusionIndex || 0) >= 0.0008;
+      (lastSignal.perfusionIndex || 0) >= VITAL_THRESHOLDS.QUALITY.MIN_PI * 0.35;
 
     const nowT = performance.now();
     if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {
@@ -652,8 +653,8 @@ const Index = () => {
         arrhythmiaDetectedRef.current = false;
         setVitalSigns(prev => (
           prev.heartRate.value === 0 &&
-          prev.spo2.value === 0 &&
-          prev.bloodPressure.value.systolic === 0
+          (prev.spo2.value == null || prev.spo2.value === 0) &&
+          (prev.bloodPressure.value?.systolic ?? 0) === 0
             ? prev
             : {
                 ...prev,
@@ -747,9 +748,10 @@ const Index = () => {
         lastSignal.filteredValue,
         lastSignal.quality || 0,
         heartBeatResult.bpm,
-        heartBeatResult.rrData && heartBeatResult.rrData.intervals.length >= 2 && heartBeatResult.confidence > 0.18
+        heartBeatResult.rrData && heartBeatResult.rrData.intervals.length >= 2 && heartBeatResult.confidence > 0.12
           ? heartBeatResult.rrData
-          : undefined
+          : undefined,
+        lastSignal.perfusionIndex
       );
 
       // Mantener siempre la última computación en ref para finalize/save.
@@ -762,7 +764,7 @@ const Index = () => {
         setVitalSigns(vitals);
       }
 
-      if (heartBeatResult.rrData && heartBeatResult.rrData.intervals.length >= 2 && heartBeatResult.confidence > 0.18 && vitals.heartRate.status === 'VALID') {
+      if (heartBeatResult.rrData && heartBeatResult.rrData.intervals.length >= 2 && heartBeatResult.confidence > 0.12 && vitals.heartRate.status === 'VALID') {
         const arrhythmiaStatus = vitals.arrhythmia.value.status;
         if (arrhythmiaStatus) {
           lastArrhythmiaData.current = vitals.lastArrhythmiaData || null;
@@ -939,7 +941,7 @@ const Index = () => {
               rrIntervals={rrIntervals}
               elapsedTime={elapsedTime}
               perfusionIndex={lastSignal?.perfusionIndex || 0}
-              pressure={vitalSigns.bloodPressure.value}
+              pressure={vitalSigns.bloodPressure.value ?? { systolic: 0, diastolic: 0 }}
               diagnostics={currentDiagnostics}
             />
           </div>
@@ -990,7 +992,7 @@ const Index = () => {
                       <div className="bg-slate-900/80 rounded-xl p-3 text-center border border-slate-800/50">
                         <Activity className="w-4 h-4 text-cyan-400 mx-auto mb-1" />
                         <div className="text-white text-2xl font-bold leading-none">
-                          {vitalSigns.spo2.value > 0 ? Math.round(vitalSigns.spo2.value) : '--'}
+                          {vitalSigns.spo2.value != null && vitalSigns.spo2.value > 0 ? Math.round(vitalSigns.spo2.value) : '--'}
                           <span className="text-sm text-slate-400">%</span>
                         </div>
                         <div className="text-slate-500 text-[9px] mt-1 font-medium">SpO₂</div>
@@ -998,7 +1000,7 @@ const Index = () => {
                     </div>
 
                     {/* Presión arterial */}
-                    {vitalSigns.bloodPressure.value.systolic > 0 && (
+                    {vitalSigns.bloodPressure.value && vitalSigns.bloodPressure.value.systolic > 0 && (
                       <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-800/50 flex items-center gap-3">
                         <Shield className="w-5 h-5 text-blue-400" />
                         <div className="flex-1">

@@ -117,7 +117,7 @@ export class ElgendiPeakDetector {
     const maPeak = movingAverage(energy, w1);
     const maBeat = movingAverage(energy, w2);
 
-    const warm = Math.min(maPeak.length, Math.max(8, Math.floor(fs * 2)));
+    const warm = Math.min(maPeak.length, Math.max(8, Math.floor(fs * 1.5)));
     const offset = offsetW * stdSample(maPeak.slice(0, warm));
 
     const minDist = Math.max(1, Math.round((60000 / maxBpm / 1000) * fs));

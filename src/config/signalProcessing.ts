@@ -15,7 +15,8 @@ export const PEAK_DETECTION_DEFAULTS = {
   beatWindowMs: 667,
   /** Peso del offset adaptativo sobre la energía de MA_peak */
   offsetWeight: 0.35,
-  minProminence: 0.08,
+  /** Picos débiles en cámara móvil: prominencia mínima algo más baja (literatura Elgendi usa umbral adaptativo vía MA) */
+  minProminence: 0.055,
   minSQI: 12,
   /** Mínimo de muestras en ventana para correr ensemble */
   minSamplesEnsemble: 72,

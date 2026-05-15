@@ -44,9 +44,10 @@ export const useHealthAnalysis = () => {
       arrhythmiaCount: vitalSigns.arrhythmia.value.count,
     };
     if (hr > 0) bodyPayload.heartRate = hr;
-    if (vitalSigns.spo2.value > 0) bodyPayload.spo2 = vitalSigns.spo2.value;
-    if (vitalSigns.bloodPressure.value.systolic > 0) bodyPayload.systolic = vitalSigns.bloodPressure.value.systolic;
-    if (vitalSigns.bloodPressure.value.diastolic > 0) bodyPayload.diastolic = vitalSigns.bloodPressure.value.diastolic;
+    if (vitalSigns.spo2.value != null && vitalSigns.spo2.value > 0) bodyPayload.spo2 = vitalSigns.spo2.value;
+    const bpVal = vitalSigns.bloodPressure.value;
+    if (bpVal && bpVal.systolic > 0) bodyPayload.systolic = bpVal.systolic;
+    if (bpVal && bpVal.diastolic > 0) bodyPayload.diastolic = bpVal.diastolic;
 
     setIsAnalyzing(true);
     setAnalysis(null);

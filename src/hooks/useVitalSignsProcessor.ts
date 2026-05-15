@@ -43,7 +43,9 @@ export const useVitalSignsProcessor = () => {
     value: number, 
     quality: number,
     bpm: number,
-    rrData?: { intervals: number[], lastPeakTime: number | null, timestampNow?: number }
+    rrData?: { intervals: number[], lastPeakTime: number | null, timestampNow?: number },
+    /** PI (AC/DC) del PPGSignalProcessor — alinea SpO2/“clínico” con la perfusión real del dedo */
+    perfusionIndexFromPpg?: number
   ): VitalSignsResult => {
     const defaultResult: VitalSignsResult = {
       heartRate: { name: "HR", value: 0, unit: "bpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
@@ -58,7 +60,7 @@ export const useVitalSignsProcessor = () => {
     
     if (!processorRef.current) return defaultResult;
 
-    const result = processorRef.current.processSignal(value, quality, bpm, rrData);
+    const result = processorRef.current.processSignal(value, quality, bpm, rrData, perfusionIndexFromPpg);
     
     // Guardar la última ventana realmente válida para cierre/exportación
     if (

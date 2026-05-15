@@ -49,13 +49,12 @@ interface RRData {
 
 /**
  * PROCESADOR DE SIGNOS VITALES - SIN CLAMPS
- * 
+ *
  * CAMBIOS PRINCIPALES:
- * 1. SpO2 = 110 - 25 * R (fórmula pura, SIN CLAMP)
- * 2. Presión arterial desde morfología PPG (SIN BASE FIJA 120/80)
- * 3. Todos los valores calculados crudos
- * 4. SQI indica confiabilidad en lugar de forzar rangos
- * 
+ * 1. SpO2 ratio-of-ratios (Beer–Lambert aprox.) + suavizado; la UI muestra estimación cuando SQI+PI son válidos aunque no haya perfil de oxímetro en `CalibrationManager`.
+ * 2. Presión arterial PWA morfológica; misma política: estimación visible sin tensiómetro de referencia, con estado `REQUIRES_CALIBRATION` y menor confianza.
+ * 3. `processSignal` acepta PI del PPG para no desalinear `isClinicallyValid` respecto al canal RGB usado solo en SpO2.
+ *
  * Referencias:
  * - Ratio-of-Ratios: Webster 1997, Tremper 1989
  * - BP from PPG morphology: Elgendi 2019, Mukkamala 2022
@@ -107,7 +106,9 @@ export class VitalSignsProcessor {
   private validPulseCount: number = 0;
   private readonly MIN_PULSES_REQUIRED = 2;
   private lastBPM: number = 0;
-  
+  /** PI del pipeline PPG (AC/DC canónico); evita que `isClinicallyValid` dependa solo del ratio RGB usado en SpO2 */
+  private lastPpgPerfusionIndex = 0;
+
   constructor() {
     this.arrhythmiaProcessor = new ArrhythmiaProcessor();
     this.bloodPressureProcessor = new BloodPressureProcessor();
@@ -116,6 +117,7 @@ export class VitalSignsProcessor {
     });
   }
 
+  /** Calentamiento in-sesión (muestras internas), no crea perfiles en `CalibrationManager`. */
   startCalibration(): void {
     this.isCalibrating = true;
     this.calibrationSamples = 0;
@@ -133,6 +135,7 @@ export class VitalSignsProcessor {
     this.respirationHistory.reset();
     this.stableFramesCount = 0;
     this.lastCoherentSpO2 = 0;
+    this.lastPpgPerfusionIndex = 0;
   }
 
   forceCalibrationCompletion(): void {
@@ -145,12 +148,21 @@ export class VitalSignsProcessor {
   }
 
   processSignal(
-    signalValue: number, 
+    signalValue: number,
     signalQuality: number,
     currentBPM: number,
-    rrData?: RRData
+    rrData?: RRData,
+    perfusionIndexFromPpg?: number
   ): VitalSignsResult {
     this.frameCount++;
+
+    if (
+      typeof perfusionIndexFromPpg === 'number' &&
+      Number.isFinite(perfusionIndexFromPpg) &&
+      perfusionIndexFromPpg > 0
+    ) {
+      this.lastPpgPerfusionIndex = perfusionIndexFromPpg;
+    }
 
     // Actualizar historial de señal para análisis morfológico (BP)
     this.signalHistory.push(signalValue);
@@ -229,7 +241,8 @@ export class VitalSignsProcessor {
     const calib = CalibrationManager.getInstance();
     const now = Date.now();
     const sqi = this.measurements.signalQuality;
-    const pi = this.rgbData.greenDC > 0 ? this.rgbData.greenAC / this.rgbData.greenDC : 0;
+    const piRgb = this.rgbData.greenDC > 0 ? this.rgbData.greenAC / this.rgbData.greenDC : 0;
+    const pi = Math.max(piRgb, this.lastPpgPerfusionIndex);
     const isClinicallyValid = SignalQualityIndex.isClinicallyValid(sqi, pi);
     const spo2Calib = calib.getCalibrationInfo('SPO2');
     const bpCalib = calib.getCalibrationInfo('BP');
@@ -255,21 +268,37 @@ export class VitalSignsProcessor {
     const hrMinSqi = VITAL_THRESHOLDS.QUALITY.MIN_FOR_HR;
     const hrOk = sqi >= hrMinSqi && this.lastBPM > 0 && isClinicallyValid;
 
+    const spo2HasDisplay =
+      isClinicallyValid &&
+      this.measurements.spo2 > 0 &&
+      this.measurements.spo2 >= 70 &&
+      this.measurements.spo2 <= 100;
+
     const spo2Status: MeasurementStatus = !isClinicallyValid
       ? "LOW_SIGNAL_QUALITY"
-      : spo2Calib.expired
-        ? "CALIBRATION_EXPIRED"
-        : spo2Calib.available
-          ? "VALID"
-          : "REQUIRES_CALIBRATION";
+      : !spo2HasDisplay
+        ? "NO_VALID_SIGNAL"
+        : spo2Calib.expired
+          ? "CALIBRATION_EXPIRED"
+          : spo2Calib.available
+            ? "VALID"
+            : "REQUIRES_CALIBRATION";
+
+    const bpHasMorph =
+      isClinicallyValid &&
+      this.lastBPConfidence !== 'INSUFFICIENT' &&
+      this.measurements.systolicPressure > 0 &&
+      this.measurements.diastolicPressure > 0;
 
     const bpStatus: MeasurementStatus = !isClinicallyValid
       ? "LOW_SIGNAL_QUALITY"
-      : bpCalib.expired
-        ? "CALIBRATION_EXPIRED"
-        : bpCalib.available
-          ? "VALID"
-          : "REQUIRES_CALIBRATION";
+      : !bpHasMorph
+        ? "NO_VALID_SIGNAL"
+        : bpCalib.expired
+          ? "CALIBRATION_EXPIRED"
+          : bpCalib.available
+            ? "VALID"
+            : "REQUIRES_CALIBRATION";
 
     const respOk = respEst && respEst.score >= 0.14;
     const respStatus: MeasurementStatus = !isClinicallyValid
@@ -296,26 +325,47 @@ export class VitalSignsProcessor {
       },
       spo2: {
         name: "SpO2",
-        value: isClinicallyValid && spo2Calib.available ? Math.round(this.measurements.spo2) : null,
+        value: spo2HasDisplay ? Math.round(this.measurements.spo2) : null,
         unit: "%",
         timestamp: now,
-        confidence: isClinicallyValid && spo2Calib.available ? 0.88 : 0.25,
+        confidence: !spo2HasDisplay
+          ? 0.22
+          : spo2Calib.available && !spo2Calib.expired
+            ? 0.88
+            : spo2Calib.expired
+              ? 0.34
+              : 0.52,
         status: spo2Status,
-        reason: "Beer-Lambert ratio-of-ratios; requiere perfil de calibración vigente",
+        reason:
+          spo2Calib.available && !spo2Calib.expired
+            ? "Beer–Lambert ratio-of-ratios con perfil de referencia vigente"
+            : "Estimación ratio-of-ratios cámara+flash (no sustituye oxímetro certificado); calibre con oxímetro para uso clínico",
         signalQuality: { ...commonSQM },
         diagnostics: { rValue: this.rValueHistory[this.rValueHistory.length - 1] },
         calibration: spo2Calib
       },
       bloodPressure: {
         name: "Blood Pressure",
-        value: (isClinicallyValid && bpCalib.available && this.lastBPConfidence !== 'INSUFFICIENT')
-          ? { systolic: Math.round(this.measurements.systolicPressure), diastolic: Math.round(this.measurements.diastolicPressure) }
+        value: bpHasMorph
+          ? {
+              systolic: Math.round(this.measurements.systolicPressure),
+              diastolic: Math.round(this.measurements.diastolicPressure),
+            }
           : null,
         unit: "mmHg",
         timestamp: now,
-        confidence: (isClinicallyValid && bpCalib.available && this.lastBPConfidence === 'HIGH') ? 0.9 : 0.28,
+        confidence: !bpHasMorph
+          ? 0.26
+          : bpCalib.available && !bpCalib.expired && this.lastBPConfidence === 'HIGH'
+            ? 0.9
+            : bpCalib.available && !bpCalib.expired
+              ? 0.64
+              : 0.4,
         status: bpStatus,
-        reason: "PWA morfológica; requiere calibración individual vigente con tensiómetro",
+        reason:
+          bpCalib.available && !bpCalib.expired
+            ? "PWA morfológica con perfil calibrado"
+            : "Estimación PWA desde morfología PPG (sin tensiómetro de referencia); valor orientativo",
         signalQuality: { ...commonSQM },
         diagnostics: { featureQuality: this.lastBPFeatureQuality },
         calibration: bpCalib
@@ -566,6 +616,7 @@ export class VitalSignsProcessor {
     this.measurements.arrhythmiaStatus = "SIN ARRITMIAS|0";
     this.measurements.lastArrhythmiaData = null;
     this.rValueHistory = [];
+    this.lastPpgPerfusionIndex = 0;
     return result;
   }
 
@@ -587,6 +638,7 @@ export class VitalSignsProcessor {
       signalQuality: 0
     };
     this.rgbData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
+    this.lastPpgPerfusionIndex = 0;
     this.isCalibrating = false;
     this.calibrationSamples = 0;
     this.arrhythmiaProcessor.reset();
