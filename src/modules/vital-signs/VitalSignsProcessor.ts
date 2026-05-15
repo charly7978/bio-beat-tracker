@@ -18,18 +18,6 @@ export interface VitalSignsDetailedResult {
   calibrationProgress: number;
 }
 
-export interface VitalSignsResult extends VitalSignsDetailedResult {
-  // Legacy compatibility
-  spo2_legacy: number;
-  pressure: {
-    systolic: number;
-    diastolic: number;
-    confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT';
-    featureQuality: number;
-  };
-  arrhythmiaCount: number;
-  arrhythmiaStatus: string;
-  measurementConfidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INVALID';
   lastArrhythmiaData?: {
     timestamp: number;
     rmssd: number;
@@ -107,6 +95,7 @@ export class VitalSignsProcessor {
   // Contador de pulsos válidos
   private validPulseCount: number = 0;
   private readonly MIN_PULSES_REQUIRED = 2;
+  private lastBPM: number = 0;
   
   constructor() {
     this.arrhythmiaProcessor = new ArrhythmiaProcessor();
@@ -234,13 +223,13 @@ export class VitalSignsProcessor {
 
     const res: VitalSignsResult = {
       heartRate: {
-        name: "Heart Rate", value: Math.round(this.measurements.spo2 > 0 ? 75 : 0), // Placeholder logic for structure
+        name: "Heart Rate", value: Math.round(this.measurements.signalQuality > 0 ? this.lastBPM : 0),
         unit: "bpm", timestamp: now, confidence: confidence === 'HIGH' ? 0.9 : 0.6,
-        status: confidence === 'INVALID' ? "NO_VALID_SIGNAL" : "VALID",
+        status: (confidence === 'INVALID' || this.lastBPM === 0) ? "NO_VALID_SIGNAL" : "VALID",
         reason: "Calculated from PPG peaks",
         signalQuality: { sqi, perfusionIndex: 0, snr: 0, periodicity: 0, motionScore: 0, saturationRatio: 0, frameDropRatio: 0, fpsEffective: 30, timestampJitterMs: 0 },
         diagnostics: {}
-      } as any,
+      },
       spo2: {
         name: "SpO2", value: Math.round(this.measurements.spo2),
         unit: "%", timestamp: now, confidence: confidence === 'HIGH' ? 0.95 : 0.7,
@@ -273,18 +262,6 @@ export class VitalSignsProcessor {
       signalQuality: Math.round(sqi),
       isCalibrating: this.isCalibrating,
       calibrationProgress: Math.min(100, Math.round((this.calibrationSamples / this.CALIBRATION_REQUIRED) * 100)),
-      
-      // Legacy
-      spo2_legacy: Math.round(this.measurements.spo2),
-      pressure: {
-        systolic: Math.round(this.measurements.systolicPressure),
-        diastolic: Math.round(this.measurements.diastolicPressure),
-        confidence: this.lastBPConfidence,
-        featureQuality: this.lastBPFeatureQuality,
-      },
-      arrhythmiaCount: this.measurements.arrhythmiaCount,
-      arrhythmiaStatus: this.measurements.arrhythmiaStatus,
-      measurementConfidence: confidence,
       lastArrhythmiaData: this.measurements.lastArrhythmiaData
     };
 
@@ -337,7 +314,8 @@ export class VitalSignsProcessor {
       }
     }
 
-    const hr = currentBPM > 0 ? currentBPM : 0;
+    this.lastBPM = currentBPM > 0 ? currentBPM : 0;
+    const hr = this.lastBPM;
 
     // === BP y Arritmias — requieren rrData válido ===
     const validRR = rrData?.intervals?.filter(isPhysiologicalRR) || [];

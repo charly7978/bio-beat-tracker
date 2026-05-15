@@ -49,21 +49,12 @@ const Index = () => {
     signalQuality: 0,
     isCalibrating: false,
     calibrationProgress: 0,
-    // Legacy
-    spo2_legacy: 0,
-    pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
-    arrhythmiaCount: 0,
-    arrhythmiaStatus: "SIN ARRITMIAS|0",
-    measurementConfidence: 'INVALID'
+    lastArrhythmiaData: null
   });
-  const [heartRate, setHeartRate] = useState(0);
   const [heartbeatSignal, setHeartbeatSignal] = useState(0);
   const [beatMarker, setBeatMarker] = useState(0);
-  const [arrhythmiaCount, setArrhythmiaCount] = useState<string | number>("--");
   const [elapsedTime, setElapsedTime] = useState(0);
   const [showResults, setShowResults] = useState(false);
-  const [isCalibrating, setIsCalibrating] = useState(false);
-  const [calibrationProgress, setCalibrationProgress] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [rrIntervals, setRRIntervals] = useState<number[]>([]);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
@@ -502,7 +493,6 @@ const Index = () => {
     if (savedResults || vitalSigns.spo2.value > 0) {
       const dataToSave = savedResults || vitalSigns;
       await saveMeasurement({
-        heartRate,
         vitalSigns: dataToSave,
         signalQuality: lastSignal?.quality || 0
       });
@@ -567,7 +557,19 @@ const Index = () => {
     setMeasurementSummary(null);
     setIsCalibrating(false);
     setElapsedTime(0);
-    setHeartRate(0);
+    setVitalSigns({ 
+      heartRate: { name: "HR", value: 0, unit: "bpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      spo2: { name: "SpO2", value: 0, unit: "%", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      bloodPressure: { name: "BP", value: { systolic: 0, diastolic: 0 }, unit: "mmHg", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      respiration: { name: "RR", value: 0, unit: "rpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      arrhythmia: { name: "Arrhythmia", value: { count: 0, status: "NORMAL" }, unit: "event", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      signalQuality: 0,
+      isCalibrating: false,
+      calibrationProgress: 0,
+      lastArrhythmiaData: null
+    });
+
+    // Restaurar resets de refs necesarios para la lógica
     totalBeatsRef.current = 0;
     arrhythmiaBeatsRef.current = 0;
     lastArrhythmiaCountForBeatsRef.current = 0;
@@ -578,23 +580,6 @@ const Index = () => {
     bpmSanityRef.current.reset();
     sanityErrorRef.current = null;
     setSanityError(null);
-    setVitalSigns({ 
-      heartRate: { name: "HR", value: 0, unit: "bpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      spo2: { name: "SpO2", value: 0, unit: "%", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      bloodPressure: { name: "BP", value: { systolic: 0, diastolic: 0 }, unit: "mmHg", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      respiration: { name: "RR", value: 0, unit: "rpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      arrhythmia: { name: "Arrhythmia", value: { count: 0, status: "NORMAL" }, unit: "event", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      signalQuality: 0,
-      isCalibrating: false,
-      calibrationProgress: 0,
-      // Legacy
-      spo2_legacy: 0,
-      pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
-      arrhythmiaCount: 0,
-      arrhythmiaStatus: "SIN ARRITMIAS|0",
-      measurementConfidence: 'INVALID'
-    });
-    setArrhythmiaCount("--");
     lastArrhythmiaData.current = null;
     setCalibrationProgress(0);
     arrhythmiaDetectedRef.current = false;
@@ -721,7 +706,10 @@ const Index = () => {
     }
     if (nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {
       lastHrPushRef.current = nowT;
-      setHeartRate(heartBeatResult.bpm);
+      setVitalSigns(prev => ({
+        ...prev,
+        heartRate: { ...prev.heartRate, value: heartBeatResult.bpm, status: "VALID" }
+      }));
     }
 
     if (heartBeatResult.isPeak) {
@@ -781,11 +769,10 @@ const Index = () => {
         setVitalSigns(vitals);
       }
 
-      if (heartBeatResult.rrData && heartBeatResult.rrData.intervals.length >= 2 && heartBeatResult.confidence > 0.18 && vitals.measurementConfidence !== 'INVALID') {
-        const arrhythmiaStatus = vitals.arrhythmiaStatus;
+      if (heartBeatResult.rrData && heartBeatResult.rrData.intervals.length >= 2 && heartBeatResult.confidence > 0.18 && vitals.heartRate.status === 'VALID') {
+        const arrhythmiaStatus = vitals.arrhythmia.value.status;
         if (arrhythmiaStatus) {
           lastArrhythmiaData.current = vitals.lastArrhythmiaData || null;
-          setArrhythmiaCount(vitals.arrhythmiaCount);
 
           const isArrhythmiaDetected = arrhythmiaStatus.includes("ARRITMIA DETECTADA");
           if (isArrhythmiaDetected !== arrhythmiaDetectedRef.current) {
@@ -827,11 +814,9 @@ const Index = () => {
     
     const interval = setInterval(() => {
       const currentProgress = getCalibrationProgress();
-      setCalibrationProgress(currentProgress);
 
       if (currentProgress >= 100) {
         clearInterval(interval);
-        setIsCalibrating(false);
         if (navigator.vibrate) {
           navigator.vibrate([100]);
         }
@@ -951,17 +936,17 @@ const Index = () => {
               onStartMeasurement={handleToggleMonitoring}
               onReset={handleReset}
               isMonitoring={isMonitoring}
-              arrhythmiaStatus={vitalSigns.arrhythmiaStatus}
+              arrhythmiaStatus={vitalSigns.arrhythmia.value.status}
               rawArrhythmiaData={lastArrhythmiaData.current}
               preserveResults={showResults}
               isPeak={beatMarker === 1}
-              bpm={heartRate}
+              bpm={vitalSigns.heartRate.value}
               spo2={vitalSigns.spo2.value || 0}
-              arrhythmiaCount={vitalSigns.arrhythmiaCount}
+              arrhythmiaCount={vitalSigns.arrhythmia.value.count}
               rrIntervals={rrIntervals}
               elapsedTime={elapsedTime}
               perfusionIndex={lastSignal?.perfusionIndex || 0}
-              pressure={vitalSigns.pressure}
+              pressure={vitalSigns.bloodPressure.value}
               diagnostics={currentDiagnostics}
             />
           </div>
@@ -970,7 +955,7 @@ const Index = () => {
           {showResults && measurementSummary && (() => {
             const { totalBeats, arrhythmiaBeats, normalPercent } = measurementSummary;
             const normalBeats = totalBeats - arrhythmiaBeats;
-            const avgBpm = heartRate > 0 ? Math.round(heartRate) : '--';
+            const avgBpm = vitalSigns.heartRate.value > 0 ? Math.round(vitalSigns.heartRate.value) : '--';
             const statusColor = normalPercent >= 95 ? 'emerald' : normalPercent >= 80 ? 'yellow' : 'red';
             const statusText = normalPercent >= 95 ? 'RITMO NORMAL' : normalPercent >= 80 ? 'LEVE IRREGULARIDAD' : 'IRREGULARIDAD DETECTADA';
             const statusIcon = normalPercent >= 95 ? CheckCircle2 : normalPercent >= 80 ? AlertTriangle : AlertTriangle;
@@ -1105,7 +1090,7 @@ const Index = () => {
                     {/* Botón Análisis AI */}
                     <button
                       onClick={() => {
-                        analyzeVitals({ heartRate, vitalSigns, quality: lastSignal?.quality || 0 });
+                        analyzeVitals({ vitalSigns, quality: lastSignal?.quality || 0 });
                         setShowAIAnalysis(true);
                       }}
                       disabled={isAnalyzing}

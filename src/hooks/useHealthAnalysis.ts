@@ -4,7 +4,6 @@ import { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
 import { toast } from '@/hooks/use-toast';
 
 interface AnalysisInput {
-  heartRate: number;
   vitalSigns: VitalSignsResult;
   quality: number;
 }
@@ -16,9 +15,10 @@ export const useHealthAnalysis = () => {
   const analyzeVitals = useCallback(async (data: AnalysisInput) => {
     if (isAnalyzing) return;
 
-    const { heartRate, vitalSigns, quality } = data;
+    const { vitalSigns, quality } = data;
+    const hr = vitalSigns.heartRate.value;
 
-    if (heartRate <= 0 && vitalSigns.spo2.value <= 0) {
+    if (hr <= 0 && vitalSigns.spo2.value <= 0) {
       toast({
         title: "Datos insuficientes",
         description: "Se necesitan datos de medición válidos para el análisis.",
@@ -31,10 +31,9 @@ export const useHealthAnalysis = () => {
     // Solo enviar datos que realmente se midieron — sin valores ficticios de relleno
     const bodyPayload: Record<string, unknown> = {
       quality,
-      confidence: vitalSigns.measurementConfidence,
-      arrhythmiaCount: vitalSigns.arrhythmiaCount,
+      arrhythmiaCount: vitalSigns.arrhythmia.value.count,
     };
-    if (heartRate > 0) bodyPayload.heartRate = heartRate;
+    if (hr > 0) bodyPayload.heartRate = hr;
     if (vitalSigns.spo2.value > 0) bodyPayload.spo2 = vitalSigns.spo2.value;
     if (vitalSigns.bloodPressure.value.systolic > 0) bodyPayload.systolic = vitalSigns.bloodPressure.value.systolic;
     if (vitalSigns.bloodPressure.value.diastolic > 0) bodyPayload.diastolic = vitalSigns.bloodPressure.value.diastolic;

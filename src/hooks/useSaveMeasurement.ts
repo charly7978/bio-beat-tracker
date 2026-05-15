@@ -4,7 +4,6 @@ import { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
 import { toast } from '@/hooks/use-toast';
 
 interface MeasurementData {
-  heartRate: number;
   vitalSigns: VitalSignsResult;
   signalQuality: number;
 }
@@ -26,8 +25,9 @@ export const useSaveMeasurement = () => {
       }
       
       // Validar que hay datos significativos para guardar
+      const hr = data.vitalSigns.heartRate.value;
       const hasValidData = 
-        data.heartRate > 30 || 
+        hr > 30 || 
         data.vitalSigns.spo2.value > 70 ||
         data.vitalSigns.bloodPressure.value.systolic > 60;
       
@@ -39,7 +39,7 @@ export const useSaveMeasurement = () => {
       // Preparar datos para inserción
       const measurementRecord = {
         user_id: user.id,
-        heart_rate: Math.round(data.heartRate) || 0,
+        heart_rate: Math.round(hr) || 0,
         spo2: Math.round(data.vitalSigns.spo2.value) || 0,
         systolic: Math.round(data.vitalSigns.bloodPressure.value.systolic) || 0,
         diastolic: Math.round(data.vitalSigns.bloodPressure.value.diastolic) || 0,
