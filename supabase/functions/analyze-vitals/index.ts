@@ -56,7 +56,7 @@ function validateInput(data: unknown): { valid: boolean; error?: string; parsed?
       diastolic,
       arrhythmiaCount: Number(d.arrhythmiaCount) || 0,
       quality: Number(d.quality) || 0,
-      confidence: typeof d.confidence === "string" ? d.confidence : undefined,
+      confidence: (["HIGH","MEDIUM","LOW","INVALID","INSUFFICIENT"] as const).includes(d.confidence as never) ? (d.confidence as string) : undefined,
     },
   };
 }
