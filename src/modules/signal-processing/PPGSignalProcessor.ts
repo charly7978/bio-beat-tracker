@@ -693,9 +693,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const windowSize = Math.min(this.ACDC_WINDOW, this.redBuffer.length);
     if (windowSize < 36) return;
 
-    const redW = this.redBuffer.slice(-windowSize);
-    const greenW = this.greenBuffer.slice(-windowSize);
-    const blueW = this.blueBuffer.slice(-windowSize);
+    const redW = this.redBuffer.tail(windowSize);
+    const greenW = this.greenBuffer.tail(windowSize);
+    const blueW = this.blueBuffer.tail(windowSize);
 
     this.redDC = redW.reduce((a, b) => a + b, 0) / redW.length;
     this.greenDC = greenW.reduce((a, b) => a + b, 0) / greenW.length;
@@ -703,15 +703,21 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     if (this.redDC < 5 || this.greenDC < 5) return;
 
+    const sortedScratch = this.sortedScratch;
     const computeAC = (window: number[], dc: number) => {
       let sumSq = 0;
-      for (let i = 0; i < window.length; i++) {
-        sumSq += (window[i] - dc) ** 2;
+      const n = window.length;
+      for (let i = 0; i < n; i++) {
+        const d = window[i] - dc;
+        sumSq += d * d;
+        sortedScratch[i] = window[i];
       }
-      const rms = Math.sqrt(sumSq / window.length);
-      const sorted = [...window].sort((a, b) => a - b);
-      const p5 = sorted[Math.floor(window.length * 0.05)] ?? 0;
-      const p95 = sorted[Math.floor(window.length * 0.95)] ?? 0;
+      const rms = Math.sqrt(sumSq / n);
+      // In-place sort sobre la porción usada del scratch (sin alocar).
+      const view = sortedScratch.subarray(0, n);
+      view.sort();
+      const p5 = view[Math.floor(n * 0.05)] ?? 0;
+      const p95 = view[Math.floor(n * 0.95)] ?? 0;
       const p2p = p95 - p5;
       return (rms * Math.sqrt(2) + p2p * 0.5) / 2;
     };
