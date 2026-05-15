@@ -226,11 +226,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const g = this.smoothedGreen;
     const b = this.smoothedBlue;
     
-    if (r > 250 && g > 248) rejectionStatus = "SATURATED";
-    else if (r < 25 && g < 15) rejectionStatus = "UNDEREXPOSED";
+    if (r > 253 && g > 252) rejectionStatus = "SATURATED";
+    else if (r < 15 && g < 10) rejectionStatus = "UNDEREXPOSED";
     else if (motionArtifact) rejectionStatus = "MOTION_ARTIFACT";
     else if (this.pixelStride > 4) rejectionStatus = "LOW_FPS";
-    else if (this.frameCount < 60) rejectionStatus = "WARMUP";
+    else if (this.frameCount < 45) rejectionStatus = "WARMUP";
 
     if (rejectionStatus && rejectionStatus !== "WARMUP" && rejectionStatus !== "MOTION_ARTIFACT") {
       this.onSignalReady({
@@ -288,7 +288,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       : this.signalQuality;
     
     // GATING CLÍNICO SOBERANO: bajado a 0.2% para asegurar detección inicial
-    const gatedQuality = (this.contactState === 'STABLE_CONTACT' && perfusionIndex >= 0.002)
+    const gatedQuality = (this.contactState === 'STABLE_CONTACT' && perfusionIndex >= 0.001)
       ? adjustedQuality
       : Math.min(18, adjustedQuality * 0.45);
 
@@ -353,7 +353,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       if (this.fingerConfidenceCount >= this.FINGER_CONFIRM_FRAMES) {
         this.fingerDetected = true;
         // Require real perfusion for STABLE — not just visual contact
-        this.contactState = (this.stableContactCount >= this.STABLE_THRESHOLD && this.cachedPI > 0.003)
+        this.contactState = (this.stableContactCount >= this.STABLE_THRESHOLD && this.cachedPI > 0.0015)
           ? 'STABLE_CONTACT'
           : 'UNSTABLE_CONTACT';
       }
@@ -422,7 +422,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const redDominance = r - (g + b) / 2;
     const rgRatio = r / Math.max(1, g);
     const rbRatio = r / Math.max(1, b); // Hemoglobin absorption is highest in Blue
-    const notBlownOut = !(r > 253 && g > 252 && b > 252);
+    const notBlownOut = !(r > 254 && g > 254 && b > 254);
 
     // === HEMOGLOBIN SIGNATURE: red MUST dominate and blue MUST be very low ===
     if (this.fingerDetected) {
@@ -438,14 +438,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     } else {
       // ACQUIRE contact — strict hemoglobin thresholds (literature validated)
       const acquireContact =
-        r > 75 &&
-        rgRatio > 1.15 &&
-        rbRatio > 1.45 &&
-        redDominance > 18 &&
-        totalIntensity > 110 && totalIntensity < 750 &&
-        this.smoothedCoverage > 0.30 &&
-        this.smoothedFingerScore > 0.35 &&
-        this.motionScore < 1.2 &&
+        r > 40 &&
+        rgRatio > 1.08 &&
+        rbRatio > 1.30 &&
+        redDominance > 10 &&
+        totalIntensity > 70 && totalIntensity < 760 &&
+        this.smoothedCoverage > 0.20 &&
+        this.smoothedFingerScore > 0.25 &&
+        this.motionScore < 1.5 &&
         notBlownOut;
       
       if (acquireContact && this.frameCount % 30 === 0) {
@@ -564,11 +564,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       m.centerBias = centerBias; m.frameScore = frameScore; m.combinedScore = combinedScore;
       m.valid = true;
       m.isFinger =
-        red > 55 &&
-        total > 120 &&
-        redDominance > 12 &&
-        rednessRatio > 1.08 &&
-        combinedScore > 0.42;
+        red > 40 &&
+        total > 70 &&
+        redDominance > 8 &&
+        rednessRatio > 1.05 &&
+        combinedScore > 0.32;
       validCount++;
       if (m.isFinger) {
         fingerCount++;
@@ -639,9 +639,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     // Source candidates (CHROM removed — amplifies noise without finger)
     const sources: { [key: string]: number } = {
-      R: rPulse * 3200,
-      G: gPulse * 3200,
-      RG: this.blendRG(rPulse, gPulse, rawRed, rawGreen, motionArtifact) * 3200,
+      R: rPulse * 3800,
+      G: gPulse * 3800,
+      RG: this.blendRG(rPulse, gPulse, rawRed, rawGreen, motionArtifact) * 3800,
     };
 
     // Update per-source buffers (ring auto-evicts más viejo)
@@ -786,7 +786,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const redDominance = this.smoothedRed - (this.smoothedGreen + this.smoothedBlue) / 2;
 
     // Gate: no perfusion = no real signal
-    if (perfusionIndex < 0.005) return Math.min(15, this.smoothedCoverage * 20);
+    if (perfusionIndex < 0.002) return Math.min(15, this.smoothedCoverage * 20);
     // Gate: red must dominate (hemoglobin signature)
     if (redDominance < 15) return 0;
 

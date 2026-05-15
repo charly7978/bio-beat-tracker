@@ -242,6 +242,8 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
         onStreamReady?.(stream);
       } catch (err) {
         log.error("Error al inicializar cámara", err);
+        // Dispatch event for UI notification
+        window.dispatchEvent(new CustomEvent('camera-error', { detail: err }));
       } finally {
         isStartingRef.current = false;
       }
