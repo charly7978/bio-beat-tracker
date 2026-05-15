@@ -221,11 +221,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.redBuffer.push(roi.rawRed);
     this.greenBuffer.push(roi.rawGreen);
     this.blueBuffer.push(roi.rawBlue);
-    if (this.redBuffer.length > this.BUFFER_SIZE) {
-      this.redBuffer.shift();
-      this.greenBuffer.shift();
-      this.blueBuffer.shift();
-    }
 
     // ACDC over a 36+ sample window changes slowly — recompute every 3 frames
     // (~10 Hz) instead of every frame to cut 3 slice+sort allocations.
@@ -239,17 +234,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const pulseSource = this.extractBestPulseSignal(roi.rawRed, roi.rawGreen, roi.rawBlue, motionArtifact);
 
     this.rawBuffer.push(pulseSource.value);
-    if (this.rawBuffer.length > this.BUFFER_SIZE) {
-      this.rawBuffer.shift();
-    }
 
     const endFilt = ppgPerf.start('bandpass');
     const filtered = this.bandpassFilter.filter(pulseSource.value);
     endFilt();
     this.filteredBuffer.push(filtered);
-    if (this.filteredBuffer.length > this.BUFFER_SIZE) {
-      this.filteredBuffer.shift();
-    }
 
     const endSqi = ppgPerf.start('sqi');
     // SQI is a statistical aggregate over 90 samples — recompute every 3 frames
