@@ -210,9 +210,9 @@ const Index = () => {
         sqi: lastSignal?.quality ?? 0,
         fingerDetected: !!lastSignal?.fingerDetected,
         perfusionIndex: lastSignal?.perfusionIndex ?? 0,
-        bpm: heartRate,
+        bpm: vitalSigns.heartRate.value,
         spo2: vitalSigns.spo2.value,
-        confidence: vitalSigns.measurementConfidence,
+        confidence: vitalSigns.heartRate.status === 'VALID' ? 'HIGH' : 'INVALID',
         backpressure: getBackpressureState(),
       }),
     },
@@ -436,7 +436,6 @@ const Index = () => {
     startAuditSession(sid, sanityProfileId);
     setAuditNegativeCount(0);
 
-    setIsCalibrating(true);
     startCalibration();
   }, [isMonitoring, startProcessing, startCalibration, enterFullScreen, sanityProfileId, requestWakeLock]);
 
@@ -483,7 +482,7 @@ const Index = () => {
     // Detener procesadores
     stopProcessing();
     
-    if (isCalibrating) {
+    if (vitalSigns.isCalibrating) {
       forceCalibrationCompletion();
     }
     
@@ -506,8 +505,8 @@ const Index = () => {
       setCameraStream(null);
     }
     
+    
     setIsMonitoring(false);
-    setIsCalibrating(false);
     releaseWakeLock();
     
     if (savedResults) {
@@ -525,8 +524,7 @@ const Index = () => {
     });
     
     setElapsedTime(0);
-    setCalibrationProgress(0);
-  }, [isMonitoring, isCalibrating, cameraStream, stopFrameLoop, stopProcessing, forceCalibrationCompletion, resetVitalSigns, saveMeasurement, heartRate, vitalSigns, lastSignal, releaseWakeLock]);
+  }, [isMonitoring, cameraStream, stopFrameLoop, stopProcessing, forceCalibrationCompletion, resetVitalSigns, saveMeasurement, vitalSigns, lastSignal, releaseWakeLock]);
 
   // === RESET COMPLETO ===
   const handleReset = useCallback(() => {
@@ -555,7 +553,6 @@ const Index = () => {
     setIsMonitoring(false);
     setShowResults(false);
     setMeasurementSummary(null);
-    setIsCalibrating(false);
     setElapsedTime(0);
     setVitalSigns({ 
       heartRate: { name: "HR", value: 0, unit: "bpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
@@ -581,7 +578,6 @@ const Index = () => {
     sanityErrorRef.current = null;
     setSanityError(null);
     lastArrhythmiaData.current = null;
-    setCalibrationProgress(0);
     arrhythmiaDetectedRef.current = false;
   }, [cameraStream, stopFrameLoop, stopProcessing, fullResetVitalSigns, resetHeartBeat]);
 
@@ -646,29 +642,22 @@ const Index = () => {
       
       // Solo borrar vitales después de señal mala SOSTENIDA
       if (unstableFrameCounter.current >= UNSTABLE_ZERO_THRESHOLD) {
-        setHeartRate(0);
         vitalSignsFrameCounter.current = 0;
         setBeatMarker(0);
         setRRIntervals([]);
-        setArrhythmiaCount("--");
         arrhythmiaDetectedRef.current = false;
         setVitalSigns(prev => (
-          prev.measurementConfidence === 'INVALID' &&
+          prev.heartRate.value === 0 &&
           prev.spo2.value === 0 &&
           prev.bloodPressure.value.systolic === 0
             ? prev
             : {
                 ...prev,
+                heartRate: { ...prev.heartRate, value: 0, status: "NO_VALID_SIGNAL" },
                 spo2: { ...prev.spo2, value: 0, status: "NO_VALID_SIGNAL" },
                 bloodPressure: { ...prev.bloodPressure, value: { systolic: 0, diastolic: 0 }, status: "NO_VALID_SIGNAL" },
                 arrhythmia: { ...prev.arrhythmia, value: { count: 0, status: "NORMAL" } },
                 signalQuality: 0,
-                measurementConfidence: 'INVALID',
-                // Legacy
-                spo2_legacy: 0,
-                pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
-                arrhythmiaCount: 0,
-                arrhythmiaStatus: "SIN ARRITMIAS|0",
               }
         ));
       }
@@ -720,7 +709,7 @@ const Index = () => {
         beatMarkerTimerRef.current = null;
       }, 300);
       totalBeatsRef.current++;
-      const currentArrCount = vitalSignsRef.current.arrhythmiaCount || 0;
+      const currentArrCount = vitalSignsRef.current.arrhythmia.value.count || 0;
       if (currentArrCount > lastArrhythmiaCountForBeatsRef.current) {
         arrhythmiaBeatsRef.current++;
         lastArrhythmiaCountForBeatsRef.current = currentArrCount;
@@ -784,7 +773,7 @@ const Index = () => {
               }
               toast({
                 title: "⚠️ Arritmia detectada",
-                description: `Latido irregular #${vitals.arrhythmiaCount}`,
+                description: `Latido irregular #${vitals.arrhythmia.value.count}`,
                 variant: "destructive",
                 duration: 4000
               });
@@ -810,7 +799,7 @@ const Index = () => {
 
   // CONTROL DE CALIBRACIÓN
   useEffect(() => {
-    if (!isCalibrating) return;
+    if (!vitalSigns.isCalibrating) return;
     
     const interval = setInterval(() => {
       const currentProgress = getCalibrationProgress();
@@ -824,7 +813,7 @@ const Index = () => {
     }, 500);
 
     return () => clearInterval(interval);
-  }, [isCalibrating, getCalibrationProgress]);
+  }, [vitalSigns.isCalibrating, getCalibrationProgress]);
 
   const handleToggleMonitoring = () => {
     if (isMonitoring) {

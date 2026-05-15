@@ -18,6 +18,7 @@ export interface VitalSignsDetailedResult {
   calibrationProgress: number;
 }
 
+export interface VitalSignsResult extends VitalSignsDetailedResult {
   lastArrhythmiaData?: {
     timestamp: number;
     rmssd: number;

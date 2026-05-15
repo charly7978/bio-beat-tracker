@@ -54,12 +54,6 @@ export const useVitalSignsProcessor = () => {
       signalQuality: 0,
       isCalibrating: false,
       calibrationProgress: 0,
-      // Legacy
-      spo2_legacy: 0,
-      pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
-      arrhythmiaCount: 0,
-      arrhythmiaStatus: "SIN ARRITMIAS|0",
-      measurementConfidence: 'INVALID' as const
     };
     
     if (!processorRef.current) return defaultResult;
@@ -68,8 +62,8 @@ export const useVitalSignsProcessor = () => {
     
     // Guardar la última ventana realmente válida para cierre/exportación
     if (
-      result.measurementConfidence !== 'INVALID' ||
-      result.pressure.confidence !== 'INSUFFICIENT' ||
+      result.heartRate.status === 'VALID' ||
+      result.bloodPressure.status === 'VALID' ||
       result.spo2.value > 0 ||
       result.arrhythmia.value.count > 0
     ) {
