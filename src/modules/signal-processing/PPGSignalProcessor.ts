@@ -651,7 +651,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const buf = this.sourceBuffers[key];
       if (buf.length < 45) continue;
 
-      const recent = buf.slice(-90);
+      const recent = buf.tail(90);
       const score = this.computeSourceScore(recent);
       this.sourceScores[key] = score;
 
