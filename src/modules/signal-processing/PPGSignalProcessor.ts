@@ -2,6 +2,7 @@ import type { ProcessedSignal, ProcessingError, SignalProcessor as SignalProcess
 import { BandpassFilter } from './BandpassFilter';
 import { createLogger, ppgPerf } from '../../utils/logger';
 import { clamp } from '../../utils/math';
+import { RingF32 } from '../../utils/RingBuffer';
 import {
   DEFAULT_BACKPRESSURE_CONFIG,
   sanitizeBackpressureConfig,
@@ -67,14 +68,25 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     valid: false, isFinger: false,
   }));
 
-  // Buffers
-  private rawBuffer: number[] = [];
-  private filteredBuffer: number[] = [];
-  private redBuffer: number[] = [];
-  private greenBuffer: number[] = [];
-  private blueBuffer: number[] = [];
+  // Buffers (ring buffers Float32 — sin Array.shift O(n) por frame)
+  private readonly rawBuffer = new RingF32(this.BUFFER_SIZE);
+  private readonly filteredBuffer = new RingF32(this.BUFFER_SIZE);
+  private readonly redBuffer = new RingF32(this.BUFFER_SIZE);
+  private readonly greenBuffer = new RingF32(this.BUFFER_SIZE);
+  private readonly blueBuffer = new RingF32(this.BUFFER_SIZE);
   private tileConfidence: number[] = new Array(25).fill(0);
-  private frameIntervalBuffer: number[] = [];
+  private readonly frameIntervalBuffer = new RingF32(30);
+
+  // Scratch buffers reusables para stats (ACDC, SQI, source-score) — evita
+  // `[...arr].sort()` por frame. Tamaño máximo = ACDC_WINDOW.
+  private readonly statScratch = new Float32Array(this.ACDC_WINDOW);
+  private readonly sortedScratch = new Float32Array(this.ACDC_WINDOW);
+
+  // LUTs de teselado: cachean Math.floor((px / roiSize) * cols) por píxel
+  // del ROI. Se reconstruyen sólo cuando cambia el tamaño del ROI.
+  private tileXLut: Int8Array | null = null;
+  private tileYLut: Int8Array | null = null;
+  private tileLutKey = '';
 
   // AC/DC
   private redDC = 0;
@@ -128,9 +140,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private cachedSqi = 0;
 
   // === MULTI-SOURCE RANKING (CHROM eliminado — amplifica ruido sin dedo) ===
-  private sourceBuffers: { [key: string]: number[] } = {};
+  private readonly SOURCE_BUFFER_SIZE = 120;
+  private readonly sourceBuffers: { [key: string]: RingF32 } = {
+    R: new RingF32(this.SOURCE_BUFFER_SIZE),
+    G: new RingF32(this.SOURCE_BUFFER_SIZE),
+    RG: new RingF32(this.SOURCE_BUFFER_SIZE),
+  };
   private activeSource: string = 'RG';
-  private sourceScores: { [key: string]: number } = {};
+  private sourceScores: { [key: string]: number } = { R: 0, G: 0, RG: 0 };
   private lastSourceSwitch = 0;
   private readonly SOURCE_HYSTERESIS_MS = 2000;
 
@@ -139,8 +156,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     public onError?: (error: ProcessingError) => void
   ) {
     this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate);
-    this.sourceBuffers = { R: [], G: [], RG: [] };
-    this.sourceScores = { R: 0, G: 0, RG: 0 };
   }
 
   async initialize(): Promise<void> {
@@ -209,11 +224,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.redBuffer.push(roi.rawRed);
     this.greenBuffer.push(roi.rawGreen);
     this.blueBuffer.push(roi.rawBlue);
-    if (this.redBuffer.length > this.BUFFER_SIZE) {
-      this.redBuffer.shift();
-      this.greenBuffer.shift();
-      this.blueBuffer.shift();
-    }
 
     // ACDC over a 36+ sample window changes slowly — recompute every 3 frames
     // (~10 Hz) instead of every frame to cut 3 slice+sort allocations.
@@ -227,17 +237,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const pulseSource = this.extractBestPulseSignal(roi.rawRed, roi.rawGreen, roi.rawBlue, motionArtifact);
 
     this.rawBuffer.push(pulseSource.value);
-    if (this.rawBuffer.length > this.BUFFER_SIZE) {
-      this.rawBuffer.shift();
-    }
 
     const endFilt = ppgPerf.start('bandpass');
     const filtered = this.bandpassFilter.filter(pulseSource.value);
     endFilt();
     this.filteredBuffer.push(filtered);
-    if (this.filteredBuffer.length > this.BUFFER_SIZE) {
-      this.filteredBuffer.shift();
-    }
 
     const endSqi = ppgPerf.start('sqi');
     // SQI is a statistical aggregate over 90 samples — recompute every 3 frames
@@ -421,17 +425,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (delta < 10 || delta > 100) return;
 
     this.frameIntervalBuffer.push(delta);
-    if (this.frameIntervalBuffer.length > 30) {
-      this.frameIntervalBuffer.shift();
-    }
 
     if (this.frameIntervalBuffer.length < 8) return;
 
     // Median FPS drifts slowly — recompute every 10 frames.
     if (this.frameCount % 10 !== 0) return;
 
-    const sorted = [...this.frameIntervalBuffer].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)] ?? 33;
+    const fiTail = this.frameIntervalBuffer.tail(this.frameIntervalBuffer.length);
+    fiTail.sort((a, b) => a - b);
+    const median = fiTail[Math.floor(fiTail.length / 2)] ?? 33;
     const estimatedFps = clamp(1000 / median, 20, 40);
 
     if (Math.abs(estimatedFps - this.estimatedSampleRate) > 2) {
@@ -600,13 +602,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       RG: this.blendRG(rPulse, gPulse, rawRed, rawGreen, motionArtifact) * 3200,
     };
 
-    // Update per-source buffers
-    for (const key of Object.keys(sources)) {
-      this.sourceBuffers[key].push(sources[key]);
-      if (this.sourceBuffers[key].length > 120) {
-        this.sourceBuffers[key].shift();
-      }
-    }
+    // Update per-source buffers (ring auto-evicts más viejo)
+    this.sourceBuffers.R.push(sources.R);
+    this.sourceBuffers.G.push(sources.G);
+    this.sourceBuffers.RG.push(sources.RG);
 
     // Rank sources every ~1 second (30 frames)
     if (this.frameCount % 30 === 0 && this.redBuffer.length >= 60) {
@@ -652,7 +651,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const buf = this.sourceBuffers[key];
       if (buf.length < 45) continue;
 
-      const recent = buf.slice(-90);
+      const recent = buf.tail(90);
       const score = this.computeSourceScore(recent);
       this.sourceScores[key] = score;
 
@@ -694,9 +693,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const windowSize = Math.min(this.ACDC_WINDOW, this.redBuffer.length);
     if (windowSize < 36) return;
 
-    const redW = this.redBuffer.slice(-windowSize);
-    const greenW = this.greenBuffer.slice(-windowSize);
-    const blueW = this.blueBuffer.slice(-windowSize);
+    const redW = this.redBuffer.tail(windowSize);
+    const greenW = this.greenBuffer.tail(windowSize);
+    const blueW = this.blueBuffer.tail(windowSize);
 
     this.redDC = redW.reduce((a, b) => a + b, 0) / redW.length;
     this.greenDC = greenW.reduce((a, b) => a + b, 0) / greenW.length;
@@ -704,15 +703,21 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     if (this.redDC < 5 || this.greenDC < 5) return;
 
+    const sortedScratch = this.sortedScratch;
     const computeAC = (window: number[], dc: number) => {
       let sumSq = 0;
-      for (let i = 0; i < window.length; i++) {
-        sumSq += (window[i] - dc) ** 2;
+      const n = window.length;
+      for (let i = 0; i < n; i++) {
+        const d = window[i] - dc;
+        sumSq += d * d;
+        sortedScratch[i] = window[i];
       }
-      const rms = Math.sqrt(sumSq / window.length);
-      const sorted = [...window].sort((a, b) => a - b);
-      const p5 = sorted[Math.floor(window.length * 0.05)] ?? 0;
-      const p95 = sorted[Math.floor(window.length * 0.95)] ?? 0;
+      const rms = Math.sqrt(sumSq / n);
+      // In-place sort sobre la porción usada del scratch (sin alocar).
+      const view = sortedScratch.subarray(0, n);
+      view.sort();
+      const p5 = view[Math.floor(n * 0.05)] ?? 0;
+      const p95 = view[Math.floor(n * 0.95)] ?? 0;
       const p2p = p95 - p5;
       return (rms * Math.sqrt(2) + p2p * 0.5) / 2;
     };
@@ -743,8 +748,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     // Gate: red must dominate (hemoglobin signature)
     if (redDominance < 15) return 0;
 
-    const recent = this.filteredBuffer.slice(-90);
-    const sorted = [...recent].sort((a, b) => a - b);
+    const recent = this.filteredBuffer.tail(90);
+    const sortedView = this.sortedScratch.subarray(0, recent.length);
+    for (let i = 0; i < recent.length; i++) sortedView[i] = recent[i];
+    sortedView.sort();
+    const sorted = sortedView;
     const p10 = sorted[Math.floor((sorted.length - 1) * 0.1)] ?? 0;
     const p90 = sorted[Math.floor((sorted.length - 1) * 0.9)] ?? 0;
     const range = p90 - p10;
@@ -806,26 +814,28 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private resetSignalTrackingBuffers(): void {
-    this.rawBuffer = [];
-    this.filteredBuffer = [];
-    this.redBuffer = [];
-    this.greenBuffer = [];
-    this.blueBuffer = [];
+    this.rawBuffer.reset();
+    this.filteredBuffer.reset();
+    this.redBuffer.reset();
+    this.greenBuffer.reset();
+    this.blueBuffer.reset();
     this.redDC = 0; this.redAC = 0;
     this.greenDC = 0; this.greenAC = 0;
     this.blueDC = 0; this.blueAC = 0;
-    this.sourceBuffers = { R: [], G: [], RG: [] };
+    this.sourceBuffers.R.reset();
+    this.sourceBuffers.G.reset();
+    this.sourceBuffers.RG.reset();
     this.bandpassFilter.reset();
   }
 
   reset(): void {
-    this.rawBuffer = [];
-    this.filteredBuffer = [];
-    this.redBuffer = [];
-    this.greenBuffer = [];
-    this.blueBuffer = [];
+    this.rawBuffer.reset();
+    this.filteredBuffer.reset();
+    this.redBuffer.reset();
+    this.greenBuffer.reset();
+    this.blueBuffer.reset();
     this.tileConfidence = new Array(25).fill(0);
-    this.frameIntervalBuffer = [];
+    this.frameIntervalBuffer.reset();
     this.frameCount = 0;
     this.lastLogTime = 0;
     this.lastFrameTimestamp = 0;
@@ -848,7 +858,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.blueDC = 0; this.blueAC = 0;
     this.motionScore = 0;
     this.lastAcceleration = { x: 0, y: 0, z: 0 };
-    this.sourceBuffers = { R: [], G: [], RG: [] };
+    this.sourceBuffers.R.reset();
+    this.sourceBuffers.G.reset();
+    this.sourceBuffers.RG.reset();
     this.sourceScores = { R: 0, G: 0, RG: 0 };
     this.activeSource = 'RG';
     this.lastSourceSwitch = 0;
