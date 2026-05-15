@@ -665,18 +665,23 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const greenPI = this.greenDC > 0 ? this.greenAC / this.greenDC : 0;
     const piSum = redPI + greenPI;
 
-    let greenWeight = 0.55;
-    let redWeight = 0.45;
+    let greenWeight = 0.65; // Favor Green (mejor SNR para HR)
+    let redWeight = 0.35;
 
     if (piSum > 0) {
-      greenWeight = clamp(greenPI / piSum, 0.25, 0.8);
+      greenWeight = clamp(greenPI / piSum, 0.4, 0.9);
       redWeight = 1 - greenWeight;
     }
 
-    // Clipping penalties
-    if (rawGreen > 245) { greenWeight *= 0.4; redWeight = 1 - greenWeight; }
-    if (rawRed > 245) { redWeight *= 0.4; greenWeight = 1 - redWeight; }
-    if (motionArtifact) { greenWeight = clamp(greenWeight + 0.05, 0.3, 0.8); redWeight = 1 - greenWeight; }
+    // Clipping penalties - muy agresivos para evitar picos falsos
+    if (rawGreen > 248) { greenWeight = 0.1; redWeight = 0.9; }
+    else if (rawRed > 248) { redWeight = 0.1; greenWeight = 0.9; }
+    
+    if (this.contactState === 'STABLE_CONTACT' && !motionArtifact) {
+      // En estado estable, el canal verde es el estándar de oro para BPM
+      greenWeight = clamp(greenWeight + 0.15, 0.6, 0.95);
+      redWeight = 1 - greenWeight;
+    }
 
     return rPulse * redWeight + gPulse * greenWeight;
   }

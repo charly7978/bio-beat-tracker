@@ -9,6 +9,7 @@
  * 4. Ventanas adaptativas: cortas para señal débil, largas para estable
  */
 import { clamp } from '../utils/math';
+import { RingF32 } from '../utils/RingBuffer';
 export class HeartBeatProcessor {
   private readonly MIN_PEAK_INTERVAL_MS = 330;
   private readonly MAX_PEAK_INTERVAL_MS = 2000;
@@ -43,6 +44,11 @@ export class HeartBeatProcessor {
   private cachedGateRange = 0;
   private cachedSampleRate = 30;
   private cachedPeriodicity: { bpm: number; score: number } = { bpm: 0, score: 0 };
+
+  // === ELGENDI TMA STATE ===
+  private w1Buffer: RingF32 = new RingF32(20); // Beat window (~111ms)
+  private w2Buffer: RingF32 = new RingF32(40); // Block window (~667ms)
+  private elgendiAlpha = 0.02; // Offset for threshold
 
   constructor() {
     this.setupAudio();
@@ -137,8 +143,27 @@ export class HeartBeatProcessor {
     const timeSinceLastPeak = this.lastPeakTime > 0 ? now - this.lastPeakTime : Number.MAX_SAFE_INTEGER;
     let isPeak = false;
 
-    if (timeSinceLastPeak >= this.MIN_PEAK_INTERVAL_MS) {
-      isPeak = this.detectPeakWithScoring(timeSinceLastPeak);
+    // === ELGENDI TMA PEAK DETECTION (Phase 1: Multi-window Adaptive Threshold) ===
+    const sampleRate = this.estimateSampleRate();
+    const w1Size = Math.max(3, Math.round(sampleRate * 0.111)); // 111ms window
+    const w2Size = Math.max(10, Math.round(sampleRate * 0.667)); // 667ms window
+
+    // Pre-processing for Elgendi: Squaring to emphasize peaks
+    const squared = normalizedValue * normalizedValue * (normalizedValue > 0 ? 1 : 0);
+    
+    this.w1Buffer.push(squared);
+    this.w2Buffer.push(squared);
+
+    if (this.w2Buffer.length >= w2Size && timeSinceLastPeak >= this.MIN_PEAK_INTERVAL_MS) {
+      const w1 = this.calculateMean(this.w1Buffer, w1Size);
+      const w2 = this.calculateMean(this.w2Buffer, w2Size);
+      
+      const threshold = w2 + this.elgendiAlpha * 1000; // Offset adaptativo
+
+      // Elgendi Logic: Peak candidate if W1 > Threshold
+      if (w1 > threshold) {
+        isPeak = this.detectPeakWithScoring(timeSinceLastPeak);
+      }
 
       if (isPeak) {
         if (this.lastPeakTime > 0 && timeSinceLastPeak <= this.MAX_PEAK_INTERVAL_MS) {
@@ -472,7 +497,11 @@ export class HeartBeatProcessor {
     } catch {}
   }
 
-  // clamp() importado desde utils/math.ts
+  private calculateMean(buffer: RingF32, size: number): number {
+    const data = buffer.tail(size);
+    if (data.length === 0) return 0;
+    return data.reduce((a, b) => a + b, 0) / data.length;
+  }
 
   getRRIntervals(): number[] { return [...this.rrIntervals]; }
   getLastPeakTime(): number { return this.lastPeakTime; }
@@ -494,6 +523,8 @@ export class HeartBeatProcessor {
     this.cachedGateRange = 0;
     this.cachedSampleRate = 30;
     this.cachedPeriodicity = { bpm: 0, score: 0 };
+    this.w1Buffer = new RingF32(20);
+    this.w2Buffer = new RingF32(40);
   }
 
   dispose(): void {
