@@ -30,6 +30,8 @@ export class SignalQualityIndex {
 
     if (perfusionIndex < 0.001) return 0;
     if (saturationRatio > 0.8) return 5;
+    const under = metrics.underexposureRatio ?? 0;
+    if (under > 0.75) return 4;
 
     let score = 0;
 
@@ -54,7 +56,10 @@ export class SignalQualityIndex {
     const dropPenalty = frameDropRatio * 150;
     const lowFpsPenalty = fpsEffective < 25 ? (25 - fpsEffective) * 5 : 0;
 
-    score = Math.max(0, score - motionPenalty - jitterPenalty - dropPenalty - lowFpsPenalty);
+    const agree = metrics.detectorAgreement ?? 0;
+    const agreeBonus = agree > 0 ? clamp(agree, 0, 1) * 12 : 0;
+
+    score = Math.max(0, score - motionPenalty - jitterPenalty - dropPenalty - lowFpsPenalty) + agreeBonus;
 
     // 5. Bonus por consistencia (si PI y SNR son altos)
     if (perfusionIndex > 0.008 && snrVal > 2.5) score += 15;

@@ -138,6 +138,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   // Cache: PI se calcula una sola vez por frame y se reutiliza en SQI, contact state, etc.
   private cachedPI = 0;
+  private underexposureEma = 0;
   // Cache de stats lentas (recomputadas cada N frames): evita slice+sort por frame
   // sobre ventanas estadísticas de 30-90 muestras que cambian lentamente.
   private cachedSqi = 0;
@@ -227,6 +228,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const r = this.smoothedRed;
     const g = this.smoothedGreen;
     const b = this.smoothedBlue;
+
+    const underInstant = r < 12 && g < 10 ? 1 : 0;
+    this.underexposureEma = this.underexposureEma * 0.92 + underInstant * 0.08;
     
     if (r > 253 && g > 252) rejectionStatus = "SATURATED";
     else if (r < 15 && g < 10) rejectionStatus = "UNDEREXPOSED";
@@ -284,7 +288,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       periodicity: this.calculatePeriodicity(), // Nuevo método centralizado
       motionScore: this.motionScore,
       saturationRatio: (roi.rawRed > 250 ? 1 : 0),
-      frameDropRatio: ppgPerf.snapshot().droppedEstimate / this.frameCount,
+      underexposureRatio: this.underexposureEma,
+      frameDropRatio: ppgPerf.snapshot().droppedEstimate / Math.max(1, this.frameCount),
       fpsEffective: this.estimatedSampleRate,
       timestampJitterMs: ppgPerf.snapshot().jitterMs,
     };
@@ -342,9 +347,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           sqi: this.signalQuality,
           perfusionIndex: perfusionIndex,
           snr: pulseSource.strength,
+          periodicity: this.calculatePeriodicity(),
           motionScore: this.motionScore,
           saturationRatio: (roi.rawRed > 250 ? 1 : 0),
+          underexposureRatio: this.underexposureEma,
           fpsEffective: this.estimatedSampleRate,
+          frameDropRatio: ppgPerf.snapshot().droppedEstimate / Math.max(1, this.frameCount),
           timestampJitterMs: ppgPerf.snapshot().jitterMs,
         } as SignalQualityMetrics,
       },
@@ -825,58 +833,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return maxCorr;
   }
 
-  // === SQI UNIFICADO - ÚNICA FUENTE DE VERDAD ===
-  private calculateSignalQuality(recent: number[], perfusionIndex: number): number {
-    const sortedView = Float32Array.from(recent);
-    sortedView.sort();
-    const sorted = sortedView;
-    const p10 = sorted[Math.floor((sorted.length - 1) * 0.1)] ?? 0;
-    const p90 = sorted[Math.floor((sorted.length - 1) * 0.9)] ?? 0;
-    const range = p90 - p10;
-
-    if (range < 0.3) return 5;
-
-    const mean = recent.reduce((a, b) => a + b, 0) / recent.length;
-    const variance = recent.reduce((a, v) => a + (v - mean) ** 2, 0) / recent.length;
-    const stdDev = Math.sqrt(variance);
-    const snr = range / (stdDev + 0.15);
-
-    // MEJORA: Skewness y Kurtosis (Estándares en SQI clínico)
-    let skewSum = 0;
-    let kurtSum = 0;
-    for (const v of recent) {
-      const diff = (v - mean) / (stdDev + 0.001);
-      skewSum += diff ** 3;
-      kurtSum += diff ** 4;
-    }
-    const skewness = skewSum / recent.length;
-    const kurtosis = kurtSum / recent.length;
-
-    // Normal PPG: Skewness > 0, Kurtosis ~3-5
-    const skewScore = clamp(skewness * 5, 0, 10);
-    const kurtScore = clamp((5 - Math.abs(kurtosis - 4)) * 2, 0, 10);
-
-    const snrScore = Math.min(30, snr * 10);
-    const perfusionScore = Math.min(25, perfusionIndex * 12);
-    const coverageScore = Math.min(15, this.smoothedCoverage * 25);
-    const fingerScore = Math.min(15, this.smoothedFingerScore * 22);
-    const motionPenalty = Math.min(25, this.motionScore * 20);
-
-    const baseQuality = snrScore + perfusionScore + coverageScore + fingerScore + skewScore + kurtScore - motionPenalty;
-    
-    // Bonus for stable contact + pulsatility evidence
-    const stabilityBonus = this.contactState === 'STABLE_CONTACT' ? 5 : 0;
-    const pulsatilityBonus = (this.redAC > 0 || this.greenAC > 0) ? 5 : 0;
-
-    const finalSqi = clamp(baseQuality + stabilityBonus + pulsatilityBonus, 0, 100);
-    
-    if (this.frameCount % 90 === 0) {
-      log.info(`[SQI Debug] Snr:${snr.toFixed(1)} Skew:${skewness.toFixed(2)} Kurt:${kurtosis.toFixed(2)} PI:${perfusionIndex.toFixed(2)} Final:${finalSqi.toFixed(0)}%`);
-    }
-
-    return finalSqi;
-  }
-
   private calculatePerfusionIndex(): number {
     // PI como ratio (0.0-1.0), NO porcentaje. La UI multiplica *100 para display.
     if (this.greenDC > 0) return this.greenAC / this.greenDC;
@@ -922,6 +878,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.signalQuality = 0;
     this.cachedSqi = 0;
     this.cachedPI = 0;
+    this.underexposureEma = 0;
     this.fingerConfidenceCount = 0;
     this.fingerLostCount = 0;
     this.stableContactCount = 0;

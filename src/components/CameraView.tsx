@@ -63,6 +63,13 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
       try {
         const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
         const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
+        let applied: MediaTrackConstraints | undefined;
+        const torchVerified = settings.torch === true;
+        try {
+          applied = track.getConstraints?.();
+        } catch {
+          applied = undefined;
+        }
         return {
           active: true,
           label: track.label,
@@ -72,8 +79,10 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
           supportedConstraints: Object.keys(navigator.mediaDevices.getSupportedConstraints()),
           capabilities: caps,
           settings: settings,
+          appliedConstraints: applied,
           torchSupported: !!caps.torch,
           torchActive: settings.torch === true,
+          torchApplyVerified: torchVerified,
           fpsRequested: 30,
           fpsEffective: settings.frameRate || 0,
           resolution: { width: settings.width || 0, height: settings.height || 0 },
@@ -123,7 +132,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
           advanced: [{ torch: true } as TorchCapableConstraint],
         });
         const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
-        return settings.torch !== false;
+        return settings.torch === true;
       } catch (e) {
         log.warn("Fallo al activar torch", e);
         return false;

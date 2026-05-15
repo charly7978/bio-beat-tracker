@@ -6,7 +6,10 @@ import { VitalMeasurement, MeasurementStatus, SignalQualityMetrics } from '../..
 import { CalibrationManager } from './CalibrationManager';
 import { SignalQualityIndex } from '../signal-quality/SignalQualityIndex';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import { RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
 import { RingF32 } from '../../utils/RingBuffer';
+import { clamp } from '../../utils/math';
+import { estimateRespiratoryModulationRpm } from '../signal-processing/shared/dsp';
 
 const log = createLogger('VitalSignsProcessor');
 
@@ -80,6 +83,10 @@ export class VitalSignsProcessor {
   // Historial de señal
   private readonly HISTORY_SIZE = 90;
   private signalHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
+  /** Buffer más largo para modulación respiratoria (~10 Hz efectivos desde Index). */
+  private readonly RESPIRATION_BUFFER = 320;
+  private respirationHistory: RingF32 = new RingF32(this.RESPIRATION_BUFFER);
+  private readonly VITAL_SIGNAL_ESTIMATE_HZ = 10;
   private frameCount = 0;  // Contador continuo para logging/diagnóstico
   
   // RGB para SpO2
@@ -123,6 +130,7 @@ export class VitalSignsProcessor {
       signalQuality: 0
     };
     this.signalHistory.reset();
+    this.respirationHistory.reset();
     this.stableFramesCount = 0;
     this.lastCoherentSpO2 = 0;
   }
@@ -146,6 +154,7 @@ export class VitalSignsProcessor {
 
     // Actualizar historial de señal para análisis morfológico (BP)
     this.signalHistory.push(signalValue);
+    this.respirationHistory.push(signalValue);
     // Control de calibración
     if (this.isCalibrating) {
       this.calibrationSamples++;
@@ -222,6 +231,14 @@ export class VitalSignsProcessor {
     const sqi = this.measurements.signalQuality;
     const pi = this.rgbData.greenDC > 0 ? this.rgbData.greenAC / this.rgbData.greenDC : 0;
     const isClinicallyValid = SignalQualityIndex.isClinicallyValid(sqi, pi);
+    const spo2Calib = calib.getCalibrationInfo('SPO2');
+    const bpCalib = calib.getCalibrationInfo('BP');
+
+    const respBuf = this.respirationHistory.tail(this.RESPIRATION_BUFFER);
+    const respEst =
+      isClinicallyValid && respBuf.length >= RESPIRATION_DEFAULTS.minBuffer * 0.55 && this.stableFramesCount >= RESPIRATION_DEFAULTS.minStableFrames
+        ? estimateRespiratoryModulationRpm(respBuf, this.VITAL_SIGNAL_ESTIMATE_HZ)
+        : null;
 
     const commonSQM: SignalQualityMetrics = {
       sqi,
@@ -235,52 +252,86 @@ export class VitalSignsProcessor {
       timestampJitterMs: 0
     };
 
+    const hrMinSqi = VITAL_THRESHOLDS.QUALITY.MIN_FOR_HR;
+    const hrOk = sqi >= hrMinSqi && this.lastBPM > 0 && isClinicallyValid;
+
+    const spo2Status: MeasurementStatus = !isClinicallyValid
+      ? "LOW_SIGNAL_QUALITY"
+      : spo2Calib.expired
+        ? "CALIBRATION_EXPIRED"
+        : spo2Calib.available
+          ? "VALID"
+          : "REQUIRES_CALIBRATION";
+
+    const bpStatus: MeasurementStatus = !isClinicallyValid
+      ? "LOW_SIGNAL_QUALITY"
+      : bpCalib.expired
+        ? "CALIBRATION_EXPIRED"
+        : bpCalib.available
+          ? "VALID"
+          : "REQUIRES_CALIBRATION";
+
+    const respOk = respEst && respEst.score >= 0.14;
+    const respStatus: MeasurementStatus = !isClinicallyValid
+      ? "LOW_SIGNAL_QUALITY"
+      : respBuf.length < RESPIRATION_DEFAULTS.minBuffer * 0.55 || this.stableFramesCount < RESPIRATION_DEFAULTS.minStableFrames
+        ? "INSUFFICIENT_WINDOW"
+        : respOk
+          ? "VALID"
+          : "NO_VALID_SIGNAL";
+
     const res: VitalSignsResult = {
       heartRate: {
-        name: "Heart Rate", 
-        value: sqi > 15 ? Math.round(this.lastBPM) : null,
-        unit: "bpm", 
-        timestamp: now, 
-        confidence: isClinicallyValid ? 0.98 : (sqi > 25 ? 0.7 : 0.3),
-        status: sqi < 15 ? "LOW_SIGNAL_QUALITY" : "VALID",
-        reason: sqi < 15 ? "Signal quality too low for reliable peak detection" : "Pulse detected via Elgendi TMA",
+        name: "Heart Rate",
+        value: hrOk ? Math.round(this.lastBPM) : null,
+        unit: "bpm",
+        timestamp: now,
+        confidence: hrOk ? Math.min(0.98, 0.45 + sqi / 200) : (sqi > hrMinSqi ? 0.35 : 0.12),
+        status: !hrOk && sqi < hrMinSqi ? "LOW_SIGNAL_QUALITY" : (!hrOk ? "NO_VALID_SIGNAL" : "VALID"),
+        reason: hrOk
+          ? "BPM desde ensemble Elgendi + Pan–Tompkins PPG + autocorrelación"
+          : (sqi < hrMinSqi ? "SQI insuficiente para validar picos" : "Sin consenso fiable de detectores / frecuencia"),
         signalQuality: { ...commonSQM },
         diagnostics: { bpmRaw: this.lastBPM }
       },
       spo2: {
-        name: "SpO2", 
-        value: isClinicallyValid ? Math.round(this.measurements.spo2) : null,
-        unit: "%", 
-        timestamp: now, 
-        confidence: isClinicallyValid ? 0.95 : 0.4,
-        status: !isClinicallyValid ? "LOW_SIGNAL_QUALITY" : (calib.getActiveProfile('SPO2') ? "VALID" : "REQUIRES_CALIBRATION"),
-        reason: "Beer-Lambert ratio-of-ratios",
+        name: "SpO2",
+        value: isClinicallyValid && spo2Calib.available ? Math.round(this.measurements.spo2) : null,
+        unit: "%",
+        timestamp: now,
+        confidence: isClinicallyValid && spo2Calib.available ? 0.88 : 0.25,
+        status: spo2Status,
+        reason: "Beer-Lambert ratio-of-ratios; requiere perfil de calibración vigente",
         signalQuality: { ...commonSQM },
         diagnostics: { rValue: this.rValueHistory[this.rValueHistory.length - 1] },
-        calibration: calib.getCalibrationInfo('SPO2')
+        calibration: spo2Calib
       },
       bloodPressure: {
-        name: "Blood Pressure", 
-        value: (isClinicallyValid && calib.getActiveProfile('BP')) ? { systolic: Math.round(this.measurements.systolicPressure), diastolic: Math.round(this.measurements.diastolicPressure) } : null,
-        unit: "mmHg", 
-        timestamp: now, 
-        confidence: (isClinicallyValid && this.lastBPConfidence === 'HIGH') ? 0.92 : 0.4,
-        status: !isClinicallyValid ? "LOW_SIGNAL_QUALITY" : (calib.getActiveProfile('BP') ? "VALID" : "REQUIRES_CALIBRATION"),
-        reason: "Pulse Wave Analysis (PWA) from morphological features",
+        name: "Blood Pressure",
+        value: (isClinicallyValid && bpCalib.available && this.lastBPConfidence !== 'INSUFFICIENT')
+          ? { systolic: Math.round(this.measurements.systolicPressure), diastolic: Math.round(this.measurements.diastolicPressure) }
+          : null,
+        unit: "mmHg",
+        timestamp: now,
+        confidence: (isClinicallyValid && bpCalib.available && this.lastBPConfidence === 'HIGH') ? 0.9 : 0.28,
+        status: bpStatus,
+        reason: "PWA morfológica; requiere calibración individual vigente con tensiómetro",
         signalQuality: { ...commonSQM },
         diagnostics: { featureQuality: this.lastBPFeatureQuality },
-        calibration: calib.getCalibrationInfo('BP')
+        calibration: bpCalib
       },
       respiration: {
-        name: "Respiration", 
-        value: null, 
-        unit: "rpm", 
-        timestamp: now, 
-        confidence: 0,
-        status: "INSUFFICIENT_WINDOW", 
-        reason: "Respiratory rate extraction requires 45s of stable signal",
-        signalQuality: { ...commonSQM }, 
-        diagnostics: {}
+        name: "Respiration",
+        value: respOk ? Math.round(respEst!.rpm) : null,
+        unit: "rpm",
+        timestamp: now,
+        confidence: respOk ? clamp(respEst!.score, 0, 1) : 0,
+        status: respStatus,
+        reason: respOk
+          ? "Modulación de amplitud PPG (banda respiratoria)"
+          : "Ventana o estabilidad insuficiente para modulación respiratoria",
+        signalQuality: { ...commonSQM },
+        diagnostics: { bufferSamples: respBuf.length, score: respEst?.score }
       },
       arrhythmia: {
         name: "Pulse Regularity", 
@@ -508,6 +559,7 @@ export class VitalSignsProcessor {
   reset(): VitalSignsResult | null {
     const result = this.getFormattedResult();
     this.signalHistory.reset();
+    this.respirationHistory.reset();
     this.validPulseCount = 0;
     this.arrhythmiaProcessor.reset();
     this.measurements.arrhythmiaCount = 0;
@@ -519,6 +571,7 @@ export class VitalSignsProcessor {
 
   fullReset(): void {
     this.signalHistory.reset();
+    this.respirationHistory.reset();
     this.validPulseCount = 0;
     this.rValueHistory = [];
     this.frameCount = 0;

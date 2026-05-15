@@ -27,10 +27,14 @@ interface PPGSignalMeterProps {
   arrhythmiaCount?: number;
   diagnostics?: {
     status?: string;
+    message?: string;
     sqm?: {
       fpsEffective?: number;
       timestampJitterMs?: number;
+      underexposureRatio?: number;
     };
+    /** Telemetría del ensemble Elgendi + Pan–Tompkins (desde HeartBeatProcessor) */
+    peakDetection?: Record<string, unknown>;
   };
 }
 
@@ -203,7 +207,7 @@ const PPGSignalMeter = ({
       pendingTrendArrRef.current = false;
       smoothedBpmRef.current = 0;
     }
-  }, [value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, arrhythmiaCount, isMonitoring]);
+  }, [value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, arrhythmiaCount, isMonitoring, diagnostics]);
 
   // Pulse animation on peak (UI overlay only)
   useEffect(() => {
@@ -550,14 +554,29 @@ const PPGSignalMeter = ({
       ctx.fillText(`⚠ ARRITMIA DETECTADA · ${count} evento${count === 1 ? '' : 's'}`, metrics.w / 2, metrics.y + 10);
     }
 
-    // TELEMETRY (Phase 11)
+    // TELEMETRY (Phase 11) + ensemble de picos
     const fps = propsRef.current.diagnostics?.sqm?.fpsEffective || 0;
     const jitter = propsRef.current.diagnostics?.sqm?.timestampJitterMs || 0;
+    const pd = propsRef.current.diagnostics?.peakDetection as
+      | { confidence?: number; agreement?: { elgendi?: number; panTompkins?: number } }
+      | undefined;
     if (fps > 0) {
       ctx.font = `8px ${FONT_MONO}`;
       ctx.fillStyle = COLORS.TEXT_DIM;
       ctx.textAlign = 'right';
       ctx.fillText(`${fps.toFixed(1)} FPS · Δ${jitter.toFixed(1)}ms`, metrics.w - 12, metrics.y + 12);
+    }
+    if (pd && typeof pd.confidence === 'number' && pd.confidence > 0) {
+      const ae = pd.agreement?.elgendi ?? 0;
+      const ap = pd.agreement?.panTompkins ?? 0;
+      ctx.font = `8px ${FONT_MONO}`;
+      ctx.fillStyle = COLORS.TEXT_INFO;
+      ctx.textAlign = 'right';
+      ctx.fillText(
+        `Picos ensemble ${(pd.confidence * 100).toFixed(0)}% · E${(ae * 100).toFixed(0)}/PT${(ap * 100).toFixed(0)}`,
+        metrics.w - 12,
+        metrics.y + (fps > 0 ? 24 : 12)
+      );
     }
   }, [isMonitoring]);
 

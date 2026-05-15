@@ -87,10 +87,19 @@ export class CalibrationManager {
   }
 
   public getCalibrationInfo(type: CalibrationType): CalibrationInfo {
-    const profile = this.getActiveProfile(type);
+    let profile = this.getActiveProfile(type);
+    if (!profile) {
+      const candidates = Array.from(this.profiles.values())
+        .filter((p) => p.type === type)
+        .sort((a, b) => b.createdAt - a.createdAt);
+      profile = candidates[0];
+    }
+    const now = Date.now();
+    const expired = !!(profile && profile.expiresAt <= now);
     return {
       required: type === 'BP' || type === 'SPO2',
-      available: !!profile,
+      available: !!profile && !expired,
+      expired,
       profileId: profile?.id,
       lastCalibrationAt: profile?.createdAt,
       expiresAt: profile?.expiresAt,

@@ -614,20 +614,24 @@ const Index = () => {
     const signalValue = lastSignal.filteredValue;
     const contactState = (lastSignal as any).contactState || (lastSignal.fingerDetected ? 'STABLE_CONTACT' : 'NO_CONTACT');
     const diag = lastSignal.diagnostics;
-    
-    // Pass diagnostics to state for UI display
-    setCurrentDiagnostics(diag);
-    const hasUsableContact = contactState !== 'NO_CONTACT' && lastSignal.fingerDetected;
-    const stableHumanSignal =
-      hasUsableContact &&
-      (lastSignal.quality || 0) >= 3 &&
-      (lastSignal.perfusionIndex || 0) >= 0.0008;
 
     const heartBeatResult = processHeartBeat(
       signalValue,
       contactState,
       lastSignal.timestamp
     );
+
+    const mergedDiag =
+      diag && typeof diag === 'object'
+        ? { ...diag, peakDetection: heartBeatResult.ensembleDiagnostics }
+        : { peakDetection: heartBeatResult.ensembleDiagnostics };
+    setCurrentDiagnostics(mergedDiag);
+
+    const hasUsableContact = contactState !== 'NO_CONTACT' && lastSignal.fingerDetected;
+    const stableHumanSignal =
+      hasUsableContact &&
+      (lastSignal.quality || 0) >= 3 &&
+      (lastSignal.perfusionIndex || 0) >= 0.0008;
 
     const nowT = performance.now();
     if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {

@@ -16,8 +16,10 @@ export type MeasurementStatus =
   | "LOW_FPS"
   | "TORCH_UNAVAILABLE"
   | "REQUIRES_CALIBRATION"
+  | "CALIBRATION_EXPIRED"
   | "INSUFFICIENT_WINDOW"
-  | "NO_VALID_SIGNAL";
+  | "NO_VALID_SIGNAL"
+  | "ERROR";
 
 export interface SignalQualityMetrics {
   sqi: number;           // 0..100
@@ -26,14 +28,23 @@ export interface SignalQualityMetrics {
   periodicity: number | null;
   motionScore: number | null;
   saturationRatio: number;
+  /** Fracción de frames con canal muy oscuro (subexposición) */
+  underexposureRatio?: number;
   frameDropRatio: number;
   fpsEffective: number;
   timestampJitterMs: number;
+  /** Confianza interna del detector Elgendi (0–1), si disponible */
+  elgendiConfidence?: number | null;
+  /** Confianza interna del detector Pan–Tompkins PPG (0–1) */
+  panTompkinsConfidence?: number | null;
+  /** Acuerdo entre detectores de picos (0–1) */
+  detectorAgreement?: number | null;
 }
 
 export interface CalibrationInfo {
   required: boolean;
   available: boolean;
+  expired?: boolean;
   profileId?: string;
   lastCalibrationAt?: number;
   expiresAt?: number;
@@ -59,12 +70,37 @@ export interface DeviceCapabilityReport {
   supportedConstraints: string[];
   capabilities: MediaTrackCapabilities;
   settings: MediaTrackSettings;
+  appliedConstraints?: MediaTrackConstraints;
   torchSupported: boolean;
   torchActive: boolean;
+  torchApplyVerified?: boolean;
   fpsRequested: number;
   fpsEffective: number;
+  fpsMeasured?: number;
   resolution: { width: number; height: number };
   exposureMode?: string;
   whiteBalanceMode?: string;
   focusMode?: string;
+}
+
+/** Resultado fusionado del ensemble de picos PPG (auditable). */
+export interface PeakDetectionResult {
+  peaks: number[];
+  peakTimes: number[];
+  rrIntervalsMs: number[];
+  bpmInstant: number | null;
+  bpmStable: number | null;
+  confidence: number;
+  agreement: {
+    elgendi: number;
+    panTompkins: number;
+    spectral: number;
+    autocorrelation: number;
+  };
+  rejectedPeaks: Array<{
+    index: number;
+    reason: string;
+    detector: string;
+  }>;
+  diagnostics: Record<string, unknown>;
 }

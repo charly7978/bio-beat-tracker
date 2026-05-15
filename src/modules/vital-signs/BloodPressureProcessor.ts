@@ -185,7 +185,7 @@ export class BloodPressureProcessor {
   }
 
   /**
-   * FIDELITY MODEL V5.2 - MAP/PP SYNTHESIS // anti-sim-allow: reason="Clinical BP calculation model name" ref="BP-5.2"
+   * FIDELITY MODEL V5.2 — fusión MAP/PP (modelo hemodinámico) // anti-sim-allow: reason="Clinical BP calculation model name" ref="BP-5.2"
    */
   private calculateAdvancedBP(f: MedianFeatures, hr: number, rmssd: number): { sbp: number; dbp: number } {
     // 1. Estimar Presión Media (MAP) - Basada en Resistencia y Gasto Medio
