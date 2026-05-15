@@ -566,7 +566,7 @@ export class VitalSignsProcessor {
     this.measurements.arrhythmiaStatus = "SIN ARRITMIAS|0";
     this.measurements.lastArrhythmiaData = null;
     this.rValueHistory = [];
-    return result.spo2.value !== 0 ? result : null;
+    return result;
   }
 
   fullReset(): void {

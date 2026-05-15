@@ -18,12 +18,22 @@ export const useHealthAnalysis = () => {
     const { vitalSigns, quality } = data;
     const hr = vitalSigns.heartRate.value;
 
-    if (hr <= 0 && vitalSigns.spo2.value <= 0) {
+    if ((hr == null || hr <= 0) && (vitalSigns.spo2.value == null || vitalSigns.spo2.value <= 0)) {
       toast({
         title: "Datos insuficientes",
         description: "Se necesitan datos de medición válidos para el análisis.",
         variant: "destructive",
         duration: 3000
+      });
+      return;
+    }
+
+    if (vitalSigns.heartRate.status !== 'VALID' || quality < 40) {
+      toast({
+        title: "Calidad insuficiente",
+        description: "El análisis IA requiere HR en estado VALID y señal razonablemente estable.",
+        variant: "destructive",
+        duration: 3500
       });
       return;
     }

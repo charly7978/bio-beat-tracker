@@ -47,6 +47,11 @@ function validateInput(data: unknown): { valid: boolean; error?: string; parsed?
     return { valid: false, error: "diastolic must be between 30 and 200" };
   }
 
+  const quality = Number(d.quality) || 0;
+  if (quality < 40) {
+    return { valid: false, error: "quality too low for analysis (minimum 40)" };
+  }
+
   return {
     valid: true,
     parsed: {
@@ -55,7 +60,7 @@ function validateInput(data: unknown): { valid: boolean; error?: string; parsed?
       systolic,
       diastolic,
       arrhythmiaCount: Number(d.arrhythmiaCount) || 0,
-      quality: Number(d.quality) || 0,
+      quality,
       confidence: (["HIGH","MEDIUM","LOW","INVALID","INSUFFICIENT"] as const).includes(d.confidence as never) ? (d.confidence as string) : undefined,
     },
   };
