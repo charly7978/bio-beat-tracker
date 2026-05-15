@@ -140,9 +140,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private cachedSqi = 0;
 
   // === MULTI-SOURCE RANKING (CHROM eliminado — amplifica ruido sin dedo) ===
-  private sourceBuffers: { [key: string]: number[] } = {};
+  private readonly SOURCE_BUFFER_SIZE = 120;
+  private readonly sourceBuffers: { [key: string]: RingF32 } = {
+    R: new RingF32(this.SOURCE_BUFFER_SIZE),
+    G: new RingF32(this.SOURCE_BUFFER_SIZE),
+    RG: new RingF32(this.SOURCE_BUFFER_SIZE),
+  };
   private activeSource: string = 'RG';
-  private sourceScores: { [key: string]: number } = {};
+  private sourceScores: { [key: string]: number } = { R: 0, G: 0, RG: 0 };
   private lastSourceSwitch = 0;
   private readonly SOURCE_HYSTERESIS_MS = 2000;
 
@@ -151,8 +156,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     public onError?: (error: ProcessingError) => void
   ) {
     this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate);
-    this.sourceBuffers = { R: [], G: [], RG: [] };
-    this.sourceScores = { R: 0, G: 0, RG: 0 };
   }
 
   async initialize(): Promise<void> {
