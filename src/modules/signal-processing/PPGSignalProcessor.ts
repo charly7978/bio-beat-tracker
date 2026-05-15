@@ -748,8 +748,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     // Gate: red must dominate (hemoglobin signature)
     if (redDominance < 15) return 0;
 
-    const recent = this.filteredBuffer.slice(-90);
-    const sorted = [...recent].sort((a, b) => a - b);
+    const recent = this.filteredBuffer.tail(90);
+    const sortedView = this.sortedScratch.subarray(0, recent.length);
+    for (let i = 0; i < recent.length; i++) sortedView[i] = recent[i];
+    sortedView.sort();
+    const sorted = sortedView;
     const p10 = sorted[Math.floor((sorted.length - 1) * 0.1)] ?? 0;
     const p90 = sorted[Math.floor((sorted.length - 1) * 0.9)] ?? 0;
     const range = p90 - p10;
