@@ -8,6 +8,7 @@
  * 3. Scoring de candidatos de pico por prominencia + pendiente + consistencia RR
  * 4. Ventanas adaptativas: cortas para señal débil, largas para estable
  */
+import { clamp } from '../utils/math';
 import { createLogger } from '../utils/logger';
 import { RingF32 } from '../utils/RingBuffer';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';

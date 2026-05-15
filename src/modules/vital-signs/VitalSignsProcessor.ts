@@ -122,7 +122,7 @@ export class VitalSignsProcessor {
       lastArrhythmiaData: null,
       signalQuality: 0
     };
-    this.signalHistory = [];
+    this.signalHistory.reset();
     this.stableFramesCount = 0;
     this.lastCoherentSpO2 = 0;
   }
