@@ -2,6 +2,7 @@ import type { ProcessedSignal, ProcessingError, SignalProcessor as SignalProcess
 import { BandpassFilter } from './BandpassFilter';
 import { createLogger, ppgPerf } from '../../utils/logger';
 import { clamp } from '../../utils/math';
+import { RingF32 } from '../../utils/RingBuffer';
 import {
   DEFAULT_BACKPRESSURE_CONFIG,
   sanitizeBackpressureConfig,
