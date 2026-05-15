@@ -16,9 +16,10 @@ interface RRData {
  */
 export class ArrhythmiaProcessor {
   // Configuration based on Harvard Medical School research on HRV - AJUSTADA PARA MAYOR ESPECIFICIDAD
-  private readonly RR_WINDOW_SIZE = 10;
-  private readonly RMSSD_THRESHOLD = 55;
-  private readonly ARRHYTHMIA_LEARNING_PERIOD = 9000;
+  private readonly RR_WINDOW_SIZE = 8; // Bajado de 10 para mayor reactividad
+  private readonly RMSSD_THRESHOLD = 48; // Bajado de 55 para captar arritmias más leves
+  private readonly ARRHYTHMIA_LEARNING_PERIOD = 8000;
+
 
   // Advanced detection parameters - AJUSTADOS PARA MENOS FALSOS POSITIVOS
   private readonly PNNX_THRESHOLD = 0.30;
@@ -62,6 +63,7 @@ export class ArrhythmiaProcessor {
    */
   public processRRData(rrData?: RRData): {
     arrhythmiaStatus: string;
+    arrhythmiaCount: number;
     lastArrhythmiaData: { timestamp: number; rmssd: number; rrVariation: number; } | null;
   } {
     const currentTime = typeof rrData?.timestampNow === 'number' && Number.isFinite(rrData.timestampNow)
@@ -80,13 +82,15 @@ export class ArrhythmiaProcessor {
       
       if (!this.isLearningPhase && hasFreshRhythm && this.rrIntervals.length >= this.RR_WINDOW_SIZE) {
         this.detectArrhythmia();
-      } else {
+      } else if (!hasFreshRhythm) {
+        // Solo resetear si realmente perdimos el ritmo por mucho tiempo (>2.5s)
         this.arrhythmiaDetected = false;
       }
     } else {
-      this.arrhythmiaDetected = false;
+      // No resetear inmediatamente para evitar parpadeos si rrData falla un solo frame
       this.lastPeakTime = null;
     }
+
 
     // Check if learning phase is complete
     const timeSinceStart = currentTime - this.measurementStartTime;
@@ -99,10 +103,11 @@ export class ArrhythmiaProcessor {
     if (this.isLearningPhase) {
       arrhythmiaStatus = "CALIBRANDO...";
     } else if (this.arrhythmiaDetected) {
-      arrhythmiaStatus = `ARRITMIA DETECTADA|${this.arrhythmiaCount}`;
+      arrhythmiaStatus = "ARRITMIA DETECTADA";
     } else {
-      arrhythmiaStatus = `SIN ARRITMIAS|${this.arrhythmiaCount}`;
+      arrhythmiaStatus = "RITMO NORMAL";
     }
+
 
     const lastArrhythmiaData = this.arrhythmiaDetected ? {
       timestamp: currentTime,
@@ -110,7 +115,11 @@ export class ArrhythmiaProcessor {
       rrVariation: this.lastRRVariation,
     } : null;
 
-    return { arrhythmiaStatus, lastArrhythmiaData };
+    return { 
+      arrhythmiaStatus, 
+      arrhythmiaCount: this.arrhythmiaCount,
+      lastArrhythmiaData 
+    };
   }
 
   /**
@@ -173,14 +182,15 @@ export class ArrhythmiaProcessor {
 
     // Evidence-based decision: require strong variability + sustained irregularity + secondary confirmation
     const strongVariability = rmssd > this.RMSSD_THRESHOLD && coefficientOfVariation > 0.10 && rrVariation > 0.10;
-    const nonlinearSupport = this.shannonEntropy > this.SHANNON_ENTROPY_THRESHOLD && this.pnnX > this.PNNX_THRESHOLD;
-    const entropySupport = this.sampleEntropy > this.SAMPLE_ENTROPY_THRESHOLD && outlierCount >= 3;
-    const sustainedIrregularity = abruptDiffCount >= 3 || outlierCount >= 3 || this.detectIrregularSequence(validRRs.slice(-5));
-    const isolatedOutlierPattern = rrVariation > 0.22 && outlierCount >= 2;
+    const nonlinearSupport = this.shannonEntropy > this.SHANNON_ENTROPY_THRESHOLD || this.pnnX > this.PNNX_THRESHOLD;
+    const entropySupport = this.sampleEntropy > this.SAMPLE_ENTROPY_THRESHOLD && outlierCount >= 2;
+    const sustainedIrregularity = abruptDiffCount >= 2 || outlierCount >= 2 || this.detectIrregularSequence(validRRs.slice(-5));
+    const isolatedOutlierPattern = rrVariation > 0.20 && outlierCount >= 2;
 
-    const newArrhythmiaState = strongVariability && sustainedIrregularity && (
-      nonlinearSupport || entropySupport || isolatedOutlierPattern
+    const newArrhythmiaState = (strongVariability || nonlinearSupport) && (
+      sustainedIrregularity || entropySupport || isolatedOutlierPattern
     );
+
 
     // Notificar cambios en el estado de arritmia
     if (newArrhythmiaState !== this.arrhythmiaDetected) {

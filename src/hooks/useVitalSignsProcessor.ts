@@ -41,6 +41,8 @@ export const useVitalSignsProcessor = () => {
   
   const processSignal = useCallback((
     value: number, 
+    quality: number,
+    bpm: number,
     rrData?: { intervals: number[], lastPeakTime: number | null, timestampNow?: number }
   ): VitalSignsResult => {
     const defaultResult: VitalSignsResult = {
@@ -57,7 +59,7 @@ export const useVitalSignsProcessor = () => {
     
     if (!processorRef.current) return defaultResult;
 
-    const result = processorRef.current.processSignal(value, rrData);
+    const result = processorRef.current.processSignal(value, quality, bpm, rrData);
     
     // Guardar la última ventana realmente válida para cierre/exportación
     if (

@@ -319,7 +319,7 @@ export class HeartBeatProcessor {
   private updateThreshold(range: number, periodicityScore: number): void {
     const base = periodicityScore > 0.35 ? 3.0 : 4.0;
     const target = clamp(base + range * 0.3, 2.5, 7.5);
-    this.peakThreshold = this.peakThreshold * 0.8 + target * 0.2;
+    this.peakThreshold = this.peakThreshold * 0.9 + target * 0.1;
   }
 
   private getExpectedRR(): number {

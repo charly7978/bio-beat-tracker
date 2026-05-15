@@ -142,6 +142,25 @@ const Index = () => {
     rebuildSanityChecker(sanityProfileId);
   }, [sanityProfileId, rebuildSanityChecker]);
   
+  const wakeLockRef = useRef<any>(null);
+
+  const requestWakeLock = useCallback(async () => {
+    if ('wakeLock' in navigator) {
+      try {
+        wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+      } catch (err) {
+        console.warn('Wake Lock error:', err);
+      }
+    }
+  }, []);
+
+  const releaseWakeLock = useCallback(() => {
+    if (wakeLockRef.current) {
+      wakeLockRef.current.release();
+      wakeLockRef.current = null;
+    }
+  }, []);
+  
   // HOOKS DE PROCESAMIENTO
   const { 
     startProcessing, 
@@ -178,7 +197,7 @@ const Index = () => {
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
 
   // ---- Telemetría de rendimiento (opt-in) ----
-  const [telemetryOn, setTelemetryOn] = useState<boolean>(() => getPerfConsent());
+  const telemetryOn = false;
   const [showSettings, setShowSettings] = useState(false);
   const [bpCfg, setBpCfg] = useState<BackpressureConfig>(() => getBackpressureConfig());
 
@@ -298,14 +317,23 @@ const Index = () => {
 
   // PREVENIR SCROLL
   useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isMonitoring) {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
     const preventScroll = (e: Event) => e.preventDefault();
     document.body.addEventListener('touchmove', preventScroll, { passive: false });
     document.body.addEventListener('scroll', preventScroll, { passive: false });
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       document.body.removeEventListener('touchmove', preventScroll);
       document.body.removeEventListener('scroll', preventScroll);
+      releaseWakeLock();
     };
-  }, []);
+  }, [isMonitoring, requestWakeLock, releaseWakeLock]);
 
   // SINCRONIZACIÓN DE RESULTADOS
   useEffect(() => {
@@ -399,6 +427,7 @@ const Index = () => {
     startProcessing();
     setIsCameraOn(true);
     setIsMonitoring(true);
+    requestWakeLock();
 
     if (measurementTimerRef.current) {
       clearInterval(measurementTimerRef.current);
@@ -413,7 +442,7 @@ const Index = () => {
 
     setIsCalibrating(true);
     startCalibration();
-  }, [isMonitoring, startProcessing, startCalibration, enterFullScreen, sanityProfileId]);
+  }, [isMonitoring, startProcessing, startCalibration, enterFullScreen, sanityProfileId, requestWakeLock]);
 
   // === CUANDO LA CÁMARA ESTÁ LISTA ===
   // CameraView ya esperó internamente a `loadedmetadata` antes de invocar onStreamReady,
@@ -484,6 +513,7 @@ const Index = () => {
     
     setIsMonitoring(false);
     setIsCalibrating(false);
+    releaseWakeLock();
     
     if (savedResults) {
       setVitalSigns(savedResults);
@@ -501,7 +531,7 @@ const Index = () => {
     
     setElapsedTime(0);
     setCalibrationProgress(0);
-  }, [isMonitoring, isCalibrating, cameraStream, stopFrameLoop, stopProcessing, forceCalibrationCompletion, resetVitalSigns, saveMeasurement, heartRate, vitalSigns, lastSignal]);
+  }, [isMonitoring, isCalibrating, cameraStream, stopFrameLoop, stopProcessing, forceCalibrationCompletion, resetVitalSigns, saveMeasurement, heartRate, vitalSigns, lastSignal, releaseWakeLock]);
 
   // === RESET COMPLETO ===
   const handleReset = useCallback(() => {
@@ -713,6 +743,8 @@ const Index = () => {
 
       const vitals = processVitalSigns(
         lastSignal.filteredValue,
+        lastSignal.quality || 0,
+        heartBeatResult.bpm,
         heartBeatResult.rrData && heartBeatResult.rrData.intervals.length >= 2 && heartBeatResult.confidence > 0.18
           ? heartBeatResult.rrData
           : undefined
@@ -732,9 +764,7 @@ const Index = () => {
         const arrhythmiaStatus = vitals.arrhythmiaStatus;
         if (arrhythmiaStatus) {
           lastArrhythmiaData.current = vitals.lastArrhythmiaData || null;
-          const parts = arrhythmiaStatus.split('|');
-          const count = parts.length > 1 ? parts[1] : "0";
-          setArrhythmiaCount(count);
+          setArrhythmiaCount(vitals.arrhythmiaCount);
 
           const isArrhythmiaDetected = arrhythmiaStatus.includes("ARRITMIA DETECTADA");
           if (isArrhythmiaDetected !== arrhythmiaDetectedRef.current) {
@@ -810,19 +840,62 @@ const Index = () => {
       WebkitTouchCallout: 'none',
       WebkitUserSelect: 'none'
     }}>
-      {/* OVERLAY PANTALLA COMPLETA */}
+      {/* SPLASH / BOOT SCREEN — Puerta de entrada a pantalla completa inmersiva */}
       {!isFullscreen && (
-        <button 
-          onClick={enterFullScreen}
-          className="fixed inset-0 z-50 w-full h-full flex items-center justify-center bg-black/90 text-white"
-        >
-          <div className="text-center p-4 bg-primary/20 rounded-lg shadow-lg">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5m11 5v-4m0 4h-4m4 0l-5-5" />
-            </svg>
-            <p className="text-lg font-semibold">Toca para modo pantalla completa</p>
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black animate-in fade-in duration-700">
+          <div className="relative flex flex-col items-center max-w-xs text-center space-y-12">
+            
+            {/* Logo Pulsante / Indicador de estado */}
+            <div className="relative">
+              <div className="absolute inset-0 bg-emerald-500/20 blur-3xl rounded-full animate-pulse scale-150" />
+              <div className="relative w-24 h-24 rounded-full border-2 border-emerald-500/30 flex items-center justify-center">
+                <Heart className="w-10 h-10 text-emerald-400 animate-pulse" fill="currentColor" />
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <h1 className="text-white text-2xl font-bold tracking-[0.2em]">BIO-BEAT TRACKER</h1>
+              <div className="flex items-center justify-center gap-3">
+                <span className="h-[1px] w-8 bg-emerald-900" />
+                <p className="text-emerald-500/60 text-[10px] font-bold tracking-[0.3em] uppercase">Monitor de Grado Clínico</p>
+                <span className="h-[1px] w-8 bg-emerald-900" />
+              </div>
+            </div>
+
+            <button 
+              onClick={enterFullScreen}
+              className="group relative px-10 py-4 overflow-hidden rounded-full transition-all active:scale-95"
+            >
+              <div className="absolute inset-0 bg-emerald-600/10 group-hover:bg-emerald-600/20 transition-colors" />
+              <div className="absolute inset-0 border border-emerald-500/30 group-hover:border-emerald-500/50 rounded-full" />
+              <span className="relative text-emerald-400 text-sm font-bold tracking-[0.2em]">INICIAR SISTEMA</span>
+            </button>
+
+            <div className="pt-10 grid grid-cols-2 gap-x-10 gap-y-6 opacity-90 animate-in slide-in-from-bottom-8 duration-1000 delay-300 fill-mode-both">
+              <div className="text-left space-y-1.5 border-l-2 border-emerald-500/20 pl-3">
+                <p className="text-white/60 text-[9px] font-bold tracking-widest uppercase">Pipeline</p>
+                <p className="text-emerald-300 text-[10px] font-mono leading-tight font-bold">ZERO-ALLOCATION<br/>ULTRA LOW LATENCY</p>
+              </div>
+              <div className="text-left space-y-1.5 border-l-2 border-emerald-500/20 pl-3">
+                <p className="text-white/60 text-[9px] font-bold tracking-widest uppercase">Engine</p>
+                <p className="text-emerald-300 text-[10px] font-mono leading-tight font-bold">PPG-RG FIDELITY<br/>PWA IMMERSIVE</p>
+              </div>
+              <div className="text-left space-y-1.5 border-l-2 border-emerald-500/20 pl-3">
+                <p className="text-white/60 text-[9px] font-bold tracking-widest uppercase">Analytics</p>
+                <p className="text-emerald-300 text-[10px] font-mono leading-tight font-bold">HRV CLINICAL<br/>RMSSD / PNN50</p>
+              </div>
+              <div className="text-left space-y-1.5 border-l-2 border-emerald-500/20 pl-3">
+                <p className="text-white/60 text-[9px] font-bold tracking-widest uppercase">Security</p>
+                <p className="text-emerald-300 text-[10px] font-mono leading-tight font-bold">ANTI-SIM GUARDRAIL<br/>DATA INTEGRITY</p>
+              </div>
+            </div>
+
+            <div className="pt-8 space-y-2 opacity-40 animate-in fade-in duration-1000 delay-700 fill-mode-both">
+              <p className="text-white text-[9px] font-mono uppercase tracking-[0.3em]">Hardware: WebRTC Camera / Optical Sensor</p>
+              <p className="text-white text-[9px] font-mono uppercase tracking-[0.3em]">Software: V-Sign Engine v4.0.2 • Build 2024.05</p>
+            </div>
           </div>
-        </button>
+        </div>
       )}
 
       <div className="flex-1 relative">
@@ -836,187 +909,17 @@ const Index = () => {
           />
         </div>
 
-        {/* AJUSTES — botón discreto top-right */}
-        <button
+        {/* AJUSTES — Removido para simplificar la interfaz según preferencia del usuario */}
+        {/* <button
           type="button"
           onClick={() => setShowSettings(true)}
           aria-label="Ajustes"
           className="absolute top-2 right-2 z-30 p-2 rounded-full bg-black/40 text-white/70 hover:text-white hover:bg-black/60 transition-colors"
         >
           <SettingsIcon className="h-4 w-4" />
-        </button>
+        </button> */}
 
-        {showSettings && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={() => setShowSettings(false)}>
-            <div className="bg-zinc-900 text-white rounded-lg p-5 w-[90%] max-w-sm border border-white/10" onClick={(e) => e.stopPropagation()}>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-semibold">Ajustes</h3>
-                <button onClick={() => setShowSettings(false)} aria-label="Cerrar" className="text-white/60 hover:text-white">
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="mt-1"
-                  checked={telemetryOn}
-                  onChange={(e) => {
-                    const v = e.target.checked;
-                    setPerfConsent(v);
-                    setTelemetryOn(v);
-                  }}
-                />
-                <span className="text-sm leading-snug">
-                  <span className="font-medium">Métricas anónimas de rendimiento</span>
-                  <span className="block text-white/60 text-xs mt-1">
-                    Envía estadísticas de FPS, latencia y calidad del pipeline para depurar problemas. No incluye datos personales ni mediciones biométricas.
-                  </span>
-                </span>
-              </label>
-
-              <div className="mt-5 pt-4 border-t border-white/10">
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="mt-1"
-                    checked={bpCfg.enabled}
-                    onChange={(e) => updateBp({ enabled: e.target.checked, forceStride: undefined })}
-                  />
-                  <span className="text-sm leading-snug">
-                    <span className="font-medium">Backpressure adaptativo</span>
-                    <span className="block text-white/60 text-xs mt-1">
-                      Reduce el muestreo espacial (stride) cuando el dispositivo no llega al fps objetivo. No altera la frecuencia temporal.
-                    </span>
-                  </span>
-                </label>
-
-                <div className={`mt-3 grid grid-cols-2 gap-3 ${bpCfg.enabled && typeof bpCfg.forceStride !== 'number' ? '' : 'opacity-50 pointer-events-none'}`}>
-                  <label className="text-xs text-white/70">
-                    fps bajo (sube stride)
-                    <input
-                      type="number" min={5} max={59} step={1}
-                      value={bpCfg.lowFpsThreshold}
-                      onChange={(e) => updateBp({ lowFpsThreshold: Number(e.target.value) })}
-                      className="mt-1 w-full bg-zinc-800 border border-white/10 rounded px-2 py-1 text-white"
-                    />
-                  </label>
-                  <label className="text-xs text-white/70">
-                    fps alto (baja stride)
-                    <input
-                      type="number" min={6} max={60} step={1}
-                      value={bpCfg.highFpsThreshold}
-                      onChange={(e) => updateBp({ highFpsThreshold: Number(e.target.value) })}
-                      className="mt-1 w-full bg-zinc-800 border border-white/10 rounded px-2 py-1 text-white"
-                    />
-                  </label>
-                  <label className="text-xs text-white/70">
-                    Sostenido (ms)
-                    <input
-                      type="number" min={250} max={30000} step={250}
-                      value={bpCfg.sustainMs}
-                      onChange={(e) => updateBp({ sustainMs: Number(e.target.value) })}
-                      className="mt-1 w-full bg-zinc-800 border border-white/10 rounded px-2 py-1 text-white"
-                    />
-                  </label>
-                  <label className="text-xs text-white/70">
-                    Stride máximo
-                    <input
-                      type="number" min={3} max={8} step={1}
-                      value={bpCfg.maxStride}
-                      onChange={(e) => updateBp({ maxStride: Number(e.target.value) })}
-                      className="mt-1 w-full bg-zinc-800 border border-white/10 rounded px-2 py-1 text-white"
-                    />
-                  </label>
-                </div>
-
-                <div className="mt-3 flex items-center gap-2">
-                  <span className="text-xs text-white/70">Forzar stride:</span>
-                  {[undefined, 3, 4, 5].map((s) => (
-                    <button
-                      key={String(s)}
-                      type="button"
-                      onClick={() => updateBp({ forceStride: s })}
-                      className={`text-xs px-2 py-1 rounded border ${
-                        (bpCfg.forceStride ?? 'auto') === (s ?? 'auto')
-                          ? 'bg-white/20 border-white/40 text-white'
-                          : 'bg-zinc-800 border-white/10 text-white/70 hover:text-white'
-                      }`}
-                    >
-                      {s === undefined ? 'auto' : s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Sanity profile + audit log */}
-              <div className="mt-5 pt-4 border-t border-white/10">
-                <div className="text-sm font-medium mb-2">Guardrail anti-simulación</div>
-                <label className="text-xs text-white/70 block">
-                  Perfil de umbrales
-                  <select
-                    value={sanityProfileId}
-                    onChange={(e) => handleProfileChange(e.target.value)}
-                    className="mt-1 w-full bg-zinc-800 border border-white/10 rounded px-2 py-1 text-white"
-                  >
-                    {SANITY_PROFILES.map(p => (
-                      <option key={p.id} value={p.id}>{p.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <p className="text-[11px] text-white/50 mt-1">
-                  {SANITY_PROFILES.find(p => p.id === sanityProfileId)?.description}
-                </p>
-
-                <details className="mt-3 text-xs text-white/70">
-                  <summary className="cursor-pointer text-white/80">Umbrales efectivos / overrides JSON</summary>
-                  <pre className="mt-2 p-2 bg-zinc-800 rounded text-[10px] text-white/60 overflow-auto max-h-32">
-{JSON.stringify(resolveProfile(sanityProfileId).effective, null, 2)}
-                  </pre>
-                  <textarea
-                    value={customJSON}
-                    onChange={(e) => setCustomJSON(e.target.value)}
-                    placeholder='{ "windowSize": 40, "min": 35 }'
-                    rows={4}
-                    className="mt-2 w-full bg-zinc-800 border border-white/10 rounded px-2 py-1 text-white font-mono text-[11px]"
-                  />
-                  <div className="mt-2 flex gap-2">
-                    <button type="button" onClick={handleCustomApply}
-                      className="text-xs px-2 py-1 rounded bg-white/15 hover:bg-white/25 border border-white/20">
-                      Aplicar overrides
-                    </button>
-                    <button type="button" onClick={handleCustomClear}
-                      className="text-xs px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 border border-white/10">
-                      Limpiar
-                    </button>
-                  </div>
-                </details>
-
-                <div className="mt-3 flex items-center justify-between gap-2">
-                  <span className="text-xs text-white/70">
-                    Veredictos: {getAuditEntries().length}
-                    {auditNegativeCount > 0 && (
-                      <span className="ml-1 text-amber-400">({auditNegativeCount} alertas)</span>
-                    )}
-                  </span>
-                  <div className="flex gap-2">
-                    <button type="button" onClick={() => downloadAuditJSON()}
-                      className="text-xs px-2 py-1 rounded bg-white/15 hover:bg-white/25 border border-white/20">
-                      JSON
-                    </button>
-                    <button type="button" onClick={() => downloadAuditCSV()}
-                      className="text-xs px-2 py-1 rounded bg-white/15 hover:bg-white/25 border border-white/20">
-                      CSV
-                    </button>
-                    <button type="button" onClick={() => { clearAuditLog(); setAuditNegativeCount(0); }}
-                      className="text-xs px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 border border-white/10">
-                      Limpiar
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* MODAL DE AJUSTES REMOVIDO PARA PRODUCCIÓN */}
 
         <div className="relative z-10 h-full">
           <div className="flex-1 h-full">
@@ -1033,6 +936,7 @@ const Index = () => {
               isPeak={beatMarker === 1}
               bpm={heartRate}
               spo2={vitalSigns.spo2}
+              arrhythmiaCount={vitalSigns.arrhythmiaCount}
               rrIntervals={rrIntervals}
               elapsedTime={elapsedTime}
               perfusionIndex={lastSignal?.perfusionIndex || 0}

@@ -26,10 +26,10 @@ export interface BackpressureConfig {
 
 export const DEFAULT_BACKPRESSURE_CONFIG: BackpressureConfig = {
   enabled: true,
-  lowFpsThreshold: 20,
-  highFpsThreshold: 25,
+  lowFpsThreshold: 35,    // Umbral para 60fps (35fps indica retraso notable)
+  highFpsThreshold: 52,   // Umbral de recuperación a fluidez casi total
   sustainMs: 3000,
-  maxStride: 4,
+  maxStride: 5,           // Stride máximo (1/25 de píxeles) para mantener precisión
 };
 
 const KEY = 'ppg_backpressure_config_v1';

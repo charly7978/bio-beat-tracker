@@ -67,6 +67,10 @@ export interface CycleFeatures {
   
   // Quality
   quality: number; // 0-1
+  
+  // Advanced 2024 Features
+  kValue: number;       // Ratio of area under pulse to peak height * duration
+  vMax: number;         // Maximum ascending slope
 }
 
 // ═══════════════════════════════════════════
@@ -171,8 +175,23 @@ export class PPGFeatureExtractor {
     const dividePoint = dicroticNotch >= 0 ? dicroticNotch : Math.round((systolicPeak + nextOnset) / 2);
     const systolicArea = this.trapezoidalArea(buffer, onset, dividePoint, onsetVal);
     const diastolicArea = this.trapezoidalArea(buffer, dividePoint, nextOnset, onsetVal);
+    const totalArea = systolicArea + diastolicArea;
     const areaRatio = diastolicArea > 0 ? systolicArea / diastolicArea : 0;
     const ipaRatio = areaRatio; // IPA = systolic/diastolic area
+
+    // ── K-Value ──
+    // K = Area / (PeakAmplitude * DurationInSamples)
+    const cycleDuration = nextOnset - onset;
+    const kValue = (amplitude > 0 && cycleDuration > 0) ? totalArea / (amplitude * cycleDuration) : 0;
+
+    // ── Vmax (Max Slope - Robust 3-point derivative) ──
+    let vMax = 0;
+    for (let i = onset + 1; i < systolicPeak - 1; i++) {
+      // Central derivative: (f(x+1) - f(x-1)) / 2
+      const slope = (buffer[i + 1] - buffer[i - 1]) * 0.5;
+      if (slope > vMax) vMax = slope;
+    }
+    vMax = vMax * sampleRate; // normalize to amplitude per second
 
     // ── Stiffness Index ──
     // SI = body_height / ΔTDVP (time between systolic and diastolic peaks)
@@ -215,7 +234,8 @@ export class PPGFeatureExtractor {
       systolicAmplitude, diastolicAmplitude, dicroticDepth,
       systolicArea, diastolicArea, areaRatio, ipaRatio,
       stiffnessIndex, augmentationIndex, pwvProxy,
-      apg, quality
+      apg, quality,
+      kValue, vMax
     };
   }
 

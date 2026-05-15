@@ -1,4 +1,3 @@
-// Version: 1.0.1 - Force deployment 2026-05-15-1559
 import React from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import { ToastProvider, ToastViewport } from "@/components/ui/toast";

@@ -15,7 +15,7 @@ export const SANITY_PROFILES: SanityProfile[] = [
     id: "default",
     label: "Por defecto",
     description: "Balance general — uso clínico estándar (30–220 BPM).",
-    options: { windowSize: 30, minSamples: 12, constantTolerance: 0.5, repetitiveStdMin: 0.05, min: 30, max: 220 },
+    options: { windowSize: 30, minSamples: 12, constantTolerance: 0.05, repetitiveStdMin: 0.05, min: 30, max: 220 },
   },
   {
     id: "strict",

@@ -135,16 +135,17 @@ export class VitalSignsProcessor {
 
   processSignal(
     signalValue: number, 
+    signalQuality: number,
+    currentBPM: number,
     rrData?: RRData
   ): VitalSignsResult {
-    
-    // Actualizar historial
+    this.frameCount++;
+
+    // Actualizar historial de señal para análisis morfológico (BP)
     this.signalHistory.push(signalValue);
     if (this.signalHistory.length > this.HISTORY_SIZE) {
       this.signalHistory.shift();
     }
-    this.frameCount++;
-
     // Control de calibración
     if (this.isCalibrating) {
       this.calibrationSamples++;
@@ -153,22 +154,15 @@ export class VitalSignsProcessor {
       }
     }
 
-    // Calcular SQI propio para control de calidad de signos vitales
-    this.measurements.signalQuality = this.calculateSignalQuality();
+    // Usar el SQI unificado proporcionado por el procesador de señal
+    this.measurements.signalQuality = signalQuality;
 
-    // Validar pulso real
-    const hasRealPulse = this.validateRealPulse(rrData);
+    // Validar pulso real (solo afecta a BP y arritmias)
+    this.validateRealPulse(rrData);
     
-    if (!hasRealPulse) {
-      // Don't zero-out values that are already accumulated — just stop updating
-      // This prevents flicker when signal dips momentarily
-      return this.getFormattedResult();
-    }
+    // Calcular signos vitales (SpO2 siempre, BP/Arr solo con rrData)
+    this.calculateVitalSigns(signalValue, signalQuality, currentBPM, rrData);
 
-    // Calcular signos vitales — lowered from 30 to 20 samples, 3 to 2 intervals
-    if (this.signalHistory.length >= 20 && rrData && rrData.intervals.length >= 2) {
-      this.calculateVitalSigns(signalValue, rrData);
-    }
 
     return this.getFormattedResult();
   }
@@ -202,24 +196,8 @@ export class VitalSignsProcessor {
     return true;
   }
 
-  private calculateSignalQuality(): number {
-    if (this.signalHistory.length < 20) return 0;
-    
-    const recent = this.signalHistory.slice(-60);
-    const sorted = [...recent].sort((a, b) => a - b);
-    const p10 = sorted[Math.floor((sorted.length - 1) * 0.1)] ?? 0;
-    const p90 = sorted[Math.floor((sorted.length - 1) * 0.9)] ?? 0;
-    const range = p90 - p10;
-    
-    if (range < 0.2) return 2;
-    
-    const mean = recent.reduce((a, b) => a + b, 0) / recent.length;
-    const variance = recent.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / recent.length;
-    const stdDev = Math.sqrt(variance);
-    const snr = range / (stdDev + 0.05);
-    
-    return Math.min(100, Math.max(0, snr * 16));
-  }
+  // El método calculateSignalQuality ha sido eliminado para usar el SQI unificado de PPGSignalProcessor.
+
 
   private getMeasurementConfidence(): 'HIGH' | 'MEDIUM' | 'LOW' | 'INVALID' {
     const sq = this.measurements.signalQuality;
@@ -264,10 +242,12 @@ export class VitalSignsProcessor {
    */
   private calculateVitalSigns(
     signalValue: number, 
-    rrData: RRData
+    signalQuality: number,
+    currentBPM: number,
+    rrData?: RRData
   ): void {
-    const minQualityForCalculation = 8;
-    if (this.measurements.signalQuality < minQualityForCalculation) {
+    const minQualityForCalculation = 5; // Bajado de 12 para permitir visualización temprana
+    if (signalQuality < minQualityForCalculation) {
       this.stableFramesCount = Math.max(0, this.stableFramesCount - 1);
       return;
     }
@@ -301,15 +281,17 @@ export class VitalSignsProcessor {
       }
     }
 
-    const validRR = rrData.intervals.filter(isPhysiologicalRR);
-    const avgRR = validRR.length > 0 ? validRR.reduce((a, b) => a + b, 0) / validRR.length : 0;
-    const hr = avgRR > 0 ? 60000 / avgRR : 0;
+    const hr = currentBPM > 0 ? currentBPM : 0;
 
-    // === BP — requiere 2+ RR válidos y estabilidad moderada ===
+    // === BP y Arritmias — requieren rrData válido ===
+    const validRR = rrData?.intervals?.filter(isPhysiologicalRR) || [];
+    
+    // === BP ===
     if (validRR.length >= 2) {
       const bpEstimate = this.bloodPressureProcessor.estimate(
         this.signalHistory, validRR, 30
       );
+
       this.lastBPConfidence = bpEstimate.confidence;
       this.lastBPFeatureQuality = bpEstimate.featureQuality;
       
@@ -329,17 +311,15 @@ export class VitalSignsProcessor {
     const arrhythmiaRR = validRR.slice(-10);
     const arrhythmiaInput = (
       arrhythmiaRR.length >= 5 &&
-      this.measurements.signalQuality >= 25 &&
-      hr >= 35 &&
-      hr <= 180
-    ) ? { ...rrData, intervals: arrhythmiaRR } : undefined;
+      this.measurements.signalQuality >= 20 && // Bajado de 25
+      hr >= 30 &&
+      hr <= 220
+    ) ? { ...rrData!, intervals: arrhythmiaRR } : undefined;
 
     const arrhythmiaResult = this.arrhythmiaProcessor.processRRData(arrhythmiaInput);
     this.measurements.arrhythmiaStatus = arrhythmiaResult.arrhythmiaStatus;
     this.measurements.lastArrhythmiaData = arrhythmiaResult.lastArrhythmiaData;
-    
-    const parts = arrhythmiaResult.arrhythmiaStatus.split('|');
-    this.measurements.arrhythmiaCount = parts.length > 1 ? (parseInt(parts[1]) || 0) : 0;
+    this.measurements.arrhythmiaCount = arrhythmiaResult.arrhythmiaCount;
   }
 
   /**
