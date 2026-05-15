@@ -814,26 +814,28 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private resetSignalTrackingBuffers(): void {
-    this.rawBuffer = [];
-    this.filteredBuffer = [];
-    this.redBuffer = [];
-    this.greenBuffer = [];
-    this.blueBuffer = [];
+    this.rawBuffer.reset();
+    this.filteredBuffer.reset();
+    this.redBuffer.reset();
+    this.greenBuffer.reset();
+    this.blueBuffer.reset();
     this.redDC = 0; this.redAC = 0;
     this.greenDC = 0; this.greenAC = 0;
     this.blueDC = 0; this.blueAC = 0;
-    this.sourceBuffers = { R: [], G: [], RG: [] };
+    this.sourceBuffers.R.reset();
+    this.sourceBuffers.G.reset();
+    this.sourceBuffers.RG.reset();
     this.bandpassFilter.reset();
   }
 
   reset(): void {
-    this.rawBuffer = [];
-    this.filteredBuffer = [];
-    this.redBuffer = [];
-    this.greenBuffer = [];
-    this.blueBuffer = [];
+    this.rawBuffer.reset();
+    this.filteredBuffer.reset();
+    this.redBuffer.reset();
+    this.greenBuffer.reset();
+    this.blueBuffer.reset();
     this.tileConfidence = new Array(25).fill(0);
-    this.frameIntervalBuffer = [];
+    this.frameIntervalBuffer.reset();
     this.frameCount = 0;
     this.lastLogTime = 0;
     this.lastFrameTimestamp = 0;
