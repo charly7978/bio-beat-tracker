@@ -229,7 +229,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (r > 253 && g > 252) rejectionStatus = "SATURATED";
     else if (r < 15 && g < 10) rejectionStatus = "UNDEREXPOSED";
     else if (motionArtifact) rejectionStatus = "MOTION_ARTIFACT";
-    else if (this.pixelStride > 4) rejectionStatus = "LOW_FPS";
+    else if (this.pixelStride > 6) rejectionStatus = "LOW_FPS";
     else if (this.frameCount < 45) rejectionStatus = "WARMUP";
 
     if (rejectionStatus && rejectionStatus !== "WARMUP" && rejectionStatus !== "MOTION_ARTIFACT") {

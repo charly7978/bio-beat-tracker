@@ -603,7 +603,7 @@ const Index = () => {
   // === PROCESAR SEÑAL PPG ===
   const vitalSignsFrameCounter = useRef<number>(0);
   const unstableFrameCounter = useRef<number>(0);
-  const UNSTABLE_ZERO_THRESHOLD = 15; // ~0.5s de señal mala antes de borrar vitales
+  const UNSTABLE_ZERO_THRESHOLD = 180; // 6 segundos de gracia antes de borrar (antes 120)
   const VITALS_PROCESS_EVERY_N_FRAMES = 3;
   // Throttling de UI: el DSP corre en cada frame, React solo refresca a ritmos sanos.
   const isMonitoringRef = useRef(false);

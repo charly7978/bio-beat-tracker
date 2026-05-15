@@ -40,8 +40,8 @@ export class VitalsSanityChecker {
     this.opt = {
       windowSize: opt.windowSize ?? 30,
       minSamples: opt.minSamples ?? 12,
-      constantTolerance: opt.constantTolerance ?? 0.5,
-      repetitiveStdMin: opt.repetitiveStdMin ?? 0.05,
+      constantTolerance: opt.constantTolerance ?? 1.5,
+      repetitiveStdMin: opt.repetitiveStdMin ?? 0.15,
       min: opt.min ?? 30,
       max: opt.max ?? 220,
     };
