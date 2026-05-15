@@ -639,8 +639,8 @@ const Index = () => {
     const hasUsableContact = contactState !== 'NO_CONTACT' && lastSignal.fingerDetected;
     const stableHumanSignal =
       hasUsableContact &&
-      (lastSignal.quality || 0) >= 6 &&
-      (lastSignal.perfusionIndex || 0) >= 0.001;
+      (lastSignal.quality || 0) >= 3 &&
+      (lastSignal.perfusionIndex || 0) >= 0.0008;
 
     const heartBeatResult = processHeartBeat(
       signalValue,
@@ -651,7 +651,9 @@ const Index = () => {
     const nowT = performance.now();
     if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {
       lastSignalPushRef.current = nowT;
-      setHeartbeatSignal(stableHumanSignal ? heartBeatResult.filteredValue : 0);
+      // Siempre dibujar la onda si hay contacto, incluso si la calidad es baja
+      // para que el usuario pueda ver si el dedo está bien puesto.
+      setHeartbeatSignal(hasUsableContact ? heartBeatResult.filteredValue : 0);
     }
 
     if (!stableHumanSignal) {

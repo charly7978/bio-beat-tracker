@@ -105,7 +105,7 @@ export class HeartBeatProcessor {
       const gSorted = [...recentForGate].sort((a, b) => a - b);
       this.cachedGateRange = (gSorted[Math.floor(gSorted.length * 0.9)] ?? 0) - (gSorted[Math.floor(gSorted.length * 0.1)] ?? 0);
     }
-    if (this.cachedGateRange < 0.5) {
+    if (this.cachedGateRange < 0.2) {
       return { bpm: 0, confidence: 0, isPeak: false, filteredValue: 0, sqi: 0 };
     }
 

@@ -786,9 +786,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const redDominance = this.smoothedRed - (this.smoothedGreen + this.smoothedBlue) / 2;
 
     // Gate: no perfusion = no real signal
-    if (perfusionIndex < 0.002) return Math.min(15, this.smoothedCoverage * 20);
+    if (perfusionIndex < 0.001) return Math.min(8, this.smoothedCoverage * 10);
     // Gate: red must dominate (hemoglobin signature)
-    if (redDominance < 15) return 0;
+    if (redDominance < 8) return 0;
 
     const recent = this.filteredBuffer.tail(90);
     const sortedView = this.sortedScratch.subarray(0, recent.length);
