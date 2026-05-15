@@ -858,7 +858,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.blueDC = 0; this.blueAC = 0;
     this.motionScore = 0;
     this.lastAcceleration = { x: 0, y: 0, z: 0 };
-    this.sourceBuffers = { R: [], G: [], RG: [] };
+    this.sourceBuffers.R.reset();
+    this.sourceBuffers.G.reset();
+    this.sourceBuffers.RG.reset();
     this.sourceScores = { R: 0, G: 0, RG: 0 };
     this.activeSource = 'RG';
     this.lastSourceSwitch = 0;
