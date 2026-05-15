@@ -37,10 +37,12 @@ export const VITAL_THRESHOLDS = {
   QUALITY: {
     MIN_FOR_HR: 15,
     MIN_FOR_CLINICAL: 55,
-    MIN_PI: 0.002,
+    /** PI (AC/DC) mínimo para marcar contacto STABLE — cámara suele dar 0.001–0.008 al inicio */
+    MIN_PI: 0.0012,
     MAX_MOTION: 0.6,
     MAX_JITTER_MS: 50,
-    STABLE_FRAMES_REQ: 30,
+    /** Frames con dedo candidato antes de STABLE (≈1 s @ 30 fps) */
+    STABLE_FRAMES_REQ: 22,
   },
   
   // FINGER DETECTION (Hemoglobin Signature)

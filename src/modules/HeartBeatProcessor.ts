@@ -108,7 +108,7 @@ export class HeartBeatProcessor {
       const gSorted = [...recentForGate].sort((a, b) => a - b);
       this.cachedGateRange = (gSorted[Math.floor(gSorted.length * 0.9)] ?? 0) - (gSorted[Math.floor(gSorted.length * 0.1)] ?? 0);
     }
-    if (this.cachedGateRange < 0.2) {
+    if (this.cachedGateRange < 0.12) {
       return { bpm: 0, confidence: 0, isPeak: false, filteredValue: 0, sqi: 0, ensembleDiagnostics: this.lastDiagnostics.ensemble };
     }
 
@@ -175,7 +175,7 @@ export class HeartBeatProcessor {
       const lastT = ens.peakTimes.length ? ens.peakTimes[ens.peakTimes.length - 1] : 0;
       if (
         lastT > 0 &&
-        Math.abs(lastT - now) < 85 &&
+        Math.abs(lastT - now) < 115 &&
         Math.abs(lastT - this.lastEmittedPeakTime) > this.MIN_PEAK_INTERVAL_MS * 0.35
       ) {
         isPeak = true;

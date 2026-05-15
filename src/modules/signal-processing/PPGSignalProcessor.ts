@@ -302,11 +302,17 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const adjustedQuality = motionArtifact
       ? Math.max(0, this.signalQuality * 0.75)
       : this.signalQuality;
-    
-    // GATING CLÍNICO SOBERANO: bajado a 0.2% para asegurar detección inicial
-    const gatedQuality = (this.contactState === 'STABLE_CONTACT' && perfusionIndex >= 0.001)
-      ? adjustedQuality
-      : Math.min(18, adjustedQuality * 0.45);
+
+    const minPiStable = VITAL_THRESHOLDS.QUALITY.MIN_PI;
+    let gatedQuality: number;
+    if (this.contactState === 'STABLE_CONTACT' && perfusionIndex >= minPiStable * 0.85) {
+      gatedQuality = adjustedQuality;
+    } else if (this.fingerDetected && this.contactState === 'UNSTABLE_CONTACT') {
+      // Contacto inestable con dedo: no comprimir a ~18 — permite HR/latidos mientras converge STABLE
+      gatedQuality = Math.round(clamp(adjustedQuality * 0.9, 16, 88));
+    } else {
+      gatedQuality = Math.min(14, Math.round(adjustedQuality * 0.42));
+    }
 
     const now = timestamp;
     if (now - this.lastLogTime >= 2000) {
