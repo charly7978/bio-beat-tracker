@@ -883,7 +883,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (this.motionListenerActive) return;
     try {
       if (typeof DeviceMotionEvent !== 'undefined') {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const dme = DeviceMotionEvent as unknown as { requestPermission?: () => Promise<string> };
         if (typeof dme.requestPermission === 'function') {
           dme.requestPermission()
@@ -893,14 +892,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
                 this.motionListenerActive = true;
               }
             })
-            // eslint-disable-next-line @typescript-eslint/no-empty-function
             .catch(() => { /* Permission denied — ignore silently */ });
         } else {
           window.addEventListener('devicemotion', this.handleMotionEvent, { passive: true });
           this.motionListenerActive = true;
         }
       }
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
     } catch { /* DeviceMotion not supported — ignore silently */ }
   }
 

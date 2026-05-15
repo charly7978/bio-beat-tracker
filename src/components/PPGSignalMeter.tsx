@@ -187,7 +187,7 @@ const PPGSignalMeter = ({
       pendingTrendArrRef.current = false;
       smoothedBpmRef.current = 0;
     }
-  }, [value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure]);
+  }, [value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, arrhythmiaCount, isMonitoring]);
 
   // Pulse animation on peak (UI overlay only)
   useEffect(() => {
