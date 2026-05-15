@@ -62,9 +62,19 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
           active: true,
           label: track.label,
           readyState: track.readyState,
-          settings,
+          browser: navigator.userAgent,
+          userAgent: navigator.userAgent,
+          supportedConstraints: Object.keys(navigator.mediaDevices.getSupportedConstraints()),
+          capabilities: caps,
+          settings: settings,
           torchSupported: !!caps.torch,
           torchActive: settings.torch === true,
+          fpsRequested: 30,
+          fpsEffective: settings.frameRate || 0,
+          resolution: { width: settings.width || 0, height: settings.height || 0 },
+          exposureMode: settings.exposureMode,
+          whiteBalanceMode: settings.whiteBalanceMode,
+          focusMode: settings.focusMode,
         };
       } catch {
         return { active: true, error: "caps_unavailable" };
@@ -197,7 +207,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
             facingMode: { ideal: "environment" },
             width: { ideal: 640, max: 960 },
             height: { ideal: 480, max: 720 },
-            frameRate: { ideal: 30, min: 24, max: 30 },
+            frameRate: { ideal: 60, min: 24, max: 60 },
           },
         });
 

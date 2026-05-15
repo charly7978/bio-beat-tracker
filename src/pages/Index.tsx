@@ -41,14 +41,19 @@ const Index = () => {
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [vitalSigns, setVitalSigns] = useState<VitalSignsResult>({
-    spo2: 0,
+    heartRate: { name: "HR", value: 0, unit: "bpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+    spo2: { name: "SpO2", value: 0, unit: "%", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+    bloodPressure: { name: "BP", value: { systolic: 0, diastolic: 0 }, unit: "mmHg", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+    respiration: { name: "RR", value: 0, unit: "rpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+    arrhythmia: { name: "Arrhythmia", value: { count: 0, status: "NORMAL" }, unit: "event", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+    signalQuality: 0,
+    isCalibrating: false,
+    calibrationProgress: 0,
+    // Legacy
+    spo2_legacy: 0,
     pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
     arrhythmiaCount: 0,
     arrhythmiaStatus: "SIN ARRITMIAS|0",
-    isCalibrating: false,
-    calibrationProgress: 0,
-    lastArrhythmiaData: undefined,
-    signalQuality: 0,
     measurementConfidence: 'INVALID'
   });
   const [heartRate, setHeartRate] = useState(0);
@@ -494,7 +499,7 @@ const Index = () => {
     const savedResults = resetVitalSigns();
     
     // Guardar medición en la base de datos automáticamente
-    if (savedResults || vitalSigns.spo2 > 0) {
+    if (savedResults || vitalSigns.spo2.value > 0) {
       const dataToSave = savedResults || vitalSigns;
       await saveMeasurement({
         heartRate,
@@ -574,14 +579,19 @@ const Index = () => {
     sanityErrorRef.current = null;
     setSanityError(null);
     setVitalSigns({ 
-      spo2: 0,
+      heartRate: { name: "HR", value: 0, unit: "bpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      spo2: { name: "SpO2", value: 0, unit: "%", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      bloodPressure: { name: "BP", value: { systolic: 0, diastolic: 0 }, unit: "mmHg", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      respiration: { name: "RR", value: 0, unit: "rpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      arrhythmia: { name: "Arrhythmia", value: { count: 0, status: "NORMAL" }, unit: "event", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      signalQuality: 0,
+      isCalibrating: false,
+      calibrationProgress: 0,
+      // Legacy
+      spo2_legacy: 0,
       pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
       arrhythmiaCount: 0,
       arrhythmiaStatus: "SIN ARRITMIAS|0",
-      isCalibrating: false,
-      calibrationProgress: 0,
-      lastArrhythmiaData: undefined,
-      signalQuality: 0,
       measurementConfidence: 'INVALID'
     });
     setArrhythmiaCount("--");
@@ -616,10 +626,16 @@ const Index = () => {
 
   // Hot path: corre por cada frame de cámara SIN pasar por React.
   // Toda la lógica DSP vive en refs; sólo se emite a React con throttle.
+  const [currentDiagnostics, setCurrentDiagnostics] = useState<any>(null);
+
   const handleSignalRealtime = useCallback((lastSignal: ProcessedSignal) => {
     if (!isMonitoringRef.current) return;
     const signalValue = lastSignal.filteredValue;
     const contactState = (lastSignal as any).contactState || (lastSignal.fingerDetected ? 'STABLE_CONTACT' : 'NO_CONTACT');
+    const diag = lastSignal.diagnostics;
+    
+    // Pass diagnostics to state for UI display
+    setCurrentDiagnostics(diag);
     const hasUsableContact = contactState !== 'NO_CONTACT' && lastSignal.fingerDetected;
     const stableHumanSignal =
       hasUsableContact &&
@@ -656,13 +672,16 @@ const Index = () => {
             ? prev
             : {
                 ...prev,
-                spo2: 0,
+                spo2: { ...prev.spo2, value: 0, status: "NO_VALID_SIGNAL" },
+                bloodPressure: { ...prev.bloodPressure, value: { systolic: 0, diastolic: 0 }, status: "NO_VALID_SIGNAL" },
+                arrhythmia: { ...prev.arrhythmia, value: { count: 0, status: "NORMAL" } },
+                signalQuality: 0,
+                measurementConfidence: 'INVALID',
+                // Legacy
+                spo2_legacy: 0,
                 pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
                 arrhythmiaCount: 0,
                 arrhythmiaStatus: "SIN ARRITMIAS|0",
-                lastArrhythmiaData: undefined,
-                signalQuality: 0,
-                measurementConfidence: 'INVALID'
               }
         ));
       }
@@ -935,12 +954,13 @@ const Index = () => {
               preserveResults={showResults}
               isPeak={beatMarker === 1}
               bpm={heartRate}
-              spo2={vitalSigns.spo2}
+              spo2={vitalSigns.spo2.value || 0}
               arrhythmiaCount={vitalSigns.arrhythmiaCount}
               rrIntervals={rrIntervals}
               elapsedTime={elapsedTime}
               perfusionIndex={lastSignal?.perfusionIndex || 0}
               pressure={vitalSigns.pressure}
+              diagnostics={currentDiagnostics}
             />
           </div>
 

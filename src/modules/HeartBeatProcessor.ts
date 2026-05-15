@@ -169,29 +169,47 @@ export class HeartBeatProcessor {
       this.consecutivePeaks = Math.max(0, this.consecutivePeaks - 1);
     }
 
-    // === FUSIÓN TIEMPO + FRECUENCIA ===
-    // BLOCK: never show frequency-only BPM without at least 1 confirmed time-domain peak
+    // === FUSIÓN POR CONSENSO TIEMPO + FRECUENCIA (Phase 5) ===
     let displayBPM = this.smoothBPM;
+    let consensusCoherent = false;
+    let consensusReason = "PEAKS_ONLY";
 
-    if (this.frequencyBPM > 0 && this.consecutivePeaks >= 3) {
-      if (this.consecutivePeaks < 5 || this.signalQualityIndex < 35) {
-        // Weak signal — blend with caution
-        displayBPM = displayBPM * 0.65 + this.frequencyBPM * 0.35;
+    if (this.frequencyBPM > 0 && this.smoothBPM > 0) {
+      const diff = Math.abs(this.smoothBPM - this.frequencyBPM);
+      const diffPercent = diff / Math.max(1, this.smoothBPM);
+      
+      if (diffPercent < 0.12) { // 12% de tolerancia para consenso
+        consensusCoherent = true;
+        consensusReason = "TIME_FREQ_CONSENSUS";
+        // Ponderación dinámica por SQI
+        const freqWeight = clamp((45 - this.signalQualityIndex) / 30, 0.1, 0.45);
+        displayBPM = this.smoothBPM * (1 - freqWeight) + this.frequencyBPM * freqWeight;
+      } else if (this.consecutivePeaks >= 5 && this.signalQualityIndex > 65) {
+        consensusReason = "DOMINANT_PEAKS";
+        displayBPM = this.smoothBPM;
+      } else if (this.periodicityScore > 0.85 && this.signalQualityIndex < 40) {
+        consensusReason = "DOMINANT_FREQ";
+        displayBPM = this.frequencyBPM;
       } else {
-        // Strong signal — trust peaks more
-        displayBPM = displayBPM * 0.88 + this.frequencyBPM * 0.12;
+        consensusReason = "DIVERGENT_SOURCES";
+        // Si divergen mucho y la calidad es baja, bajamos confianza en lugar de elegir
       }
     }
-    // If no peaks confirmed yet, displayBPM stays 0 — no guessing
 
     const confidence = this.calculateConfidence();
+    const finalConfidence = consensusCoherent ? Math.min(1.0, confidence * 1.15) : confidence * 0.85;
 
     return {
       bpm: displayBPM,
-      confidence,
+      confidence: finalConfidence,
       isPeak,
       filteredValue: normalizedValue,
       sqi: this.signalQualityIndex,
+      consensusReason,
+      rrData: {
+        intervals: [...this.rrIntervals],
+        lastPeakTime: this.lastPeakTime,
+      }
     };
   }
 

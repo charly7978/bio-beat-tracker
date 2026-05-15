@@ -8,6 +8,7 @@ import {
   sanitizeBackpressureConfig,
   type BackpressureConfig,
 } from '../../lib/perf/backpressureConfig';
+import type { MeasurementStatus, SignalQualityMetrics } from '../../types/measurements';
 
 const log = createLogger('PPGSignalProcessor');
 
@@ -213,9 +214,38 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           message: `BUSCANDO DEDO C:${(roi.coverageRatio * 100).toFixed(0)}%`,
           hasPulsatility: false,
           pulsatilityValue: 0,
+          status: "NO_FINGER" as MeasurementStatus,
         },
       });
       return;
+    }
+
+    // GATES DE RECHAZO ESTRICTOS (Phase 3C)
+    let rejectionStatus: MeasurementStatus | null = null;
+    const r = this.smoothedRed;
+    const g = this.smoothedGreen;
+    const b = this.smoothedBlue;
+    
+    if (r > 250 && g > 248) rejectionStatus = "SATURATED";
+    else if (r < 25 && g < 15) rejectionStatus = "UNDEREXPOSED";
+    else if (motionArtifact) rejectionStatus = "MOTION_ARTIFACT";
+    else if (this.pixelStride > 4) rejectionStatus = "LOW_FPS";
+    else if (this.frameCount < 60) rejectionStatus = "WARMUP";
+
+    if (rejectionStatus && rejectionStatus !== "WARMUP" && rejectionStatus !== "MOTION_ARTIFACT") {
+      this.onSignalReady({
+        timestamp,
+        rawValue: 0, filteredValue: 0, quality: 0,
+        fingerDetected: true, contactState: this.contactState,
+        motionArtifact, roi: { x: 0, y: 0, width: imageData.width, height: imageData.height },
+        perfusionIndex: this.cachedPI, rawRed: roi.rawRed, rawGreen: roi.rawGreen,
+        diagnostics: {
+          message: `RECHAZADO: ${rejectionStatus}`,
+          hasPulsatility: false, pulsatilityValue: 0,
+          status: rejectionStatus,
+        },
+      });
+      // No retornamos aquí para permitir que los buffers sigan llenándose, pero la UI sabrá que no es válido
     }
 
     // Tenemos contacto (UNSTABLE o STABLE)
@@ -256,7 +286,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const adjustedQuality = motionArtifact
       ? Math.max(0, this.signalQuality * 0.75)
       : this.signalQuality;
-    const gatedQuality = this.contactState === 'STABLE_CONTACT' && perfusionIndex >= 0.005
+    
+    // GATING CLÍNICO SOBERANO: bajado a 0.2% para asegurar detección inicial
+    const gatedQuality = (this.contactState === 'STABLE_CONTACT' && perfusionIndex >= 0.002)
       ? adjustedQuality
       : Math.min(18, adjustedQuality * 0.45);
 
@@ -292,8 +324,18 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
           `PI:${perfusionIndex.toFixed(2)} C:${(this.smoothedCoverage * 100).toFixed(0)} ` +
           `${this.contactState}${motionArtifact ? ' MOV' : ''}`,
-        hasPulsatility: this.contactState === 'STABLE_CONTACT' && perfusionIndex >= 0.05 && pulseSource.strength > 1.5,
+        hasPulsatility: this.contactState === 'STABLE_CONTACT' && perfusionIndex >= 0.002 && pulseSource.strength > 1.2,
         pulsatilityValue: this.contactState === 'STABLE_CONTACT' ? Math.max(perfusionIndex, pulseSource.strength * 0.02) : 0,
+        status: rejectionStatus || (gatedQuality > 50 ? "VALID" : "LOW_SIGNAL_QUALITY") as MeasurementStatus,
+        sqm: {
+          sqi: this.signalQuality,
+          perfusionIndex: perfusionIndex,
+          snr: pulseSource.strength,
+          motionScore: this.motionScore,
+          saturationRatio: (roi.rawRed > 250 ? 1 : 0),
+          fpsEffective: this.estimatedSampleRate,
+          timestampJitterMs: ppgPerf.snapshot().jitterMs,
+        } as Partial<SignalQualityMetrics>,
       },
     });
   }

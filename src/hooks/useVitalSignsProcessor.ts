@@ -46,14 +46,19 @@ export const useVitalSignsProcessor = () => {
     rrData?: { intervals: number[], lastPeakTime: number | null, timestampNow?: number }
   ): VitalSignsResult => {
     const defaultResult: VitalSignsResult = {
-      spo2: 0, 
-      pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
-      arrhythmiaCount: 0, 
-      arrhythmiaStatus: "SIN ARRITMIAS|0",
-      isCalibrating: false, 
-      calibrationProgress: 0, 
-      lastArrhythmiaData: undefined,
+      heartRate: { name: "HR", value: 0, unit: "bpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      spo2: { name: "SpO2", value: 0, unit: "%", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      bloodPressure: { name: "BP", value: { systolic: 0, diastolic: 0 }, unit: "mmHg", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      respiration: { name: "RR", value: 0, unit: "rpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
+      arrhythmia: { name: "Arrhythmia", value: { count: 0, status: "NORMAL" }, unit: "event", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
       signalQuality: 0,
+      isCalibrating: false,
+      calibrationProgress: 0,
+      // Legacy
+      spo2_legacy: 0,
+      pressure: { systolic: 0, diastolic: 0, confidence: 'INSUFFICIENT' as const, featureQuality: 0 },
+      arrhythmiaCount: 0,
+      arrhythmiaStatus: "SIN ARRITMIAS|0",
       measurementConfidence: 'INVALID' as const
     };
     
@@ -65,8 +70,8 @@ export const useVitalSignsProcessor = () => {
     if (
       result.measurementConfidence !== 'INVALID' ||
       result.pressure.confidence !== 'INSUFFICIENT' ||
-      result.spo2 > 0 ||
-      result.arrhythmiaCount > 0
+      result.spo2.value > 0 ||
+      result.arrhythmia.value.count > 0
     ) {
       setLastValidResults(result);
     }

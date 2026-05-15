@@ -25,6 +25,13 @@ interface PPGSignalMeterProps {
   perfusionIndex?: number;
   pressure?: { systolic: number; diastolic: number; confidence?: string; featureQuality?: number };
   arrhythmiaCount?: number;
+  diagnostics?: {
+    status?: string;
+    sqm?: {
+      fpsEffective?: number;
+      timestampJitterMs?: number;
+    };
+  };
 }
 
 const TARGET_FPS = 60;            // (ANTES 30)
@@ -93,7 +100,11 @@ const PPGSignalMeter = ({
   const dataBufferRef = useRef<CircularBuffer | null>(null);
 
   // Latest props captured via ref so the RAF loop doesn't re-create per render
-  const propsRef = useRef({ value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus, arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure });
+  const propsRef = useRef({ 
+    value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus, 
+    arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals, 
+    rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, diagnostics 
+  });
   const lastPeakTimeRef = useRef(0);
   const [showPulse, setShowPulse] = useState(false);
 
@@ -129,7 +140,11 @@ const PPGSignalMeter = ({
 
   // === Sync props into ref + compute HRV / trends ===
   useEffect(() => {
-    propsRef.current = { value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus, arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure };
+    propsRef.current = { 
+      value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus, 
+      arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals, 
+      rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, diagnostics 
+    };
 
     if (rrIntervals && rrIntervals.length >= 2) {
       const last = rrIntervals[rrIntervals.length - 1];
@@ -347,6 +362,15 @@ const PPGSignalMeter = ({
     ctx.textAlign = 'right';
     ctx.fillStyle = detected ? COLORS.TEXT_PRIMARY : COLORS.TEXT_DIM;
     ctx.fillText(detected ? '● DEDO OK' : '○ SIN DEDO', header.w - 110, header.y + 22);
+
+    // TECHNICAL OVERLAY (Phase 11)
+    const diag = propsRef.current.diagnostics;
+    if (diag?.status && diag.status !== "VALID" && diag.status !== "WARMUP") {
+      ctx.fillStyle = COLORS.TEXT_DANGER;
+      ctx.font = `bold 10px ${FONT_MONO}`;
+      ctx.textAlign = 'center';
+      ctx.fillText(`⚠ ${diag.status}`, header.w / 2, header.y + 12);
+    }
   }, [isMonitoring, preserveResults]);
 
   const drawMetricsBar = useCallback((ctx: CanvasRenderingContext2D, now: number) => {
@@ -523,6 +547,16 @@ const PPGSignalMeter = ({
       ctx.fillStyle = COLORS.TEXT_DANGER;
       ctx.textAlign = 'center';
       ctx.fillText(`⚠ ARRITMIA DETECTADA · ${count} evento${count === 1 ? '' : 's'}`, metrics.w / 2, metrics.y + 10);
+    }
+
+    // TELEMETRY (Phase 11)
+    const fps = propsRef.current.diagnostics?.sqm?.fpsEffective || 0;
+    const jitter = propsRef.current.diagnostics?.sqm?.timestampJitterMs || 0;
+    if (fps > 0) {
+      ctx.font = `8px ${FONT_MONO}`;
+      ctx.fillStyle = COLORS.TEXT_DIM;
+      ctx.textAlign = 'right';
+      ctx.fillText(`${fps.toFixed(1)} FPS · Δ${jitter.toFixed(1)}ms`, metrics.w - 12, metrics.y + 12);
     }
   }, [isMonitoring]);
 

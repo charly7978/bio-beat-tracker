@@ -28,8 +28,8 @@ export const useSaveMeasurement = () => {
       // Validar que hay datos significativos para guardar
       const hasValidData = 
         data.heartRate > 30 || 
-        data.vitalSigns.spo2 > 70 ||
-        data.vitalSigns.pressure.systolic > 60;
+        data.vitalSigns.spo2.value > 70 ||
+        data.vitalSigns.bloodPressure.value.systolic > 60;
       
       if (!hasValidData) {
         console.log('⚠️ Datos insuficientes para guardar');
@@ -40,10 +40,10 @@ export const useSaveMeasurement = () => {
       const measurementRecord = {
         user_id: user.id,
         heart_rate: Math.round(data.heartRate) || 0,
-        spo2: Math.round(data.vitalSigns.spo2) || 0,
-        systolic: Math.round(data.vitalSigns.pressure.systolic) || 0,
-        diastolic: Math.round(data.vitalSigns.pressure.diastolic) || 0,
-        arrhythmia_count: data.vitalSigns.arrhythmiaCount || 0,
+        spo2: Math.round(data.vitalSigns.spo2.value) || 0,
+        systolic: Math.round(data.vitalSigns.bloodPressure.value.systolic) || 0,
+        diastolic: Math.round(data.vitalSigns.bloodPressure.value.diastolic) || 0,
+        arrhythmia_count: data.vitalSigns.arrhythmia.value.count || 0,
         quality: Math.round(data.signalQuality) || 0,
         measured_at: new Date().toISOString()
       };
