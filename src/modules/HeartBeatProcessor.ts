@@ -87,6 +87,10 @@ export class HeartBeatProcessor {
     return this.GATE_RANGE_MIN * this.cameraHints.gateRangeScale;
   }
 
+  private minNormalizeRange(): number {
+    return this.cameraHints.constrained ? 0.09 : 0.042;
+  }
+
   processSignal(filteredValue: number, timestamp?: number): {
     bpm: number;
     confidence: number;
@@ -353,7 +357,7 @@ export class HeartBeatProcessor {
   private normalizeSignal(value: number, windowLen: number = 150): { normalizedValue: number; range: number } {
     const recent = this.signalBuffer.slice(-windowLen);
     const { low, high, range } = this.getRobustBounds(recent);
-    if (range < 0.09) return { normalizedValue: 0, range: 0 };
+    if (range < this.minNormalizeRange()) return { normalizedValue: 0, range: 0 };
     const clipped = Math.min(high, Math.max(low, value));
     const normalizedValue = ((clipped - low) / range - 0.5) * 120;
     return { normalizedValue, range };
@@ -362,7 +366,7 @@ export class HeartBeatProcessor {
   private normalizeWindow(values: number[], windowLen: number = 150): number[] {
     const refWindow = this.signalBuffer.slice(-windowLen);
     const { low, high, range } = this.getRobustBounds(refWindow);
-    if (range < 0.09) return values.map(() => 0);
+    if (range < this.minNormalizeRange()) return values.map(() => 0);
     return values.map((v) => {
       const c = Math.min(high, Math.max(low, v));
       return ((c - low) / range - 0.5) * 120;

@@ -13,10 +13,10 @@ export const PEAK_DETECTION_DEFAULTS = {
   peakWindowMs: 111,
   /** Ventana larga tipo Elgendi (~667 ms) */
   beatWindowMs: 667,
-  /** Peso del offset adaptativo sobre la energía de MA_peak */
-  offsetWeight: 0.35,
-  /** Picos débiles en cámara móvil: prominencia mínima algo más baja (literatura Elgendi usa umbral adaptativo vía MA) */
-  minProminence: 0.056,
+  /** Prominencia mínima (Elgendi): baja para latidos débiles; el AGC evita amplificar ruido plano */
+  minProminence: 0.038,
+  /** Peso del offset adaptativo MA_beat (menor = bloques de interés más sensibles) */
+  offsetWeight: 0.28,
   /** Factor mínimo del RR fisiológico entre emisiones de pico (anti-doble latido) */
   peakEmitRefractoryFactor: 0.82,
   minSQI: 10,

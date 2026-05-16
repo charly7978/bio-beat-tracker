@@ -716,7 +716,7 @@ const PPGSignalMeter = ({
 
     if (preserve && !detected) return;
 
-    const scaledValue = signalValue * 2;
+    const scaledValue = signalValue * 3.5;
     // La detección de picos en HeartBeatProcessor evalúa muestras pasadas (índice 5 de 11).
     // A 30 FPS, esto representa un delay algorítmico de ~166ms.
     // Aplicamos este offset visual para que el "BEEP" coincida milimétricamente con la parte más alta de la onda visible.
@@ -761,11 +761,10 @@ const PPGSignalMeter = ({
         if (v < mn) mn = v;
         if (v > mx) mx = v;
       }
-      const range = Math.max(40, mx - mn);
+      const range = Math.max(24, mx - mn);
       const stats = amplitudeStatsRef.current;
-      // Ampliamos el margen de escala (0.25) para que la onda no choque contra el techo/piso y se vea menos "vertical"
-      stats.min = stats.min * 0.95 + (mn - range * 0.25) * 0.05;
-      stats.max = stats.max * 0.95 + (mx + range * 0.25) * 0.05;
+      stats.min = stats.min * 0.86 + (mn - range * 0.16) * 0.14;
+      stats.max = stats.max * 0.86 + (mx + range * 0.16) * 0.14;
       stats.range = stats.max - stats.min;
     }
 

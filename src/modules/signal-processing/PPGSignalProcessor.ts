@@ -28,6 +28,11 @@ import {
   inferCameraRuntimeHints,
   type CameraRuntimeHints,
 } from '../../lib/device/cameraDeviceProfile';
+import {
+  applyPulseAgc,
+  createPulseAgcState,
+  resetPulseAgc,
+} from './shared/pulseAgc';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -58,6 +63,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   public isProcessing = false;
 
   private bandpassFilter: BandpassFilter;
+  private readonly pulseAgcState = createPulseAgcState();
 
   private readonly BUFFER_SIZE = 300;
   private readonly ACDC_WINDOW = 180;
@@ -345,8 +351,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     const endFilt = ppgPerf.start('bandpass');
     const filtered = this.bandpassFilter.filter(pulseSource.value);
+    const enhanced = applyPulseAgc(
+      this.pulseAgcState,
+      filtered,
+      this.cachedPeriodicity > 0 ? this.cachedPeriodicity : this.periodicityEma,
+      this.motionScore,
+    );
     endFilt();
-    this.filteredBuffer.push(filtered);
+    this.filteredBuffer.push(enhanced);
 
     const endSqi = ppgPerf.start('sqi');
     this.periodicitySkip++;
@@ -407,7 +419,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.lastLogTime = now;
       const snap = ppgPerf.snapshot();
       log.info(
-        `[${pulseSource.label}] Filt=${filtered.toFixed(3)} Q=${displayQuality} raw=${this.signalQuality} ` +
+        `[${pulseSource.label}] Filt=${enhanced.toFixed(3)} agc=${this.pulseAgcState.scale.toFixed(2)} Q=${displayQuality} raw=${this.signalQuality} ` +
         `PI=${perfusionIndex.toFixed(4)} P=${this.cachedPeriodicity.toFixed(2)} Contact=${this.contactState} ` +
         `FPS=${snap.fps.toFixed(1)} jitter=${snap.jitterMs.toFixed(1)}ms ` +
         `roi=${(snap.stages.roi?.p95 ?? 0).toFixed(2)}ms ` +
@@ -431,7 +443,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.onSignalReady({
       timestamp,
       rawValue: fingerUi ? pulseSource.value : 0,
-      filteredValue: fingerUi ? filtered : 0,
+      filteredValue: fingerUi ? enhanced : 0,
       quality: displayQuality,
       fingerDetected: fingerUi,
       contactState: fingerUi ? this.contactState : 'NO_CONTACT',
@@ -932,15 +944,16 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const gNorm = this.greenBaseline > 0 ? (this.greenBaseline - rawGreen) / this.greenBaseline : 0;
     const bNorm = this.blueBaseline > 0 ? (this.blueBaseline - rawBlue) / this.blueBaseline : 0;
 
-    const clampPulse = (v: number) => clamp(v, -0.04, 0.04);
+    const clampPulse = (v: number) => clamp(v, -0.055, 0.055);
     const rPulse = clampPulse(rNorm);
     const gPulse = clampPulse(gNorm);
+    const amp = 4400;
 
-    // Source candidates (CHROM removed — amplifies noise without finger)
+    // Source candidates (CHROM removed — amplifica ruido sin dedo)
     const sources: { [key: string]: number } = {
-      R: rPulse * 3800,
-      G: gPulse * 3800,
-      RG: this.blendRG(rPulse, gPulse, rawRed, rawGreen, motionArtifact) * 3800,
+      R: rPulse * amp,
+      G: gPulse * amp,
+      RG: this.blendRG(rPulse, gPulse, rawRed, rawGreen, motionArtifact) * amp,
     };
 
     // Update per-source buffers (ring auto-evicts más viejo)
@@ -953,7 +966,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.rankSources();
     }
 
-    const value = clamp(sources[this.activeSource] ?? sources['RG'], -80, 80);
+    const value = clamp(sources[this.activeSource] ?? sources['RG'], -95, 95);
     const strength = Math.max(Math.abs(rPulse), Math.abs(gPulse)) * 1000;
 
     return { value, label: this.activeSource, strength };
@@ -1158,6 +1171,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.sourceBuffers.G.reset();
     this.sourceBuffers.RG.reset();
     this.bandpassFilter.reset();
+    resetPulseAgc(this.pulseAgcState);
     this.roiRedPulseRing.reset();
     this.lastRoiRedCv = 0;
   }
@@ -1212,6 +1226,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.lastRoiRedCv = 0;
     this.bandpassFilter.setSampleRate(this.estimatedSampleRate);
     this.bandpassFilter.reset();
+    resetPulseAgc(this.pulseAgcState);
   }
 
   private handleMotionEvent = (event: DeviceMotionEvent) => {
