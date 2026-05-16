@@ -134,7 +134,7 @@ export class PanTompkinsPPGDetector {
     }
 
     let confidence = rrMs.length ? clamp(rrMs.length / 5, 0, 1) * 0.5 + clamp(peaks.length / 8, 0, 1) * 0.5 : 0;
-    if (typeof input.sqi === 'number' && input.sqi < PEAK_DETECTION_DEFAULTS.minSQI) confidence *= 0.35;
+    if (typeof input.sqi === 'number' && input.sqi < PEAK_DETECTION_DEFAULTS.minSQI) confidence *= 0.5;
 
     return {
       peaks,

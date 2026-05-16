@@ -207,7 +207,7 @@ export class ElgendiPeakDetector {
 
     let confidence = rr.length > 0 ? clamp(rr.length / 6, 0, 1) * 0.55 + clamp(peaks.length / 8, 0, 1) * 0.45 : 0;
     if (typeof input.sqi === 'number' && input.sqi < PEAK_DETECTION_DEFAULTS.minSQI) {
-      confidence *= 0.35;
+      confidence *= 0.5;
     }
 
     return {

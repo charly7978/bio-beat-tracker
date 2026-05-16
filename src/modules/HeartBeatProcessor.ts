@@ -140,10 +140,7 @@ export class HeartBeatProcessor {
     let ensembleBpm: number | null = null;
     let ensembleConf = 0;
 
-    if (
-      this.frameTick % 2 === 0 &&
-      this.signalBuffer.length >= PEAK_DETECTION_DEFAULTS.minSamplesEnsemble
-    ) {
+    if (this.signalBuffer.length >= PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
       const win = Math.min(240, this.signalBuffer.length);
       const sig = this.signalBuffer.slice(-win);
       const ts = this.timestampBuffer.slice(-win);
@@ -175,7 +172,7 @@ export class HeartBeatProcessor {
       const lastT = ens.peakTimes.length ? ens.peakTimes[ens.peakTimes.length - 1] : 0;
       if (
         lastT > 0 &&
-        Math.abs(lastT - now) < 115 &&
+        Math.abs(lastT - now) < 220 &&
         Math.abs(lastT - this.lastEmittedPeakTime) > this.MIN_PEAK_INTERVAL_MS * 0.35
       ) {
         isPeak = true;
@@ -285,7 +282,7 @@ export class HeartBeatProcessor {
   private normalizeWindow(values: number[], windowLen: number = 150): number[] {
     const refWindow = this.signalBuffer.slice(-windowLen);
     const { low, high, range } = this.getRobustBounds(refWindow);
-    if (range < 0.15) return values.map(() => 0);
+    if (range < 0.09) return values.map(() => 0);
     return values.map((v) => {
       const c = Math.min(high, Math.max(low, v));
       return ((c - low) / range - 0.5) * 120;
@@ -320,7 +317,7 @@ export class HeartBeatProcessor {
     const centered = recentSignal.map((v) => v - mean);
     const energy = centered.reduce((s, v) => s + v * v, 0);
 
-    if (energy < 1800) return { bpm: 0, score: 0 };
+    if (energy < 650) return { bpm: 0, score: 0 };
 
     const minLag = Math.max(5, Math.round((sampleRate * 60) / 200));
     const maxLag = Math.min(centered.length - 8, Math.round((sampleRate * 60) / 38));

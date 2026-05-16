@@ -377,13 +377,15 @@ const Index = () => {
         requestVideoFrameCallback?: (cb: (now: number, metadata: VideoFrameCallbackMetadata) => void) => number;
       };
       if (typeof vAny.requestVideoFrameCallback === 'function') {
-        videoFrameLoopRef.current = vAny.requestVideoFrameCallback((_now, metadata) => {
+        videoFrameLoopRef.current = vAny.requestVideoFrameCallback((now, metadata) => {
           ppgPerf.markFrame(metadata);
-          const ts = typeof metadata?.captureTime === 'number'
-            ? metadata.captureTime
-            : (typeof metadata?.presentationTime === 'number'
-              ? metadata.presentationTime
-              : (typeof metadata?.mediaTime === 'number' ? metadata.mediaTime * 1000 : performance.now()));
+          // `now` del callback = DOMHighResTimeStamp alineado con performance.now().
+          // captureTime/presentationTime pueden ser eje de medios (s) o mezclas raras y rompen
+          // la ventana |pico−now| del HeartBeatProcessor → casi nunca hay latidos detectados.
+          const ts =
+            typeof now === 'number' && Number.isFinite(now)
+              ? now
+              : performance.now();
           captureOneFrame(ts);
         });
       } else {
