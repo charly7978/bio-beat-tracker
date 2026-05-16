@@ -14,6 +14,7 @@ import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionSt
 import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
 import {
   createMeasurementSessionLatch,
+  isMeasurementPipelineLive,
   SESSION_LATCH,
   updateMeasurementSessionLatch,
 } from "@/lib/measurement/measurementSessionLatch";
@@ -716,10 +717,13 @@ const Index = () => {
         ? diag.sqm.sqi
         : lastSignal.quality) || 0;
 
+    const bpmForLatch = heartBeatResult.bpm > 0 ? heartBeatResult.bpm : lastGoodBpmRef.current;
+    if (bpmForLatch > 0) lastGoodBpmRef.current = bpmForLatch;
+
     measurementLatchRef.current = updateMeasurementSessionLatch(
       measurementLatchRef.current,
       hasUsableContact,
-      heartBeatResult.bpm,
+      bpmForLatch,
       rawSqi,
       nowT,
       heartBeatResult.isPeak,
@@ -746,10 +750,15 @@ const Index = () => {
       heartBeatResult.confidence >= minConf &&
       rawSqi >= Q.MIN_FOR_HR;
 
+    const piMin = Q.MIN_PI * Math.max(0.06, hints.minPiScale * 0.22);
     const pipelineLive =
-      hrReady &&
-      measurementLatchRef.current.established &&
-      (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * hints.minPiScale;
+      isMeasurementPipelineLive(
+        measurementLatchRef.current,
+        hasUsableContact,
+        rawSqi,
+        nowT,
+      ) &&
+      (lastSignal.perfusionIndex || 0) >= piMin;
 
     const showWaveform = hasUsableContact;
 
@@ -922,7 +931,7 @@ const Index = () => {
       const vitals = processVitalSigns(
         lastSignal.filteredValue,
         lastSignal.quality || 0,
-        bpmOut,
+        bpmOut || lastGoodBpmRef.current,
         rrForVitals,
         lastSignal.perfusionIndex,
         enrichedSqm,

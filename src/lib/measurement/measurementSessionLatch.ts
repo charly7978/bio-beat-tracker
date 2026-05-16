@@ -11,12 +11,14 @@ export interface MeasurementSessionLatch {
 }
 
 export const SESSION_LATCH = {
-  ESTABLISH_STREAK: 8,
+  /** Picos reales consecutivos antes de alimentar SpO2/BP (≈4–5 s a 70 bpm) */
+  ESTABLISH_STREAK: 5,
   CONTACT_GRACE_MS: 3500,
   /** Sin picos reales durante este tiempo, la sesión no alimenta vitales */
-  MAX_PEAK_GAP_MS: 2600,
+  MAX_PEAK_GAP_MS: 3200,
   MIN_BPM: 35,
-  MIN_SQI: 6,
+  /** Alineado con arranque de SQI en cámara (HR puede mostrarse antes que SpO2) */
+  MIN_SQI: 4,
 } as const;
 
 export function createMeasurementSessionLatch(): MeasurementSessionLatch {
@@ -63,8 +65,9 @@ export function updateMeasurementSessionLatch(
 
   const nextBpm = bpm > 0 ? bpm : latch.lastBpm;
   const lastPeakMs = isPeak ? nowMs : latch.lastPeakMs;
+  const peakBpm = bpm > 0 ? bpm : latch.lastBpm;
 
-  if (isPeak && bpm >= SESSION_LATCH.MIN_BPM && rawSqi >= SESSION_LATCH.MIN_SQI) {
+  if (isPeak && peakBpm >= SESSION_LATCH.MIN_BPM && rawSqi >= SESSION_LATCH.MIN_SQI) {
     const goodStreak = latch.goodStreak + 1;
     return {
       established: latch.established || goodStreak >= SESSION_LATCH.ESTABLISH_STREAK,
