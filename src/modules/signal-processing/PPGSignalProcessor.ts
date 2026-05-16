@@ -584,7 +584,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const width = imageData.width;
     const height = imageData.height;
 
-    const roiSize = Math.min(width, height) * 0.84;
+    const roiSize = Math.min(width, height) * VITAL_THRESHOLDS.FINGER.ROI_SIZE_FRACTION;
     const startX = Math.floor((width - roiSize) / 2);
     const startY = Math.floor((height - roiSize) / 2);
     const endX = startX + Math.floor(roiSize);
@@ -645,11 +645,16 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const dx = normX - 0.5;
       const dy = normY - 0.5;
       const distanceFromCenter = Math.sqrt(dx * dx + dy * dy);
-      const centerBias = clamp(1 - distanceFromCenter * 1.2, 0.3, 1);
+      const centerBias = clamp(
+        1 - distanceFromCenter * F.ROI_CENTER_BIAS_MULT,
+        F.ROI_CENTER_BIAS_MIN,
+        1,
+      );
 
-      const brightnessScore = clamp((total - 95) / 250, 0, 1);
+      const brightnessScore = clamp((total - F.TILE_BRIGHTNESS_OFFSET) / 250, 0, 1);
       const redRatioScore = clamp((rednessRatio - 1.01) / 0.88, 0, 1);
-      const dominanceScore = clamp((redDominance - 7) / 32, 0, 1);
+      const domOff = F.TILE_DOMINANCE_SCORE_OFFSET;
+      const dominanceScore = clamp((redDominance - domOff) / 32, 0, 1);
       const frameScore = redRatioScore * 0.45 + dominanceScore * 0.4 + brightnessScore * 0.15;
 
       this.tileConfidence[i] = this.tileConfidence[i] * 0.75 + frameScore * centerBias * 0.25;
