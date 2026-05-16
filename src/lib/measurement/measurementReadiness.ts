@@ -23,11 +23,13 @@ export interface MeasurementReadinessInput {
 }
 
 export interface MeasurementReadiness {
-  /** Alimentar DSP SpO2/BP/arr (dedo + SQI + PI mínimos) */
+  /** SpO2: dedo + SQI + PI (no exige picos recientes) */
+  spo2PipelineReady: boolean;
+  /** BP/arritmia: sesión con picos + RR */
+  fullVitalsReady: boolean;
+  /** Alias legacy: mismo que spo2PipelineReady para no cortar SpO2 */
   vitalsDspReady: boolean;
-  /** Mostrar/actualizar BPM en UI */
   hrDisplayReady: boolean;
-  /** Sesión con picos recientes (PA/RR más fiables) */
   pipelineLive: boolean;
 }
 
@@ -57,15 +59,16 @@ export function evaluateMeasurementReadiness(
   );
 
   const piOk = perfusionIndex >= piMin;
-  const latchWarming = latch.goodStreak >= 1 || latch.established;
 
-  const vitalsDspReady =
-    hasUsableContact &&
-    rawSqi >= 3 &&
-    piOk &&
-    latchWarming;
+  const spo2PipelineReady =
+    hasUsableContact && rawSqi >= 3 && piOk;
 
-  const confScale = contactState === 'STABLE_CONTACT' ? 1 : 0.82;
+  const fullVitalsReady =
+    spo2PipelineReady &&
+    peakRecent &&
+    (latch.established || latch.goodStreak >= 2);
+
+  const confScale = contactState === 'STABLE_CONTACT' ? 1 : 0.85;
   const hrDisplayReady =
     hasUsableContact &&
     contactState !== 'NO_CONTACT' &&
@@ -75,5 +78,11 @@ export function evaluateMeasurementReadiness(
     rawSqi >= Q.MIN_FOR_HR &&
     ensembleConfidence >= minEnsembleConf * confScale;
 
-  return { vitalsDspReady, hrDisplayReady, pipelineLive };
+  return {
+    spo2PipelineReady,
+    fullVitalsReady,
+    vitalsDspReady: spo2PipelineReady,
+    hrDisplayReady,
+    pipelineLive,
+  };
 }

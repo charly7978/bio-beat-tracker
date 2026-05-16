@@ -740,7 +740,12 @@ const Index = () => {
       latch: measurementLatchRef.current,
       nowMs: nowT,
     });
-    const { vitalsDspReady, hrDisplayReady: hrReady, pipelineLive } = readiness;
+    const {
+      vitalsDspReady,
+      fullVitalsReady,
+      hrDisplayReady: hrReady,
+      pipelineLive,
+    } = readiness;
 
     const showWaveform = hasUsableContact;
 
@@ -841,7 +846,15 @@ const Index = () => {
       lastRrSnapshotRef.current = heartBeatResult.rrData;
     }
 
-    if (hasUsableContact && heartBeatResult.isPeak) {
+    const peakEmitReason =
+      (heartBeatResult.ensembleDiagnostics as { emitReason?: string } | undefined)
+        ?.emitReason;
+    const fusedPeak =
+      hasUsableContact &&
+      heartBeatResult.isPeak &&
+      peakEmitReason === 'DUAL_FUSED';
+
+    if (fusedPeak) {
       setBeatMarker(1);
       if (beatMarkerTimerRef.current) window.clearTimeout(beatMarkerTimerRef.current);
       beatMarkerTimerRef.current = window.setTimeout(() => {
@@ -907,11 +920,12 @@ const Index = () => {
       );
 
       const rrForVitals =
+        fullVitalsReady &&
         heartBeatResult.rrData &&
-        heartBeatResult.rrData.intervals.length >= 2 &&
-        (heartBeatResult.confidence > VITAL_THRESHOLDS.BP.MIN_RR_CONFIDENCE || pipelineLive)
+        heartBeatResult.rrData.intervals.length >= 2
           ? { ...heartBeatResult.rrData, timestampNow: nowT }
-          : lastRrSnapshotRef.current &&
+          : fullVitalsReady &&
+              lastRrSnapshotRef.current &&
               lastRrSnapshotRef.current.intervals.length >= 2
             ? { ...lastRrSnapshotRef.current, timestampNow: nowT }
             : undefined;
@@ -936,7 +950,13 @@ const Index = () => {
         setVitalSigns(vitals);
       }
 
-      if (heartBeatResult.rrData && heartBeatResult.rrData.intervals.length >= 2 && heartBeatResult.confidence > 0.12 && vitals.heartRate.status === 'VALID') {
+      if (
+        fullVitalsReady &&
+        heartBeatResult.rrData &&
+        heartBeatResult.rrData.intervals.length >= 2 &&
+        heartBeatResult.confidence > 0.15 &&
+        vitals.heartRate.status === 'VALID'
+      ) {
         const arrhythmiaStatus = vitals.arrhythmia.value.status;
         if (arrhythmiaStatus) {
           lastArrhythmiaData.current = vitals.lastArrhythmiaData || null;

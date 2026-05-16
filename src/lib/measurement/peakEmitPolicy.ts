@@ -67,17 +67,17 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     const src = ens.peakSources?.[i];
     const dual =
       src === 'dual' &&
-      detectorConsensus >= consensusMin * (fingerContactConfirmed ? 0.78 : 0.88) &&
-      ens.confidence >= minPeakConf * (fingerContactConfirmed ? 0.88 : 0.95);
+      detectorConsensus >= consensusMin * (fingerContactConfirmed ? 0.82 : 0.9) &&
+      ens.confidence >= minPeakConf * (fingerContactConfirmed ? 0.9 : 0.96);
     const soloElMin =
-      placementMode === 'pad' ? 0.14 : placementMode === 'tip' ? 0.16 : 0.18;
+      placementMode === 'pad' ? 0.22 : placementMode === 'tip' ? 0.24 : 0.26;
     const solo =
       fingerContactConfirmed &&
       allowSoloElgendi &&
       src === 'solo_elgendi' &&
       elConf >= soloElMin &&
-      detectorConsensus >= consensusMin * (placementMode === 'hybrid' ? 0.65 : 0.62) &&
-      ens.confidence >= minPeakConf * (placementMode === 'hybrid' ? 0.75 : 0.72);
+      detectorConsensus >= consensusMin * (placementMode === 'hybrid' ? 0.78 : 0.75) &&
+      ens.confidence >= minPeakConf * (placementMode === 'hybrid' ? 0.92 : 0.88);
 
     if (dual || solo) {
       if (t >= bestT) {

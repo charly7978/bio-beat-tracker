@@ -9,6 +9,7 @@ describe('measurementReadiness', () => {
   it('habilita vitales con dedo, SQI y al menos un pico en latch', () => {
     let latch = createMeasurementSessionLatch();
     latch = updateMeasurementSessionLatch(latch, true, 72, 12, 1000, true);
+    latch = updateMeasurementSessionLatch(latch, true, 72, 12, 1800, true);
     const r = evaluateMeasurementReadiness({
       hasUsableContact: true,
       contactState: 'UNSTABLE_CONTACT',
@@ -22,7 +23,9 @@ describe('measurementReadiness', () => {
       latch,
       nowMs: 1100,
     });
+    expect(r.spo2PipelineReady).toBe(true);
     expect(r.vitalsDspReady).toBe(true);
+    expect(r.fullVitalsReady).toBe(true);
     expect(r.hrDisplayReady).toBe(true);
   });
 
@@ -41,7 +44,9 @@ describe('measurementReadiness', () => {
       latch,
       nowMs: 1000,
     });
+    expect(r.spo2PipelineReady).toBe(false);
     expect(r.vitalsDspReady).toBe(false);
+    expect(r.fullVitalsReady).toBe(false);
     expect(r.hrDisplayReady).toBe(false);
   });
 });

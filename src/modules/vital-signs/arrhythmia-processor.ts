@@ -186,15 +186,16 @@ export class ArrhythmiaProcessor {
     const entropySupport =
       this.sampleEntropy > this.SAMPLE_ENTROPY_THRESHOLD && outlierCount >= 3;
     const sustainedIrregularity =
-      abruptDiffCount >= 3 ||
-      outlierCount >= 3 ||
+      abruptDiffCount >= 4 ||
+      outlierCount >= 4 ||
       this.detectIrregularSequence(validRRs.slice(-6));
-    const isolatedOutlierPattern = rrVariation > 0.22 && outlierCount >= 3;
+    const isolatedOutlierPattern = rrVariation > 0.24 && outlierCount >= 4;
 
     const newArrhythmiaState =
       strongVariability &&
       sustainedIrregularity &&
-      (nonlinearSupport || entropySupport || isolatedOutlierPattern);
+      nonlinearSupport &&
+      (entropySupport || isolatedOutlierPattern);
 
 
     // Notificar cambios en el estado de arritmia

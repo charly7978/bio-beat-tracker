@@ -86,17 +86,17 @@ export const VITAL_THRESHOLDS = {
   /** Detección de irregularidad del ritmo (conservador — menos falsos positivos) */
   ARRHYTHMIA: {
     RR_WINDOW_SIZE: 10,
-    RMSSD_THRESHOLD_MS: 58,
-    MIN_INTERVALS: 8,
-    MIN_SQI: 32,
-    LEARNING_PERIOD_MS: 10_000,
-    MIN_EVENT_INTERVAL_MS: 4500,
-    PNNX_THRESHOLD: 0.38,
-    SHANNON_ENTROPY_THRESHOLD: 2.05,
-    SAMPLE_ENTROPY_THRESHOLD: 1.55,
-    OUTLIER_RATIO: 0.18,
-    ABRUPT_RR_FRAC: 0.14,
-    IRREGULAR_DIFF_MS: 150,
+    RMSSD_THRESHOLD_MS: 68,
+    MIN_INTERVALS: 9,
+    MIN_SQI: 38,
+    LEARNING_PERIOD_MS: 12_000,
+    MIN_EVENT_INTERVAL_MS: 6000,
+    PNNX_THRESHOLD: 0.42,
+    SHANNON_ENTROPY_THRESHOLD: 2.15,
+    SAMPLE_ENTROPY_THRESHOLD: 1.65,
+    OUTLIER_RATIO: 0.16,
+    ABRUPT_RR_FRAC: 0.16,
+    IRREGULAR_DIFF_MS: 165,
   },
 
   // FINGER + ROI (cámara trasera + dedo; hemoglobina + pulsación temporal)

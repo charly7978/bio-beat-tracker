@@ -112,6 +112,14 @@ export class VitalSignsProcessor {
   /** PI del pipeline PPG (AC/DC canónico); evita que `isClinicallyValid` dependa solo del ratio RGB usado en SpO2 */
   private lastPpgPerfusionIndex = 0;
   private lastSqmBundle: SignalQualityMetrics | null = null;
+  /** Evita que SpO2/PA desaparezcan por un frame de gate bajo */
+  private displayHold = {
+    spo2: 0,
+    systolic: 0,
+    diastolic: 0,
+    missedFrames: 0,
+  };
+  private readonly DISPLAY_HOLD_MAX_FRAMES = 120;
 
   constructor() {
     this.arrhythmiaProcessor = new ArrhythmiaProcessor();
@@ -311,14 +319,44 @@ export class VitalSignsProcessor {
 
     const hrMinSqi = VITAL_THRESHOLDS.QUALITY.MIN_FOR_HR;
     const hrOk = this.lastBPM > 0 && sqi >= hrMinSqi;
+    const bpUiReady =
+      vitalUiGate || (this.validPulseCount >= 2 && sqi >= 12);
 
-    const spo2HasDisplay =
+    if (
       spo2UiReady &&
       this.measurements.spo2 > 0 &&
       this.measurements.spo2 >= 70 &&
-      this.measurements.spo2 <= 100;
+      this.measurements.spo2 <= 100
+    ) {
+      this.displayHold.spo2 = this.measurements.spo2;
+      this.displayHold.missedFrames = 0;
+    } else if (this.displayHold.spo2 > 0) {
+      this.displayHold.missedFrames++;
+    }
 
-    const spo2Status: MeasurementStatus = !spo2UiReady
+    if (
+      bpUiReady &&
+      this.measurements.systolicPressure > 0 &&
+      this.measurements.diastolicPressure > 0
+    ) {
+      this.displayHold.systolic = this.measurements.systolicPressure;
+      this.displayHold.diastolic = this.measurements.diastolicPressure;
+      this.displayHold.missedFrames = 0;
+    }
+
+    const holdActive =
+      this.displayHold.missedFrames < this.DISPLAY_HOLD_MAX_FRAMES;
+    const spo2Shown =
+      spo2UiReady &&
+      this.measurements.spo2 > 0
+        ? this.measurements.spo2
+        : holdActive && this.displayHold.spo2 > 0
+          ? this.displayHold.spo2
+          : 0;
+    const spo2HasDisplay =
+      spo2Shown >= 70 && spo2Shown <= 100;
+
+    const spo2Status: MeasurementStatus = !spo2UiReady && !holdActive
       ? "LOW_SIGNAL_QUALITY"
       : !spo2HasDisplay
         ? "NO_VALID_SIGNAL"
@@ -327,14 +365,23 @@ export class VitalSignsProcessor {
           : spo2Calib.available
             ? "VALID"
             : "REQUIRES_CALIBRATION";
-
-    const bpUiReady =
-      vitalUiGate || (this.validPulseCount >= 2 && sqi >= 12);
+    const bpSysShown =
+      bpUiReady && this.measurements.systolicPressure > 0
+        ? this.measurements.systolicPressure
+        : holdActive && this.displayHold.systolic > 0
+          ? this.displayHold.systolic
+          : 0;
+    const bpDiaShown =
+      bpUiReady && this.measurements.diastolicPressure > 0
+        ? this.measurements.diastolicPressure
+        : holdActive && this.displayHold.diastolic > 0
+          ? this.displayHold.diastolic
+          : 0;
     const bpHasMorph =
       bpUiReady &&
       this.lastBPConfidence !== 'INSUFFICIENT' &&
-      this.measurements.systolicPressure > 0 &&
-      this.measurements.diastolicPressure > 0;
+      bpSysShown > 0 &&
+      bpDiaShown > 0;
 
     const bpStatus: MeasurementStatus = !bpUiReady
       ? "LOW_SIGNAL_QUALITY"
@@ -394,8 +441,8 @@ export class VitalSignsProcessor {
         name: "Blood Pressure",
         value: bpHasMorph
           ? {
-              systolic: Math.round(this.measurements.systolicPressure),
-              diastolic: Math.round(this.measurements.diastolicPressure),
+              systolic: Math.round(bpSysShown),
+              diastolic: Math.round(bpDiaShown),
             }
           : null,
         unit: "mmHg",
@@ -548,9 +595,10 @@ export class VitalSignsProcessor {
     const arrhythmiaInput = (
       arrhythmiaRR.length >= arrCfg.MIN_INTERVALS &&
       this.measurements.signalQuality >= arrCfg.MIN_SQI &&
-      detectorAgree >= VITAL_THRESHOLDS.QUALITY.MIN_DETECTOR_AGREEMENT_ARRHYTHMIA &&
+      detectorAgree >= VITAL_THRESHOLDS.QUALITY.MIN_DETECTOR_AGREEMENT_ARRHYTHMIA + 0.06 &&
       hr >= VITAL_THRESHOLDS.HR.MIN &&
-      hr <= VITAL_THRESHOLDS.HR.MAX
+      hr <= VITAL_THRESHOLDS.HR.MAX &&
+      this.validPulseCount >= 3
     ) ? { ...rrData!, intervals: arrhythmiaRR } : undefined;
 
     const arrhythmiaResult = this.arrhythmiaProcessor.processRRData(arrhythmiaInput);
@@ -709,6 +757,7 @@ export class VitalSignsProcessor {
     };
     this.rgbData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
     this.lastPpgPerfusionIndex = 0;
+    this.displayHold = { spo2: 0, systolic: 0, diastolic: 0, missedFrames: 0 };
     this.isCalibrating = false;
     this.calibrationSamples = 0;
     this.arrhythmiaProcessor.reset();
