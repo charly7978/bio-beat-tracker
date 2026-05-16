@@ -852,7 +852,7 @@ const Index = () => {
       lastRrSnapshotRef.current = heartBeatResult.rrData;
     }
 
-    if ((hrPublish || sessionLive) && heartBeatResult.isPeak) {
+    if (hasUsableContact && heartBeatResult.isPeak) {
       setBeatMarker(1);
       if (beatMarkerTimerRef.current) window.clearTimeout(beatMarkerTimerRef.current);
       beatMarkerTimerRef.current = window.setTimeout(() => {
@@ -868,9 +868,10 @@ const Index = () => {
     }
 
     if (
-      (hrPublish || sessionLive) &&
+      hasUsableContact &&
       heartBeatResult.isPeak &&
       heartBeatResult.rrData?.intervals &&
+      heartBeatResult.rrData.intervals.length > 0 &&
       nowT - lastRrPushRef.current >= RR_PUSH_THROTTLE_MS
     ) {
       lastRrPushRef.current = nowT;
