@@ -36,4 +36,8 @@ describe('SignalQualityIndex.calculate (móvil PPG)', () => {
     }
     expect(ema).toBeGreaterThanOrEqual(20);
   });
+
+  it('smoothDisplayedSqi es 0 en NO_CONTACT (sin arrastre)', () => {
+    expect(SignalQualityIndex.smoothDisplayedSqi(55, 40, 'NO_CONTACT')).toBe(0);
+  });
 });

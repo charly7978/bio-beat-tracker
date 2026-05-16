@@ -102,7 +102,7 @@ export class SignalQualityIndex {
     const scaled = raw * clamp(rejectionScale, 0.35, 1);
 
     if (contactState === 'NO_CONTACT') {
-      return prev > 0 ? Math.round(prev * 0.86) : 0;
+      return 0;
     }
     if (scaled <= 0) {
       return prev > 0 ? Math.round(prev * 0.92) : 0;

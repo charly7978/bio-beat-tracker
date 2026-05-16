@@ -124,12 +124,12 @@ export const VITAL_THRESHOLDS = {
     TILE_MIN_COMBINED_SCORE: 0.26,
     TILE_DOMINANCE_SCORE_OFFSET: 5,
     MIN_FINGER_TILES_FOR_WEIGHTING: 3,
-    FINGER_CONFIRM_FRAMES: 6,
-    /** Tras perder firma instantánea: frames hasta degradar (≈0,5 s @ 30 fps) */
-    INSTANT_LOST_TO_UNSTABLE: 4,
-    INSTANT_LOST_TO_NO_CONTACT: 12,
-    FINGER_LOST_FRAMES_UI: 18,
-    UNSTABLE_GRACE_FRAMES: 28,
+    FINGER_CONFIRM_FRAMES: 5,
+    /** Tras perder firma instantánea: frames hasta degradar */
+    INSTANT_LOST_TO_UNSTABLE: 2,
+    INSTANT_LOST_TO_NO_CONTACT: 4,
+    FINGER_LOST_FRAMES_UI: 6,
+    UNSTABLE_GRACE_FRAMES: 0,
     /** softHold al perder instantáneo — solo si la firma RGB aún es válida */
     SOFT_HOLD_COVERAGE: 0.11,
     SOFT_HOLD_DOMINANCE_DELTA: 6,

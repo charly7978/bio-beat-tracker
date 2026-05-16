@@ -951,7 +951,10 @@ const Index = () => {
             <PPGSignalMeter 
               value={heartbeatSignal}
               quality={lastSignal?.quality || 0}
-              isFingerDetected={lastSignal?.fingerDetected || false}
+              isFingerDetected={
+                !!lastSignal?.fingerDetected &&
+                lastSignal?.contactState !== 'NO_CONTACT'
+              }
               onStartMeasurement={handleToggleMonitoring}
               onReset={handleReset}
               isMonitoring={isMonitoring}
