@@ -10,7 +10,6 @@ import {
   inferCameraRuntimeHints,
   type CameraRuntimeHints,
 } from '../lib/device/cameraDeviceProfile';
-import { shouldEmitMetronomeBeat } from '../lib/measurement/beatMetronome';
 
 export interface HeartBeatProcessDiagnostics {
   ensemble?: Record<string, unknown>;
@@ -129,11 +128,10 @@ export class HeartBeatProcessor {
     }
     if (this.cachedGateRange < this.gateRangeMin()) {
       if (this.heldBpm > 0 && now - this.lastGoodBpmTime < this.BPM_HOLD_MS) {
-        const isPeakHeld = this.tryEmitMetronomeBeat(now, this.heldBpm);
         return {
           bpm: Math.round(this.heldBpm),
           confidence: clamp(this.calculateConfidence(0) * 0.88, 0.1, 0.65),
-          isPeak: isPeakHeld,
+          isPeak: false,
           filteredValue: 0,
           sqi: this.signalQualityIndex,
           ensembleDiagnostics: this.lastDiagnostics.ensemble,
@@ -201,20 +199,11 @@ export class HeartBeatProcessor {
       }
 
       const lastT = ens.peakTimes.length ? ens.peakTimes[ens.peakTimes.length - 1] : 0;
-      const ensDiag = ens.diagnostics as { elgendiPeakTimes?: number[] } | undefined;
-      const soloElLast =
-        ensDiag?.elgendiPeakTimes?.length
-          ? ensDiag.elgendiPeakTimes[ensDiag.elgendiPeakTimes.length - 1]!
-          : 0;
-      const candidateT = lastT > 0 ? lastT : soloElLast;
       const bufferNow = this.timestampBuffer[this.timestampBuffer.length - 1] ?? now;
-      const peakWindowMs = this.cameraHints.constrained
-        ? PEAK_DETECTION_DEFAULTS.peakEmitWindowMs
-        : Math.round(PEAK_DETECTION_DEFAULTS.peakEmitWindowMs * 1.55);
-      const peakDelta = candidateT > 0
-        ? Math.min(Math.abs(candidateT - now), Math.abs(candidateT - bufferNow))
+      const peakDelta = lastT > 0
+        ? Math.min(Math.abs(lastT - now), Math.abs(lastT - bufferNow))
         : Number.POSITIVE_INFINITY;
-      const peakFresh = peakDelta < peakWindowMs;
+      const peakFresh = peakDelta < PEAK_DETECTION_DEFAULTS.peakEmitWindowMs;
       const minEmitGap =
         this.MIN_PEAK_INTERVAL_MS * PEAK_DETECTION_DEFAULTS.peakEmitRefractoryFactor;
       const agreement = ens.agreement;
@@ -222,30 +211,18 @@ export class HeartBeatProcessor {
         (agreement.elgendi + agreement.panTompkins) / 2;
       const minPeakConf =
         VITAL_THRESHOLDS.QUALITY.MIN_ENSEMBLE_CONF_FOR_PEAK *
-        (this.cameraHints.constrained ? 0.5 : 0.42);
+        (this.cameraHints.constrained ? 0.5 : 1);
       const consensusMin = this.cameraHints.peakConsensusMin;
-      const relaxedSolo =
-        !this.cameraHints.constrained &&
-        this.cameraHints.allowSoloElgendiFusion &&
-        soloElLast > 0 &&
-        candidateT === soloElLast;
-      const ensembleEmit =
-        candidateT > 0 &&
+      if (
+        lastT > 0 &&
         peakFresh &&
         ensembleConf >= minPeakConf &&
         detectorConsensus >= consensusMin &&
-        Math.abs(candidateT - this.lastEmittedPeakTime) > minEmitGap;
-      const soloEmit =
-        relaxedSolo &&
-        peakFresh &&
-        agreement.elgendi >= 0.26 &&
-        ensembleConf >= minPeakConf * 0.55 &&
-        Math.abs(soloElLast - this.lastEmittedPeakTime) > minEmitGap;
-
-      if (ensembleEmit || soloEmit) {
+        Math.abs(lastT - this.lastEmittedPeakTime) > minEmitGap
+      ) {
         isPeak = true;
-        this.lastEmittedPeakTime = candidateT;
-        this.lastPeakTime = candidateT;
+        this.lastEmittedPeakTime = lastT;
+        this.lastPeakTime = lastT;
 
         if (ens.rrIntervalsMs.length >= 1) {
           const lastInt = ens.rrIntervalsMs[ens.rrIntervalsMs.length - 1];
@@ -336,10 +313,6 @@ export class HeartBeatProcessor {
     if (displayBPM > 0 && finalConfidence >= 0.1) {
       this.heldBpm = displayBPM;
       this.lastGoodBpmTime = now;
-    }
-
-    if (!isPeak && displayBPM > 0) {
-      isPeak = this.tryEmitMetronomeBeat(now, displayBPM);
     }
 
     return {
@@ -508,25 +481,6 @@ export class HeartBeatProcessor {
     const rrStability = clamp(1 - cv * 1.7, 0, 1);
 
     return clamp(rrStability * 0.28 + peakSupport * 0.2 + sqiFactor * 0.18 + this.periodicityScore * 0.2 + ens * 0.14, 0, 1);
-  }
-
-  /** Beep/vibración alineados al BPM mostrado cuando el ensemble deja de emitir picos. */
-  private tryEmitMetronomeBeat(now: number, bpm: number): boolean {
-    const ok = shouldEmitMetronomeBeat({
-      nowMs: now,
-      lastEmittedPeakMs: this.lastEmittedPeakTime,
-      displayBpm: bpm,
-      consecutivePeaks: this.consecutivePeaks,
-      lastGoodBpmAgeMs: now - this.lastGoodBpmTime,
-      minBpm: PEAK_DETECTION_DEFAULTS.minBpm,
-      maxBpm: PEAK_DETECTION_DEFAULTS.maxBpm,
-      refractoryFactor: this.cameraHints.constrained ? 0.9 : 0.76,
-    });
-    if (!ok) return false;
-    this.lastEmittedPeakTime = now;
-    this.vibrate();
-    void this.playBeep();
-    return true;
   }
 
   private vibrate(): void {
