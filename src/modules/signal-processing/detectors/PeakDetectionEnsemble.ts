@@ -289,6 +289,9 @@ export class PeakDetectionEnsemble {
         fusedPeakTimes: sortedTimes,
         elgendiPeakTimes: el.peakTimes,
         panTompkinsPeakTimes: pt.peakTimes,
+        fsDeclared: samplingRateHz,
+        fsEffective,
+        fsAdapted,
       },
     };
   }
