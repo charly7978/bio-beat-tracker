@@ -108,7 +108,7 @@ export class HeartBeatProcessor {
       const gSorted = [...recentForGate].sort((a, b) => a - b);
       this.cachedGateRange = (gSorted[Math.floor(gSorted.length * 0.9)] ?? 0) - (gSorted[Math.floor(gSorted.length * 0.1)] ?? 0);
     }
-    if (this.cachedGateRange < 0.12) {
+    if (this.cachedGateRange < 0.07) {
       return { bpm: 0, confidence: 0, isPeak: false, filteredValue: 0, sqi: 0, ensembleDiagnostics: this.lastDiagnostics.ensemble };
     }
 
@@ -276,7 +276,7 @@ export class HeartBeatProcessor {
   private normalizeSignal(value: number, windowLen: number = 150): { normalizedValue: number; range: number } {
     const recent = this.signalBuffer.slice(-windowLen);
     const { low, high, range } = this.getRobustBounds(recent);
-    if (range < 0.15) return { normalizedValue: 0, range: 0 };
+    if (range < 0.09) return { normalizedValue: 0, range: 0 };
     const clipped = Math.min(high, Math.max(low, value));
     const normalizedValue = ((clipped - low) / range - 0.5) * 120;
     return { normalizedValue, range };

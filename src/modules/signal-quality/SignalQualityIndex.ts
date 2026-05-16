@@ -73,4 +73,12 @@ export class SignalQualityIndex {
   static isClinicallyValid(sqi: number, pi: number): boolean {
     return sqi >= 55 && pi >= 0.0012;
   }
+
+  /**
+   * Umbral más bajo que {@link isClinicallyValid}: suficiente para mostrar HR/SpO2/BP estimados
+   * en cámara+dedo cuando la señal es usable pero no “certificable”.
+   */
+  static isAdequateForLiveVitals(sqi: number, pi: number): boolean {
+    return sqi >= 12 && pi >= 0.00028;
+  }
 }

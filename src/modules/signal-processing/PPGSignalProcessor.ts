@@ -346,7 +346,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
           `PI:${perfusionIndex.toFixed(2)} C:${(this.smoothedCoverage * 100).toFixed(0)} ` +
           `${this.contactState}${motionArtifact ? ' MOV' : ''}`,
-        hasPulsatility: SignalQualityIndex.isClinicallyValid(this.signalQuality, perfusionIndex),
+        hasPulsatility:
+          SignalQualityIndex.isClinicallyValid(this.signalQuality, perfusionIndex) ||
+          SignalQualityIndex.isAdequateForLiveVitals(this.signalQuality, perfusionIndex),
         pulsatilityValue: this.contactState === 'STABLE_CONTACT' ? Math.max(perfusionIndex, pulseSource.strength * 0.02) : 0,
         status: rejectionStatus || (this.signalQuality > 45 ? "VALID" : "LOW_SIGNAL_QUALITY") as MeasurementStatus,
         sqm: {
@@ -465,11 +467,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const acquireContact =
         r > VITAL_THRESHOLDS.FINGER.MIN_RED_INTENSITY &&
         rgRatio > VITAL_THRESHOLDS.FINGER.MIN_RG_RATIO &&
-        rbRatio > 1.30 &&
+        rbRatio > 1.22 &&
         redDominance > VITAL_THRESHOLDS.FINGER.MIN_RED_DOMINANCE &&
         totalIntensity > 70 && totalIntensity < 760 &&
         this.smoothedCoverage > VITAL_THRESHOLDS.FINGER.MIN_COVERAGE &&
-        this.smoothedFingerScore > 0.25 &&
+        this.smoothedFingerScore > 0.18 &&
         this.motionScore < 1.5 &&
         notBlownOut;
       

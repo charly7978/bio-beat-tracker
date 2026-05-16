@@ -30,10 +30,10 @@ export const useHeartBeatProcessor = () => {
   const processorRef = useRef<HeartBeatProcessor | null>(null);
   const sessionIdRef = useRef<string>('');
   const processingStateRef = useRef<'IDLE' | 'ACTIVE' | 'RESETTING'>('IDLE');
-  const lastProcessTimeRef = useRef<number>(0);
   const processedSignalsRef = useRef<number>(0);
   const lastBpmRef = useRef<number>(0);
   const lastConfidenceRef = useRef<number>(0);
+  const lastFilteredValueRef = useRef(0);
   const lastSqiRef = useRef<number>(0);
   // Track sustained NO_CONTACT to align with PPGSignalProcessor reset semantics
   const noContactFramesRef = useRef<number>(0);
@@ -63,7 +63,7 @@ export const useHeartBeatProcessor = () => {
     if (!processorRef.current || processingStateRef.current !== 'ACTIVE') {
       return {
         bpm: lastBpmRef.current, confidence: 0, isPeak: false,
-        filteredValue: 0, signalQuality: 0,
+        filteredValue: lastFilteredValueRef.current, signalQuality: lastSqiRef.current,
         rrData: EMPTY_RR,
       };
     }
@@ -79,6 +79,7 @@ export const useHeartBeatProcessor = () => {
       lastBpmRef.current = 0;
       lastConfidenceRef.current = 0;
       lastSqiRef.current = 0;
+      lastFilteredValueRef.current = 0;
       return {
         bpm: 0, confidence: 0, isPeak: false,
         filteredValue: 0, signalQuality: 0,
@@ -86,18 +87,6 @@ export const useHeartBeatProcessor = () => {
       };
     }
 
-    // Throttle a ~80 procesamientos/s
-    if (currentTime - lastProcessTimeRef.current < 12) {
-      return {
-        bpm: lastBpmRef.current,
-        confidence: lastConfidenceRef.current,
-        isPeak: false,
-        filteredValue: 0,
-        signalQuality: lastSqiRef.current,
-        rrData: EMPTY_RR,
-      };
-    }
-    lastProcessTimeRef.current = currentTime;
     noContactFramesRef.current = 0;
     processedSignalsRef.current++;
 
@@ -107,6 +96,7 @@ export const useHeartBeatProcessor = () => {
     const roundedSQI = Math.round(result.sqi);
 
     lastSqiRef.current = roundedSQI;
+    lastFilteredValueRef.current = result.filteredValue;
     if (result.bpm > 0 && result.confidence >= 0.15) {
       lastBpmRef.current = Math.round(result.bpm);
       lastConfidenceRef.current = result.confidence;
@@ -134,7 +124,7 @@ export const useHeartBeatProcessor = () => {
     lastBpmRef.current = 0;
     lastConfidenceRef.current = 0;
     lastSqiRef.current = 0;
-    lastProcessTimeRef.current = 0;
+    lastFilteredValueRef.current = 0;
     processedSignalsRef.current = 0;
     noContactFramesRef.current = 0;
 

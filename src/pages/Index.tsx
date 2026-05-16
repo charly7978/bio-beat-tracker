@@ -192,6 +192,8 @@ const Index = () => {
   const { saveMeasurement } = useSaveMeasurement();
   const { analysis, isAnalyzing, analyzeVitals, clearAnalysis } = useHealthAnalysis();
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
+  /** Guía de colocación del dedo; se resetea al iniciar medición */
+  const [fingerGuideDismissed, setFingerGuideDismissed] = useState(false);
 
   // ---- Telemetría de rendimiento (opt-in) ----
   const telemetryOn = false;
@@ -438,6 +440,7 @@ const Index = () => {
     setAuditNegativeCount(0);
 
     startCalibration();
+    setFingerGuideDismissed(false);
   }, [isMonitoring, startProcessing, startCalibration, enterFullScreen, sanityProfileId, requestWakeLock]);
 
   // === CUANDO LA CÁMARA ESTÁ LISTA ===
@@ -631,8 +634,8 @@ const Index = () => {
     const hasUsableContact = contactState !== 'NO_CONTACT' && lastSignal.fingerDetected;
     const stableHumanSignal =
       hasUsableContact &&
-      (lastSignal.quality || 0) >= 3 &&
-      (lastSignal.perfusionIndex || 0) >= VITAL_THRESHOLDS.QUALITY.MIN_PI * 0.35;
+      (lastSignal.quality || 0) >= 2 &&
+      (lastSignal.perfusionIndex || 0) >= VITAL_THRESHOLDS.QUALITY.MIN_PI * 0.22;
 
     const nowT = performance.now();
     if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {
@@ -909,6 +912,34 @@ const Index = () => {
             isMonitoring={isCameraOn}
           />
         </div>
+
+        {isMonitoring && !showResults && !fingerGuideDismissed && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-28 z-20 flex justify-center px-3 sm:px-4">
+            <div className="pointer-events-auto max-w-md w-full rounded-xl border border-emerald-500/35 bg-slate-950/90 px-3 py-2.5 shadow-2xl backdrop-blur-md sm:px-4 sm:py-3">
+              <p className="text-emerald-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">
+                Cómo colocar el dedo en la cámara
+              </p>
+              <ul className="text-white/90 text-[11px] sm:text-xs leading-snug space-y-1 list-disc pl-3.5 marker:text-emerald-500">
+                <li>
+                  Usa la <span className="font-semibold text-white">yema del índice</span> (no la uña): debe cubrir a la vez el <span className="font-semibold text-white">flash LED y la lente</span> de la cámara trasera.
+                </li>
+                <li>
+                  Presión <span className="font-semibold text-white">suave y constante</span>, sin mover el dedo; espera <span className="font-semibold text-white">5–15 s</span> a que suba la calidad y aparezcan latidos.
+                </li>
+                <li>
+                  Ambiente oscuro y pantalla al máximo ayudan; evita luz solar directa sobre el dedo.
+                </li>
+              </ul>
+              <button
+                type="button"
+                onClick={() => setFingerGuideDismissed(true)}
+                className="mt-2 w-full rounded-lg bg-emerald-600/25 py-1.5 text-[11px] font-bold text-emerald-300 hover:bg-emerald-600/40 transition-colors"
+              >
+                Entendido, ocultar guía
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* AJUSTES — Removido para simplificar la interfaz según preferencia del usuario */}
         {/* <button

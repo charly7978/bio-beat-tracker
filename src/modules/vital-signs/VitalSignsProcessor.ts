@@ -244,12 +244,14 @@ export class VitalSignsProcessor {
     const piRgb = this.rgbData.greenDC > 0 ? this.rgbData.greenAC / this.rgbData.greenDC : 0;
     const pi = Math.max(piRgb, this.lastPpgPerfusionIndex);
     const isClinicallyValid = SignalQualityIndex.isClinicallyValid(sqi, pi);
+    const vitalUiGate =
+      isClinicallyValid || SignalQualityIndex.isAdequateForLiveVitals(sqi, pi);
     const spo2Calib = calib.getCalibrationInfo('SPO2');
     const bpCalib = calib.getCalibrationInfo('BP');
 
     const respBuf = this.respirationHistory.tail(this.RESPIRATION_BUFFER);
     const respEst =
-      isClinicallyValid && respBuf.length >= RESPIRATION_DEFAULTS.minBuffer * 0.55 && this.stableFramesCount >= RESPIRATION_DEFAULTS.minStableFrames
+      vitalUiGate && respBuf.length >= RESPIRATION_DEFAULTS.minBuffer * 0.55 && this.stableFramesCount >= RESPIRATION_DEFAULTS.minStableFrames
         ? estimateRespiratoryModulationRpm(respBuf, this.VITAL_SIGNAL_ESTIMATE_HZ)
         : null;
 
@@ -266,15 +268,15 @@ export class VitalSignsProcessor {
     };
 
     const hrMinSqi = VITAL_THRESHOLDS.QUALITY.MIN_FOR_HR;
-    const hrOk = sqi >= hrMinSqi && this.lastBPM > 0 && isClinicallyValid;
+    const hrOk = this.lastBPM > 0 && vitalUiGate && sqi >= 12;
 
     const spo2HasDisplay =
-      isClinicallyValid &&
+      vitalUiGate &&
       this.measurements.spo2 > 0 &&
       this.measurements.spo2 >= 70 &&
       this.measurements.spo2 <= 100;
 
-    const spo2Status: MeasurementStatus = !isClinicallyValid
+    const spo2Status: MeasurementStatus = !vitalUiGate
       ? "LOW_SIGNAL_QUALITY"
       : !spo2HasDisplay
         ? "NO_VALID_SIGNAL"
@@ -285,12 +287,12 @@ export class VitalSignsProcessor {
             : "REQUIRES_CALIBRATION";
 
     const bpHasMorph =
-      isClinicallyValid &&
+      vitalUiGate &&
       this.lastBPConfidence !== 'INSUFFICIENT' &&
       this.measurements.systolicPressure > 0 &&
       this.measurements.diastolicPressure > 0;
 
-    const bpStatus: MeasurementStatus = !isClinicallyValid
+    const bpStatus: MeasurementStatus = !vitalUiGate
       ? "LOW_SIGNAL_QUALITY"
       : !bpHasMorph
         ? "NO_VALID_SIGNAL"
@@ -301,7 +303,7 @@ export class VitalSignsProcessor {
             : "REQUIRES_CALIBRATION";
 
     const respOk = respEst && respEst.score >= 0.14;
-    const respStatus: MeasurementStatus = !isClinicallyValid
+    const respStatus: MeasurementStatus = !vitalUiGate
       ? "LOW_SIGNAL_QUALITY"
       : respBuf.length < RESPIRATION_DEFAULTS.minBuffer * 0.55 || this.stableFramesCount < RESPIRATION_DEFAULTS.minStableFrames
         ? "INSUFFICIENT_WINDOW"
@@ -315,11 +317,11 @@ export class VitalSignsProcessor {
         value: hrOk ? Math.round(this.lastBPM) : null,
         unit: "bpm",
         timestamp: now,
-        confidence: hrOk ? Math.min(0.98, 0.45 + sqi / 200) : (sqi > hrMinSqi ? 0.35 : 0.12),
-        status: !hrOk && sqi < hrMinSqi ? "LOW_SIGNAL_QUALITY" : (!hrOk ? "NO_VALID_SIGNAL" : "VALID"),
+        confidence: hrOk ? Math.min(0.98, 0.45 + sqi / 200) : (sqi >= hrMinSqi ? 0.35 : 0.12),
+        status: !hrOk && sqi < 12 ? "LOW_SIGNAL_QUALITY" : (!hrOk ? "NO_VALID_SIGNAL" : "VALID"),
         reason: hrOk
           ? "BPM desde ensemble Elgendi + Pan–Tompkins PPG + autocorrelación"
-          : (sqi < hrMinSqi ? "SQI insuficiente para validar picos" : "Sin consenso fiable de detectores / frecuencia"),
+          : (sqi < 12 ? "SQI insuficiente para validar picos" : "Sin consenso fiable de detectores / frecuencia"),
         signalQuality: { ...commonSQM },
         diagnostics: { bpmRaw: this.lastBPM }
       },
@@ -388,8 +390,8 @@ export class VitalSignsProcessor {
         value: { count: this.measurements.arrhythmiaCount, status: this.measurements.arrhythmiaStatus },
         unit: "events", 
         timestamp: now, 
-        confidence: isClinicallyValid ? 0.85 : 0.2,
-        status: isClinicallyValid ? "VALID" : "LOW_SIGNAL_QUALITY", 
+        confidence: vitalUiGate ? 0.85 : 0.2,
+        status: vitalUiGate ? "VALID" : "LOW_SIGNAL_QUALITY", 
         reason: "RR interval variability analysis (RMSSD/Shannon)",
         signalQuality: { ...commonSQM }, 
         diagnostics: { rmssd: this.measurements.lastArrhythmiaData?.rmssd }
