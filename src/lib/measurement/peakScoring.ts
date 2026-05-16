@@ -3,14 +3,15 @@
  */
 import { clamp } from '@/utils/math';
 
+/** Suma ≈ 1.0 — dual y acuerdo espectral pesan más (menos falsos positivos). */
 export const PEAK_SCORE_WEIGHTS = {
-  fusionDual: 0.36,
-  elgendi: 0.16,
-  panTompkins: 0.16,
+  fusionDual: 0.34,
+  elgendi: 0.15,
+  panTompkins: 0.15,
   ensemble: 0.12,
-  spectral: 0.1,
-  sqi: 0.05,
-  rrStability: 0.05,
+  spectral: 0.12,
+  sqi: 0.06,
+  rrStability: 0.06,
 } as const;
 
 export const PEAK_SCORE_THRESHOLDS = {

@@ -20,6 +20,7 @@ import {
 import { evaluateMeasurementReadiness } from "@/lib/measurement/measurementReadiness";
 import { bpmFromEmittedRr } from "@/lib/measurement/peakEmitPolicy";
 import {
+  DISPLAY_SMOOTH_ALPHAS,
   smoothDisplayPair,
   smoothDisplayValue,
 } from "@/lib/measurement/displaySmoothing";
@@ -631,26 +632,32 @@ const Index = () => {
   const prevHasUsableContactRef = useRef(false);
   const noContactSessionFramesRef = useRef(0);
   const lastHbInputRef = useRef(0);
+  const displayHrRef = useRef(0);
   const displaySpo2Ref = useRef(0);
   const displayBpRef = useRef({ systolic: 0, diastolic: 0 });
 
-  /** Suavizado solo SpO2/PA — el BPM va directo a UI para no “trabarse”. */
+  /** Suavizado sutil solo en UI; `vitalSignsRef` conserva valores crudos para guardado. */
   const applyLiveDisplaySmooth = useCallback((vitals: VitalSignsResult): VitalSignsResult => {
+    const hr = vitals.heartRate.value ?? 0;
     const spo2 = typeof vitals.spo2.value === "number" ? vitals.spo2.value : 0;
     const sys = vitals.bloodPressure.value?.systolic ?? 0;
     const dia = vitals.bloodPressure.value?.diastolic ?? 0;
 
+    displayHrRef.current = Math.round(
+      smoothDisplayValue(displayHrRef.current, hr, DISPLAY_SMOOTH_ALPHAS.hr),
+    );
     displaySpo2Ref.current = Math.round(
-      smoothDisplayValue(displaySpo2Ref.current, spo2, 0.22),
+      smoothDisplayValue(displaySpo2Ref.current, spo2, DISPLAY_SMOOTH_ALPHAS.spo2),
     );
     displayBpRef.current = smoothDisplayPair(
       displayBpRef.current,
       { systolic: sys, diastolic: dia },
-      0.2,
+      DISPLAY_SMOOTH_ALPHAS.bp,
     );
 
     return {
       ...vitals,
+      heartRate: { ...vitals.heartRate, value: displayHrRef.current },
       spo2: { ...vitals.spo2, value: displaySpo2Ref.current },
       bloodPressure: {
         ...vitals.bloodPressure,
@@ -728,6 +735,7 @@ const Index = () => {
     bpmSanityRef.current.reset();
     sanityErrorRef.current = null;
     setSanityError(null);
+    displayHrRef.current = 0;
     displaySpo2Ref.current = 0;
     displayBpRef.current = { systolic: 0, diastolic: 0 };
     lastHbInputRef.current = 0;

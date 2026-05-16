@@ -2,6 +2,10 @@ import React, { useEffect, useRef, useCallback, useState, useLayoutEffect } from
 import { Heart, Activity } from 'lucide-react';
 import { CircularBuffer, PPGDataPoint } from '../utils/CircularBuffer';
 import { calculateHRV, isPhysiologicalRR } from '../utils/physio';
+import {
+  DISPLAY_SMOOTH_ALPHAS,
+  lerpDisplayValue,
+} from '@/lib/measurement/displaySmoothing';
 
 interface PPGSignalMeterProps {
   value: number;
@@ -1438,19 +1442,18 @@ const PPGSignalMeter = ({
       const targetSpo2 = fingerOn || preserve ? p.spo2 ?? 0 : 0;
       const targetSys = fingerOn || preserve ? p.pressure?.systolic ?? 0 : 0;
       const targetDia = fingerOn || preserve ? p.pressure?.diastolic ?? 0 : 0;
-      const lerpAdaptive = (cur: number, tgt: number, base: number) => {
-        if (tgt <= 0) return cur + (0 - cur) * Math.min(1, base * 2.2);
-        if (cur <= 0) return tgt;
-        const rel = Math.abs(tgt - cur) / Math.max(1, Math.abs(cur));
-        const a =
-          rel > 0.1 ? Math.min(0.65, base * 2.6) : rel > 0.04 ? base * 1.6 : base;
-        const out = cur + (tgt - cur) * a;
-        return Math.abs(tgt - out) < 0.6 ? tgt : out;
-      };
-      displayBpmRef.current = targetBpm;
-      displaySpo2Ref.current = lerpAdaptive(displaySpo2Ref.current, targetSpo2, 0.22);
-      displaySysRef.current = lerpAdaptive(displaySysRef.current, targetSys, 0.2);
-      displayDiaRef.current = lerpAdaptive(displayDiaRef.current, targetDia, 0.2);
+      displayBpmRef.current = Math.round(
+        lerpDisplayValue(displayBpmRef.current, targetBpm, DISPLAY_SMOOTH_ALPHAS.hr),
+      );
+      displaySpo2Ref.current = Math.round(
+        lerpDisplayValue(displaySpo2Ref.current, targetSpo2, DISPLAY_SMOOTH_ALPHAS.spo2),
+      );
+      displaySysRef.current = Math.round(
+        lerpDisplayValue(displaySysRef.current, targetSys, DISPLAY_SMOOTH_ALPHAS.bp),
+      );
+      displayDiaRef.current = Math.round(
+        lerpDisplayValue(displayDiaRef.current, targetDia, DISPLAY_SMOOTH_ALPHAS.bp),
+      );
 
       drawBackground(ctx);
       drawHeader(ctx, now);
