@@ -210,7 +210,21 @@ export class ElgendiPeakDetector {
       }
     }
 
-    let confidence = rr.length > 0 ? clamp(rr.length / 6, 0, 1) * 0.55 + clamp(peaks.length / 8, 0, 1) * 0.45 : 0;
+    // Confianza: cobertura RR + cobertura picos + regularidad (1 − CV de RR).
+    // Penaliza ritmos erráticos por artefacto residual aun cuando haya cuenta alta.
+    let rrRegularity = 0;
+    if (rr.length >= 3) {
+      const mean = rr.reduce((a, b) => a + b, 0) / rr.length;
+      const variance = rr.reduce((s, v) => s + (v - mean) ** 2, 0) / rr.length;
+      const cv = Math.sqrt(variance) / Math.max(1, mean);
+      rrRegularity = clamp(1 - cv / 0.35, 0, 1);
+    }
+    let confidence =
+      rr.length > 0
+        ? clamp(rr.length / 6, 0, 1) * 0.4 +
+          clamp(peaks.length / 8, 0, 1) * 0.3 +
+          rrRegularity * 0.3
+        : 0;
     if (typeof input.sqi === 'number' && input.sqi < PEAK_DETECTION_DEFAULTS.minSQI) {
       confidence *= 0.5;
     }
