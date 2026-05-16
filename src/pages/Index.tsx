@@ -14,10 +14,11 @@ import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionSt
 import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
 import {
   createMeasurementSessionLatch,
-  isMeasurementPipelineLive,
   SESSION_LATCH,
   updateMeasurementSessionLatch,
 } from "@/lib/measurement/measurementSessionLatch";
+import { evaluateMeasurementReadiness } from "@/lib/measurement/measurementReadiness";
+import { createDefaultVitalSignsResult } from "@/lib/vitals/defaultVitalSignsResult";
 import { VitalSignsResult } from "@/modules/vital-signs/VitalSignsProcessor";
 import type { ProcessedSignal, ContactState } from "@/types/signal";
 import { toast } from "@/components/ui/use-toast";
@@ -51,17 +52,7 @@ const Index = () => {
   // ESTADOS PRINCIPALES
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [isCameraOn, setIsCameraOn] = useState(false);
-  const [vitalSigns, setVitalSigns] = useState<VitalSignsResult>({
-    heartRate: { name: "HR", value: 0, unit: "bpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-    spo2: { name: "SpO2", value: 0, unit: "%", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-    bloodPressure: { name: "BP", value: { systolic: 0, diastolic: 0 }, unit: "mmHg", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-    respiration: { name: "RR", value: 0, unit: "rpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-    arrhythmia: { name: "Arrhythmia", value: { count: 0, status: "NORMAL" }, unit: "event", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-    signalQuality: 0,
-    isCalibrating: false,
-    calibrationProgress: 0,
-    lastArrhythmiaData: null
-  });
+  const [vitalSigns, setVitalSigns] = useState<VitalSignsResult>(createDefaultVitalSignsResult);
   const [heartbeatSignal, setHeartbeatSignal] = useState(0);
   const [beatMarker, setBeatMarker] = useState(0);
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -585,17 +576,7 @@ const Index = () => {
     setShowResults(false);
     setMeasurementSummary(null);
     setElapsedTime(0);
-    setVitalSigns({ 
-      heartRate: { name: "HR", value: 0, unit: "bpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      spo2: { name: "SpO2", value: 0, unit: "%", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      bloodPressure: { name: "BP", value: { systolic: 0, diastolic: 0 }, unit: "mmHg", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      respiration: { name: "RR", value: 0, unit: "rpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      arrhythmia: { name: "Arrhythmia", value: { count: 0, status: "NORMAL" }, unit: "event", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      signalQuality: 0,
-      isCalibrating: false,
-      calibrationProgress: 0,
-      lastArrhythmiaData: null
-    });
+    setVitalSigns(createDefaultVitalSignsResult());
 
     // Restaurar resets de refs necesarios para la lógica
     totalBeatsRef.current = 0;
@@ -686,20 +667,6 @@ const Index = () => {
     setVitalsPlacementMode(placementMode);
     const fingerConfirmed = !!lastSignal.fingerDetected;
     const nowT = performance.now();
-
-    const heartBeatResult = processHeartBeat(
-      fingerConfirmed ? signalValue : 0,
-      contactState,
-      nowT,
-      fingerConfirmed,
-    );
-
-    const mergedDiag =
-      diag && typeof diag === 'object'
-        ? { ...diag, peakDetection: heartBeatResult.ensembleDiagnostics }
-        : { peakDetection: heartBeatResult.ensembleDiagnostics };
-    setCurrentDiagnostics(mergedDiag);
-
     const hasUsableContact =
       fingerConfirmed && contactState !== 'NO_CONTACT';
 
@@ -716,6 +683,23 @@ const Index = () => {
       (diag && typeof diag === 'object' && diag.sqm && typeof diag.sqm.sqi === 'number'
         ? diag.sqm.sqi
         : lastSignal.quality) || 0;
+
+    const heartBeatResult = processHeartBeat(
+      fingerConfirmed ? signalValue : 0,
+      contactState,
+      nowT,
+      fingerConfirmed,
+      {
+        sqi: rawSqi,
+        perfusionIndex: lastSignal.perfusionIndex ?? 0,
+      },
+    );
+
+    const mergedDiag =
+      diag && typeof diag === 'object'
+        ? { ...diag, peakDetection: heartBeatResult.ensembleDiagnostics }
+        : { peakDetection: heartBeatResult.ensembleDiagnostics };
+    setCurrentDiagnostics(mergedDiag);
 
     const bpmForLatch = heartBeatResult.bpm > 0 ? heartBeatResult.bpm : lastGoodBpmRef.current;
     if (bpmForLatch > 0) lastGoodBpmRef.current = bpmForLatch;
@@ -742,25 +726,21 @@ const Index = () => {
         ? heartBeatResult.bpm
         : 0;
 
-    const hrReady =
-      hasUsableContact &&
-      contactState === 'STABLE_CONTACT' &&
-      peakRecent &&
-      bpmOut > 0 &&
-      heartBeatResult.confidence >= minConf &&
-      rawSqi >= Q.MIN_FOR_HR;
-
     const piMin = Q.MIN_PI * Math.max(0.04, hints.minPiScale * 0.18);
-    const pipelineLive = isMeasurementPipelineLive(
-      measurementLatchRef.current,
+    const readiness = evaluateMeasurementReadiness({
       hasUsableContact,
+      contactState,
       rawSqi,
-      nowT,
-    );
-    const vitalsDspReady =
-      hasUsableContact &&
-      rawSqi >= 3 &&
-      (lastSignal.perfusionIndex ?? 0) >= piMin;
+      perfusionIndex: lastSignal.perfusionIndex ?? 0,
+      piMin,
+      bpm: bpmOut,
+      peakRecent,
+      ensembleConfidence: heartBeatResult.confidence,
+      minEnsembleConf: minConf,
+      latch: measurementLatchRef.current,
+      nowMs: nowT,
+    });
+    const { vitalsDspReady, hrDisplayReady: hrReady, pipelineLive } = readiness;
 
     const showWaveform = hasUsableContact;
 

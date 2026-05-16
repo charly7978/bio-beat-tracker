@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { VitalSignsProcessor, VitalSignsResult, RGBData } from '../modules/vital-signs/VitalSignsProcessor';
+import { createDefaultVitalSignsResult } from '../lib/vitals/defaultVitalSignsResult';
 import type { SignalQualityMetrics } from '../types/measurements';
 
 /**
@@ -54,18 +55,7 @@ export const useVitalSignsProcessor = () => {
     sqmBundle?: Partial<SignalQualityMetrics>,
     morphologyValue?: number,
   ): VitalSignsResult => {
-    const defaultResult: VitalSignsResult = {
-      heartRate: { name: "HR", value: 0, unit: "bpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      spo2: { name: "SpO2", value: 0, unit: "%", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      bloodPressure: { name: "BP", value: { systolic: 0, diastolic: 0 }, unit: "mmHg", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      respiration: { name: "RR", value: 0, unit: "rpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      arrhythmia: { name: "Arrhythmia", value: { count: 0, status: "NORMAL" }, unit: "event", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
-      signalQuality: 0,
-      isCalibrating: false,
-      calibrationProgress: 0,
-    };
-    
-    if (!processorRef.current) return defaultResult;
+    if (!processorRef.current) return createDefaultVitalSignsResult();
 
     const result = processorRef.current.processSignal(
       value,

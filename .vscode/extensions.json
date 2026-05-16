@@ -1,6 +1,10 @@
 {
     "recommendations": [
+        "redhat.vscode-yaml",
         "ramgopal.flutter-assets-generator",
         "codium.codium"
+    ],
+    "unwantedRecommendations": [
+        "github.vscode-github-actions"
     ]
 }

@@ -32,6 +32,7 @@
 
 import { PPGFeatureExtractor, CycleFeatures } from './PPGFeatureExtractor';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import { isPhysiologicalRR } from '../../utils/physio';
 import type { FingerPlacementMode } from '../../types/signal';
 
 export interface BPEstimate {
@@ -144,7 +145,7 @@ export class BloodPressureProcessor {
     const mf = this.medianFeatures(useCycles);
 
     // 4. HR y HRV
-    const validRR = rrIntervals.filter(i => i > 250 && i < 1800);
+    const validRR = rrIntervals.filter((i) => isPhysiologicalRR(i) && i <= 1800);
     if (validRR.length < 2) return insufficient;
     const avgRR = validRR.reduce((a, b) => a + b, 0) / validRR.length;
     const hr = 60000 / avgRR;

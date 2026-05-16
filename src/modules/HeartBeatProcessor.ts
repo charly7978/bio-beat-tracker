@@ -51,6 +51,9 @@ export class HeartBeatProcessor {
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
   private placementMode: FingerPlacementMode = 'hybrid';
   private fingerContactConfirmed = false;
+  /** SQI del pipeline PPG (SignalQualityIndex) — fuente primaria para el ensemble */
+  private ppgSqi = 0;
+  private ppgPerfusionIndex = 0;
 
   constructor() {
     this.setupAudio();
@@ -86,6 +89,23 @@ export class HeartBeatProcessor {
 
   setFingerContactConfirmed(confirmed: boolean): void {
     this.fingerContactConfirmed = confirmed;
+  }
+
+  /** Alinea ensemble/detectores con el SQI central del PPG (evita doble escala). */
+  setPpgQualityMetrics(sqi: number, perfusionIndex?: number): void {
+    if (Number.isFinite(sqi) && sqi >= 0) this.ppgSqi = sqi;
+    if (
+      typeof perfusionIndex === 'number' &&
+      Number.isFinite(perfusionIndex) &&
+      perfusionIndex >= 0
+    ) {
+      this.ppgPerfusionIndex = perfusionIndex;
+    }
+  }
+
+  private ensembleInputSqi(localSqi: number): number {
+    if (this.ppgSqi < 3) return localSqi;
+    return clamp(Math.max(localSqi, this.ppgSqi * 0.65 + localSqi * 0.35), 0, 100);
   }
 
   private gateRangeMin(): number {
@@ -165,7 +185,7 @@ export class HeartBeatProcessor {
         signal: sig,
         timestampsMs: ts,
         samplingRateHz: sampleRate,
-        sqi: this.signalQualityIndex,
+        sqi: this.ensembleInputSqi(this.signalQualityIndex),
         allowSoloElgendiFusion: this.cameraHints.allowSoloElgendiFusion,
       });
       ensembleConf = ens.confidence;
@@ -458,6 +478,8 @@ export class HeartBeatProcessor {
     this.lastDiagnostics = {};
     this.lastEmittedPeakTime = 0;
     this.fingerContactConfirmed = false;
+    this.ppgSqi = 0;
+    this.ppgPerfusionIndex = 0;
   }
 
   dispose(): void {

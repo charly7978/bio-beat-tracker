@@ -2,6 +2,7 @@
  * Enganche de sesión solo con latidos reales (picos del ensemble).
  * Evita SpO2/BP cortados por parpadeos de contacto sin inventar BPM.
  */
+import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 export interface MeasurementSessionLatch {
   established: boolean;
   goodStreak: number;
@@ -16,7 +17,7 @@ export const SESSION_LATCH = {
   CONTACT_GRACE_MS: 3500,
   /** Sin picos reales durante este tiempo, la sesión no alimenta vitales */
   MAX_PEAK_GAP_MS: 3200,
-  MIN_BPM: 35,
+  MIN_BPM: VITAL_THRESHOLDS.HR.MIN,
   /** Alineado con arranque de SQI en cámara (HR puede mostrarse antes que SpO2) */
   MIN_SQI: 4,
 } as const;

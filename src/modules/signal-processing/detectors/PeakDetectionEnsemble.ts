@@ -5,6 +5,7 @@
 import type { PeakDetectionResult } from '../../../types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { clamp } from '../../../utils/math';
+import { isPhysiologicalRR } from '../../../utils/physio';
 import { bpmFromAutocorr } from '../shared/dsp';
 import { ElgendiPeakDetector } from './ElgendiPeakDetector';
 import { PanTompkinsPPGDetector } from './PanTompkinsPPGDetector';
@@ -108,7 +109,7 @@ export class PeakDetectionEnsemble {
     const rr: number[] = [];
     for (let i = 1; i < fusedTimes.length; i++) {
       const d = fusedTimes[i] - fusedTimes[i - 1];
-      if (d > 250 && d < 2200) rr.push(d);
+      if (isPhysiologicalRR(d)) rr.push(d);
     }
 
     let bpmInstant: number | null = rr.length ? 60000 / median(rr.slice(-4)) : null;

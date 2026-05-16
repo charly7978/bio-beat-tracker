@@ -62,6 +62,7 @@ export const useHeartBeatProcessor = () => {
     contactState: ContactState = 'STABLE_CONTACT',
     timestamp?: number,
     fingerConfirmed = true,
+    ppgQuality?: { sqi: number; perfusionIndex?: number },
   ): HeartBeatResult => {
     if (!processorRef.current || processingStateRef.current !== 'ACTIVE') {
       return {
@@ -74,6 +75,12 @@ export const useHeartBeatProcessor = () => {
     const currentTime = timestamp ?? performance.now();
 
     processorRef.current.setFingerContactConfirmed(fingerConfirmed);
+    if (ppgQuality) {
+      processorRef.current.setPpgQualityMetrics(
+        ppgQuality.sqi,
+        ppgQuality.perfusionIndex,
+      );
+    }
 
     // Sin dedo: no alimentar el ensemble (la onda PPG puede seguir en otro canal)
     if (contactState === 'NO_CONTACT' || !fingerConfirmed) {
