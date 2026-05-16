@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
-import type { Json } from '@/integrations/supabase/types';
+import type { Json, TablesInsert } from '@/integrations/supabase/types';
 import { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
 import { toast } from '@/hooks/use-toast';
 import {
@@ -19,12 +19,13 @@ async function insertMeasurementAttempt(
   signalQuality: number,
   diagnostics: Record<string, unknown>
 ): Promise<void> {
-  const { error } = await supabase.from('measurement_attempts').insert({
+  const row: TablesInsert<'measurement_attempts'> = {
     user_id: userId,
     outcome,
     signal_quality: Math.round(signalQuality),
     diagnostics: diagnostics as Json,
-  });
+  };
+  const { error } = await supabase.from('measurement_attempts').insert(row);
   if (error) {
     console.warn('[measurement_attempts]', error.message);
   }
