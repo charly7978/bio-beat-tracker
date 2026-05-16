@@ -14,10 +14,10 @@ export const PEAK_SCORE_WEIGHTS = {
 } as const;
 
 export const PEAK_SCORE_THRESHOLDS = {
-  dualMin: 0.36,
-  soloMin: 0.44,
+  dualMin: 0.38,
+  soloMin: 0.48,
   /** Desviación máxima vs mediana RR previa para aceptar pico */
-  rrMedianMaxRelDev: 0.34,
+  rrMedianMaxRelDev: 0.3,
 } as const;
 
 export interface PeakScoreInput {

@@ -289,7 +289,7 @@ export class HeartBeatProcessor {
 
         if (
           decision.reason.includes('DUAL') ||
-          (wScore >= 0.42 && this.rrIntervals.length >= 1)
+          (wScore >= 0.5 && this.rrIntervals.length >= 2)
         ) {
           this.vibrate();
           this.playBeep();

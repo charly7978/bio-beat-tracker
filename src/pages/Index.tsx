@@ -642,24 +642,21 @@ const Index = () => {
     const dia = vitals.bloodPressure.value?.diastolic ?? 0;
 
     displayHrRef.current = Math.round(
-      smoothDisplayValue(displayHrRef.current, hr, 0.14),
+      smoothDisplayValue(displayHrRef.current, hr, 0.28),
     );
     displaySpo2Ref.current = Math.round(
-      smoothDisplayValue(displaySpo2Ref.current, spo2, 0.11),
+      smoothDisplayValue(displaySpo2Ref.current, spo2, 0.22),
     );
     displayBpRef.current = smoothDisplayPair(
       displayBpRef.current,
       { systolic: sys, diastolic: dia },
-      0.1,
+      0.2,
     );
 
     return {
       ...vitals,
       heartRate: { ...vitals.heartRate, value: displayHrRef.current },
-      spo2: {
-        ...vitals.spo2,
-        value: displaySpo2Ref.current > 0 ? displaySpo2Ref.current : vitals.spo2.value,
-      },
+      spo2: { ...vitals.spo2, value: displaySpo2Ref.current },
       bloodPressure: {
         ...vitals.bloodPressure,
         value: displayBpRef.current,
@@ -671,7 +668,11 @@ const Index = () => {
   const isMonitoringRef = useRef(false);
   useEffect(() => { isMonitoringRef.current = isMonitoring; }, [isMonitoring]);
   const vitalSignsRef = useRef<VitalSignsResult>(vitalSigns);
-  useEffect(() => { vitalSignsRef.current = vitalSigns; }, [vitalSigns]);
+  useEffect(() => {
+    if (!isMonitoringRef.current) {
+      vitalSignsRef.current = vitalSigns;
+    }
+  }, [vitalSigns]);
   const lastHrPushRef = useRef(0);
   const lastVitalsPushRef = useRef(0);
   const lastSignalPushRef = useRef(0);
@@ -920,31 +921,26 @@ const Index = () => {
         lastHrPushRef.current = nowT;
         const sqRounded = Math.round(rawSqi);
         setVitalSigns(prev => {
-          const cached = vitalSignsRef.current;
-          const merged = applyLiveDisplaySmooth({
+          const nextHr = {
+            ...prev.heartRate,
+            value: bpmOut,
+            status:
+              contactState === 'STABLE_CONTACT' && bpmLive > 0
+                ? 'VALID'
+                : bpmOut > 0
+                  ? 'WARMUP'
+                  : prev.heartRate.status,
+          };
+          vitalSignsRef.current = {
+            ...vitalSignsRef.current,
+            heartRate: nextHr,
+            signalQuality: sqRounded,
+          };
+          return applyLiveDisplaySmooth({
             ...prev,
-            heartRate: {
-              ...prev.heartRate,
-              value: bpmOut,
-              status:
-                contactState === 'STABLE_CONTACT' && bpmLive > 0
-                  ? 'VALID'
-                  : bpmOut > 0
-                    ? 'WARMUP'
-                    : prev.heartRate.status,
-            },
-            spo2:
-              cached.spo2.value != null && cached.spo2.value > 0
-                ? cached.spo2
-                : prev.spo2,
-            bloodPressure:
-              (cached.bloodPressure.value?.systolic ?? 0) > 0
-                ? cached.bloodPressure
-                : prev.bloodPressure,
+            heartRate: nextHr,
             signalQuality: sqRounded,
           });
-          vitalSignsRef.current = merged;
-          return merged;
         });
       }
     } else {
@@ -1132,13 +1128,12 @@ const Index = () => {
       );
 
       // Mantener siempre la última computación en ref para finalize/save.
-      const vitalsForUi = applyLiveDisplaySmooth(vitals);
-      vitalSignsRef.current = vitalsForUi;
+      vitalSignsRef.current = vitals;
 
       const uiDue = nowT - lastVitalsPushRef.current >= VITALS_PUSH_THROTTLE_MS;
       if (uiDue) {
         lastVitalsPushRef.current = nowT;
-        setVitalSigns(vitalsForUi);
+        setVitalSigns(applyLiveDisplaySmooth(vitals));
       }
 
       if (

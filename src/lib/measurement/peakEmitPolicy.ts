@@ -203,11 +203,15 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
         sqi,
         perfusionIndex,
       });
+    if (src === 'solo_pan' && emittedPeakCount < 1) continue;
     const fbMin =
       src === 'dual'
-        ? PEAK_SCORE_THRESHOLDS.dualMin * 0.82
-        : PEAK_SCORE_THRESHOLDS.soloMin * 0.85;
+        ? PEAK_SCORE_THRESHOLDS.dualMin * 0.92
+        : PEAK_SCORE_THRESHOLDS.soloMin * 0.94;
     if (score < fbMin || !fingerContactConfirmed) continue;
+    if (!stallReacquire && src !== 'dual' && score < PEAK_SCORE_THRESHOLDS.soloMin) {
+      continue;
+    }
     if (t > fbT || (t === fbT && score > fbScore)) {
       fbT = t;
       fbScore = score;

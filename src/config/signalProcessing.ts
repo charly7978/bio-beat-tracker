@@ -18,7 +18,7 @@ export const PEAK_DETECTION_DEFAULTS = {
   /** Peso del offset adaptativo MA_beat (menor = bloques de interés más sensibles) */
   offsetWeight: 0.24,
   /** Factor mínimo del RR fisiológico entre emisiones de pico (anti-doble latido) */
-  peakEmitRefractoryFactor: 0.72,
+  peakEmitRefractoryFactor: 0.75,
   /** Ventana de coincidencia Elgendi ↔ Pan–Tompkins (ms) */
   fusionToleranceMs: 280,
   minSQI: 10,

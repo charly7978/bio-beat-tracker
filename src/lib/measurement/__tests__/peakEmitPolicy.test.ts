@@ -82,7 +82,7 @@ describe('peakEmitPolicy', () => {
   });
 
   it('permite solo_elgendi como primer latido con score suficiente', () => {
-    const ens = mockEns([5000], ['solo_elgendi'], [0.5]);
+    const ens = mockEns([5000], ['solo_elgendi'], [0.52]);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,

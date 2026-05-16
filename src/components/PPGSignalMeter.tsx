@@ -185,11 +185,10 @@ const PPGSignalMeter = ({
     const nowMs = Date.now();
 
     if (bpm > 0) {
-      if (smoothedBpmRef.current === 0) {
-        smoothedBpmRef.current = bpm;
-      } else {
-        smoothedBpmRef.current = smoothedBpmRef.current * 0.78 + bpm * 0.22;
-      }
+      const prev = smoothedBpmRef.current;
+      const jump = prev > 0 ? Math.abs(bpm - prev) / prev : 1;
+      const a = jump > 0.1 ? 0.42 : jump > 0.04 ? 0.3 : 0.22;
+      smoothedBpmRef.current = prev <= 0 ? bpm : prev + (bpm - prev) * a;
     }
 
     const pi = perfusionIndex ?? 0;
@@ -1440,15 +1439,23 @@ const PPGSignalMeter = ({
       const fingerOn = p.isFingerDetected;
       const preserve = p.preserveResults;
       const targetBpm =
-        !fingerOn && !preserve ? 0 : smoothedBpmRef.current || p.bpm || 0;
+        !fingerOn && !preserve ? 0 : p.bpm ?? smoothedBpmRef.current ?? 0;
       const targetSpo2 = fingerOn || preserve ? p.spo2 ?? 0 : 0;
       const targetSys = fingerOn || preserve ? p.pressure?.systolic ?? 0 : 0;
       const targetDia = fingerOn || preserve ? p.pressure?.diastolic ?? 0 : 0;
-      const lerp = (cur: number, tgt: number, a: number) => cur + (tgt - cur) * a;
-      displayBpmRef.current = lerp(displayBpmRef.current, targetBpm, 0.14);
-      displaySpo2Ref.current = lerp(displaySpo2Ref.current, targetSpo2, 0.11);
-      displaySysRef.current = lerp(displaySysRef.current, targetSys, 0.1);
-      displayDiaRef.current = lerp(displayDiaRef.current, targetDia, 0.1);
+      const lerpAdaptive = (cur: number, tgt: number, base: number) => {
+        if (tgt <= 0) return cur + (0 - cur) * Math.min(1, base * 2.2);
+        if (cur <= 0) return tgt;
+        const rel = Math.abs(tgt - cur) / Math.max(1, Math.abs(cur));
+        const a =
+          rel > 0.1 ? Math.min(0.65, base * 2.6) : rel > 0.04 ? base * 1.6 : base;
+        const out = cur + (tgt - cur) * a;
+        return Math.abs(tgt - out) < 0.6 ? tgt : out;
+      };
+      displayBpmRef.current = lerpAdaptive(displayBpmRef.current, targetBpm, 0.26);
+      displaySpo2Ref.current = lerpAdaptive(displaySpo2Ref.current, targetSpo2, 0.22);
+      displaySysRef.current = lerpAdaptive(displaySysRef.current, targetSys, 0.2);
+      displayDiaRef.current = lerpAdaptive(displayDiaRef.current, targetDia, 0.2);
 
       drawBackground(ctx);
       drawHeader(ctx, now);

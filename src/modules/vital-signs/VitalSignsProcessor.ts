@@ -332,6 +332,15 @@ export class VitalSignsProcessor {
       this.displayHold.missedFrames = 0;
     } else if (this.displayHold.spo2 > 0) {
       this.displayHold.missedFrames++;
+      if (
+        this.measurements.spo2 > 0 &&
+        Math.abs(this.measurements.spo2 - this.displayHold.spo2) /
+          Math.max(1, this.displayHold.spo2) >
+          0.015
+      ) {
+        this.displayHold.spo2 = this.measurements.spo2;
+        this.displayHold.missedFrames = 0;
+      }
     }
 
     if (
@@ -342,6 +351,18 @@ export class VitalSignsProcessor {
       this.displayHold.systolic = this.measurements.systolicPressure;
       this.displayHold.diastolic = this.measurements.diastolicPressure;
       this.displayHold.missedFrames = 0;
+    } else if (this.displayHold.systolic > 0 && this.measurements.systolicPressure > 0) {
+      const sysDrift =
+        Math.abs(this.measurements.systolicPressure - this.displayHold.systolic) /
+        Math.max(1, this.displayHold.systolic);
+      const diaDrift =
+        Math.abs(this.measurements.diastolicPressure - this.displayHold.diastolic) /
+        Math.max(1, this.displayHold.diastolic);
+      if (sysDrift > 0.02 || diaDrift > 0.02) {
+        this.displayHold.systolic = this.measurements.systolicPressure;
+        this.displayHold.diastolic = this.measurements.diastolicPressure;
+        this.displayHold.missedFrames = 0;
+      }
     }
 
     const holdActive =
