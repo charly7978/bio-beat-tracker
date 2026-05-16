@@ -38,8 +38,8 @@ export const useHeartBeatProcessor = () => {
   const lastSqiRef = useRef<number>(0);
   // Track sustained NO_CONTACT to align with PPGSignalProcessor reset semantics
   const noContactFramesRef = useRef<number>(0);
-  const NO_CONTACT_RESET_THRESHOLD = 90; // ~3s @ 30fps
-  const NO_CONTACT_HOLD_FRAMES = 12; // ~0,4 s: no cortar BPM por parpadeo de contacto
+  const NO_CONTACT_RESET_THRESHOLD = 150; // ~5 s @ 30 fps antes de reset HR
+  const NO_CONTACT_HOLD_FRAMES = 36; // mantener BPM publicado en parpadeos cortos
 
   useEffect(() => {
     const t = Date.now().toString(36);

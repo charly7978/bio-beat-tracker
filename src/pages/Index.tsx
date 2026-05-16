@@ -12,6 +12,12 @@ import { DebugTelemetryPanel } from "@/components/DebugTelemetryPanel";
 import { SignalQualityIndex } from "@/modules/signal-quality/SignalQualityIndex";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
 import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
+import {
+  createMeasurementSessionLatch,
+  isMeasurementPipelineLive,
+  SESSION_LATCH,
+  updateMeasurementSessionLatch,
+} from "@/lib/measurement/measurementSessionLatch";
 import { VitalSignsResult } from "@/modules/vital-signs/VitalSignsProcessor";
 import type { ProcessedSignal, ContactState } from "@/types/signal";
 import { toast } from "@/components/ui/use-toast";
@@ -455,6 +461,9 @@ const Index = () => {
     setAuditNegativeCount(0);
 
     startCalibration();
+    measurementLatchRef.current = createMeasurementSessionLatch();
+    lastGoodBpmRef.current = 0;
+    lastRrSnapshotRef.current = null;
     setHeartBeatRuntimeHints(inferCameraRuntimeHints());
   }, [isMonitoring, startProcessing, startCalibration, enterFullScreen, sanityProfileId, requestWakeLock, setHeartBeatRuntimeHints]);
 
@@ -591,6 +600,9 @@ const Index = () => {
     arrhythmiaBeatsRef.current = 0;
     lastArrhythmiaCountForBeatsRef.current = 0;
     unstableFrameCounter.current = 0;
+    measurementLatchRef.current = createMeasurementSessionLatch();
+    lastGoodBpmRef.current = 0;
+    lastRrSnapshotRef.current = null;
     setHeartbeatSignal(0);
     setBeatMarker(0);
     setRRIntervals([]);
@@ -604,7 +616,10 @@ const Index = () => {
   // === PROCESAR SEÑAL PPG ===
   const vitalSignsFrameCounter = useRef<number>(0);
   const unstableFrameCounter = useRef<number>(0);
-  const UNSTABLE_ZERO_THRESHOLD = 360; // ~12 s @ 30 fps — evita borrar HR/BP por parpadeos cortos
+  const UNSTABLE_ZERO_THRESHOLD = 900; // ~30 s: no borrar vitales por parpadeos de gates
+  const measurementLatchRef = useRef(createMeasurementSessionLatch());
+  const lastRrSnapshotRef = useRef<{ intervals: number[]; lastPeakTime: number | null } | null>(null);
+  const lastGoodBpmRef = useRef(0);
   const VITALS_PROCESS_EVERY_N_FRAMES = 3;
   // Throttling de UI: el DSP corre en cada frame, React solo refresca a ritmos sanos.
   const isMonitoringRef = useRef(false);
@@ -691,29 +706,72 @@ const Index = () => {
         ? diag.sqm.sqi
         : lastSignal.quality) || 0;
 
+    measurementLatchRef.current = updateMeasurementSessionLatch(
+      measurementLatchRef.current,
+      hasUsableContact,
+      heartBeatResult.bpm,
+      rawSqi,
+      nowT,
+    );
+    const sessionLive = measurementLatchRef.current.established;
+    const bpmOut =
+      heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
+      heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX
+        ? heartBeatResult.bpm
+        : Math.max(measurementLatchRef.current.lastBpm, lastGoodBpmRef.current);
+
+    if (bpmOut >= VITAL_THRESHOLDS.HR.MIN && bpmOut <= VITAL_THRESHOLDS.HR.MAX) {
+      lastGoodBpmRef.current = bpmOut;
+    }
+
     const hrReady =
       hasUsableContact &&
-      heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
-      heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX &&
+      bpmOut >= VITAL_THRESHOLDS.HR.MIN &&
+      bpmOut <= VITAL_THRESHOLDS.HR.MAX &&
       (heartBeatResult.confidence >= minConf ||
-        (hints.constrained && heartBeatResult.bpm >= 38 && rawSqi >= 5));
+        (hints.constrained && bpmOut >= 38 && rawSqi >= 5) ||
+        (sessionLive && rawSqi >= SESSION_LATCH.MIN_SQI));
 
-    const vitalsReady =
+    const vitalsGate =
       hasUsableContact &&
       (hrReady ||
-        (hints.constrained && heartBeatResult.bpm >= 35 && rawSqi >= 5)) &&
-      (rawSqi >= Q.MIN_FOR_HR || (lastSignal.quality || 0) >= Q.MIN_FOR_HR) &&
-      (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * hints.minPiScale;
+        (sessionLive && bpmOut >= 35) ||
+        (hints.constrained && bpmOut >= 35 && rawSqi >= 5)) &&
+      (rawSqi >= Q.MIN_FOR_HR ||
+        sessionLive ||
+        (lastSignal.quality || 0) >= Q.MIN_FOR_HR) &&
+      (sessionLive ||
+        (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * hints.minPiScale);
+
+    const pipelineLive =
+      hasUsableContact &&
+      (vitalsGate ||
+        isMeasurementPipelineLive(
+          measurementLatchRef.current,
+          hasUsableContact,
+          rawSqi,
+          nowT,
+        ));
+
+    const showWaveform =
+      hasUsableContact ||
+      (sessionLive && nowT - measurementLatchRef.current.lastContactMs < 2500);
 
     if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {
       lastSignalPushRef.current = nowT;
-      setHeartbeatSignal(hasUsableContact ? signalValue : 0);
+      setHeartbeatSignal(showWaveform ? signalValue : 0);
     }
 
-    if (hrReady) {
+    const hrPublish =
+      bpmOut >= VITAL_THRESHOLDS.HR.MIN &&
+      bpmOut <= VITAL_THRESHOLDS.HR.MAX &&
+      (hrReady || sessionLive);
+
+    if (hrPublish) {
       unstableFrameCounter.current = 0;
-      const verdict = bpmSanityRef.current.push(heartBeatResult.bpm);
-      if (verdict.ok === false) {
+      const verdict = bpmSanityRef.current.push(bpmOut);
+      const blockHrUpdate = verdict.ok === false && !sessionLive;
+      if (blockHrUpdate) {
         const msg = `BPM stream ${verdict.reason} (${verdict.detail})`;
         if (sanityErrorRef.current !== verdict.reason) {
           sanityErrorRef.current = verdict.reason;
@@ -739,8 +797,9 @@ const Index = () => {
             ...prev,
             heartRate: {
               ...prev.heartRate,
-              value: heartBeatResult.bpm,
-              status: contactState === 'STABLE_CONTACT' ? 'VALID' : 'WARMUP',
+              value: bpmOut,
+              status:
+                contactState === 'STABLE_CONTACT' || sessionLive ? 'VALID' : 'WARMUP',
             },
             signalQuality: Math.round(
               (diag && typeof diag === 'object' && diag.sqm?.sqi != null
@@ -750,10 +809,10 @@ const Index = () => {
           }));
         }
       }
-    } else {
+    } else if (!sessionLive) {
       if (!hasUsableContact) {
         unstableFrameCounter.current++;
-      } else if (heartBeatResult.bpm <= 0) {
+      } else if (bpmOut <= 0) {
         unstableFrameCounter.current = Math.min(
           unstableFrameCounter.current + 1,
           UNSTABLE_ZERO_THRESHOLD,
@@ -761,11 +820,14 @@ const Index = () => {
       } else {
         unstableFrameCounter.current = Math.max(0, unstableFrameCounter.current - 2);
       }
-      if (unstableFrameCounter.current >= UNSTABLE_ZERO_THRESHOLD) {
+      if (unstableFrameCounter.current >= UNSTABLE_ZERO_THRESHOLD && !hasUsableContact) {
         vitalSignsFrameCounter.current = 0;
         setBeatMarker(0);
         setRRIntervals([]);
         arrhythmiaDetectedRef.current = false;
+        measurementLatchRef.current = createMeasurementSessionLatch();
+        lastGoodBpmRef.current = 0;
+        lastRrSnapshotRef.current = null;
         setVitalSigns(prev => (
           prev.heartRate.value === 0 &&
           (prev.spo2.value == null || prev.spo2.value === 0) &&
@@ -783,7 +845,14 @@ const Index = () => {
       }
     }
 
-    if (hrReady && heartBeatResult.isPeak) {
+    if (
+      heartBeatResult.rrData &&
+      heartBeatResult.rrData.intervals.length >= 2
+    ) {
+      lastRrSnapshotRef.current = heartBeatResult.rrData;
+    }
+
+    if ((hrPublish || sessionLive) && heartBeatResult.isPeak) {
       setBeatMarker(1);
       if (beatMarkerTimerRef.current) window.clearTimeout(beatMarkerTimerRef.current);
       beatMarkerTimerRef.current = window.setTimeout(() => {
@@ -798,12 +867,17 @@ const Index = () => {
       }
     }
 
-    if (hrReady && heartBeatResult.isPeak && heartBeatResult.rrData?.intervals && nowT - lastRrPushRef.current >= RR_PUSH_THROTTLE_MS) {
+    if (
+      (hrPublish || sessionLive) &&
+      heartBeatResult.isPeak &&
+      heartBeatResult.rrData?.intervals &&
+      nowT - lastRrPushRef.current >= RR_PUSH_THROTTLE_MS
+    ) {
       lastRrPushRef.current = nowT;
       setRRIntervals(heartBeatResult.rrData.intervals.slice(-5));
     }
 
-    if (!vitalsReady) {
+    if (!pipelineLive) {
       return;
     }
 
@@ -842,15 +916,22 @@ const Index = () => {
         },
       );
 
+      const rrForVitals =
+        heartBeatResult.rrData &&
+        heartBeatResult.rrData.intervals.length >= 2 &&
+        (heartBeatResult.confidence > VITAL_THRESHOLDS.BP.MIN_RR_CONFIDENCE ||
+          sessionLive)
+          ? heartBeatResult.rrData
+          : lastRrSnapshotRef.current &&
+              lastRrSnapshotRef.current.intervals.length >= 2
+            ? lastRrSnapshotRef.current
+            : undefined;
+
       const vitals = processVitalSigns(
         lastSignal.filteredValue,
         lastSignal.quality || 0,
-        heartBeatResult.bpm,
-        heartBeatResult.rrData &&
-          heartBeatResult.rrData.intervals.length >= 2 &&
-          heartBeatResult.confidence > VITAL_THRESHOLDS.BP.MIN_RR_CONFIDENCE
-          ? heartBeatResult.rrData
-          : undefined,
+        bpmOut,
+        rrForVitals,
         lastSignal.perfusionIndex,
         enrichedSqm,
       );

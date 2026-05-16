@@ -51,7 +51,7 @@ export class HeartBeatProcessor {
   /** Evita parpadeo BPM cuando el gate de amplitud falla 1–2 frames */
   private heldBpm = 0;
   private lastGoodBpmTime = 0;
-  private readonly BPM_HOLD_MS = 2800;
+  private readonly BPM_HOLD_MS = 6000;
   private readonly GATE_RANGE_MIN = 0.048;
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
 
