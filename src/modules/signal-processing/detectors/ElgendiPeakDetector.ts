@@ -8,6 +8,7 @@ import { clamp } from '../../../utils/math';
 import {
   bandpassOffline,
   detrendLinear,
+  hampel1D,
   movingAverage,
   resampleToUniformTimeline,
   robustNormalizeZeroCenter,
@@ -103,7 +104,11 @@ export class ElgendiPeakDetector {
       };
     }
 
-    let x = bandpassOffline(detrendLinear(sig), fs);
+    // Supresión de artefactos impulsivos (movimiento, spikes de exposición) ANTES del pasabanda:
+    // Hampel con ventana ~250 ms y umbral 3σ MAD — preserva morfología del pulso sistólico.
+    const hampelWin = Math.max(5, Math.round(fs * 0.25) | 1);
+    const cleaned = hampel1D(sig, hampelWin, 3);
+    let x = bandpassOffline(detrendLinear(cleaned), fs);
     x = robustNormalizeZeroCenter(x);
 
     const w1 = Math.max(3, Math.round((peakMs / 1000) * fs));
@@ -205,7 +210,21 @@ export class ElgendiPeakDetector {
       }
     }
 
-    let confidence = rr.length > 0 ? clamp(rr.length / 6, 0, 1) * 0.55 + clamp(peaks.length / 8, 0, 1) * 0.45 : 0;
+    // Confianza: cobertura RR + cobertura picos + regularidad (1 − CV de RR).
+    // Penaliza ritmos erráticos por artefacto residual aun cuando haya cuenta alta.
+    let rrRegularity = 0;
+    if (rr.length >= 3) {
+      const mean = rr.reduce((a, b) => a + b, 0) / rr.length;
+      const variance = rr.reduce((s, v) => s + (v - mean) ** 2, 0) / rr.length;
+      const cv = Math.sqrt(variance) / Math.max(1, mean);
+      rrRegularity = clamp(1 - cv / 0.35, 0, 1);
+    }
+    let confidence =
+      rr.length > 0
+        ? clamp(rr.length / 6, 0, 1) * 0.4 +
+          clamp(peaks.length / 8, 0, 1) * 0.3 +
+          rrRegularity * 0.3
+        : 0;
     if (typeof input.sqi === 'number' && input.sqi < PEAK_DETECTION_DEFAULTS.minSQI) {
       confidence *= 0.5;
     }
