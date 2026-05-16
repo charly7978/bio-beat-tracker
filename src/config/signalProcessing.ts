@@ -32,6 +32,18 @@ export const PEAK_DETECTION_DEFAULTS = {
   integrationWindowMs: 180,
   /** Refractario máximo derivado de maxBpm */
   refractoryMsFromMaxBpm: 60000 / VITAL_THRESHOLDS.HR.MAX,
+  /** Re-muestreo uniforme si jitter de timestamps supera este factor × mediana Δt */
+  RESAMPLE_JITTER_FACTOR: 1.45,
+  RESAMPLE_DT_MIN_MS: 5,
+  RESAMPLE_DT_MAX_MS: 120,
+  RESAMPLE_TARGET_MIN: 64,
+  RESAMPLE_TARGET_MAX: 512,
+  /** Normalización robusta del latido para ensemble (escala ±) */
+  HEARTBEAT_NORM_SCALE: 120,
+  HEARTBEAT_NORM_MIN_RANGE: 0.032,
+  HEARTBEAT_NORM_FALLBACK_GAIN: 8,
+  HEARTBEAT_WINDOW_WARMUP: 120,
+  HEARTBEAT_WINDOW_STABLE: 180,
   /**
    * Anclas de calibración adaptativa (no mmHg): escalan umbrales Elgendi/Pan
    * según dinámica de la ventana, SQI, PI y BPM espectral.

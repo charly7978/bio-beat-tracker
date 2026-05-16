@@ -3,8 +3,9 @@
  * Escala umbrales desde dinámica PPG, SQI, PI y BPM espectral — sin valores fijos en mmHg.
  */
 import { PEAK_DETECTION_DEFAULTS } from '@/config/signalProcessing';
-import { clamp } from '@/utils/math';
 import { bpmFromAutocorr } from '@/modules/signal-processing/shared/dsp';
+import { clamp } from '@/utils/math';
+import { robustDynamicRange } from '@/utils/stats';
 
 export interface DetectorCalibration {
   elgendiMinProminence: number;
@@ -17,14 +18,6 @@ export interface DetectorCalibration {
   estimatedBpm: number | null;
   spectralScore: number;
   signalDynamicRange: number;
-}
-
-function robustDynamicRange(signal: number[]): number {
-  if (signal.length < 8) return 0;
-  const sorted = [...signal].sort((a, b) => a - b);
-  const p10 = sorted[Math.floor(sorted.length * 0.1)] ?? 0;
-  const p90 = sorted[Math.floor(sorted.length * 0.9)] ?? 0;
-  return Math.max(0.008, p90 - p10);
 }
 
 /** Calibra detectores para la ventana actual. */

@@ -10,7 +10,7 @@ import {
   derivativeCentral,
   detrendLinear,
   movingWindowIntegration,
-  resampleToUniformTimeline,
+  prepareUniformPpgWindow,
   robustNormalizeZeroCenter,
 } from '../shared/dsp';
 
@@ -41,16 +41,13 @@ export class PanTompkinsPPGDetector {
   static detect(input: PanTompkinsPPGInput): PanTompkinsPPGOutput {
     const rejected: Array<{ index: number; reason: string }> = [];
     const searchbackEvents: number[] = [];
-    let sig = [...input.signal];
-    let ts = [...input.timestampsMs];
-    let fs = input.samplingRateHz;
     const integMs = input.integrationWindowMs ?? PEAK_DETECTION_DEFAULTS.integrationWindowMs;
     const thrFactor = input.thresholdFactor ?? PEAK_DETECTION_DEFAULTS.CALIBRATION.PAN_THRESHOLD_BASE;
     const sbFactor =
       input.searchbackFactor ??
       thrFactor * PEAK_DETECTION_DEFAULTS.CALIBRATION.PAN_SEARCHBACK_RELAXED_FRAC;
 
-    if (sig.length !== ts.length || sig.length < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
+    if (input.signal.length !== input.timestampsMs.length || input.signal.length < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
       return {
         peaks: [],
         peakTimes: [],
@@ -64,21 +61,11 @@ export class PanTompkinsPPGDetector {
       };
     }
 
-    const gaps: number[] = [];
-    for (let i = 1; i < ts.length; i++) gaps.push(ts[i] - ts[i - 1]);
-    const sortedG = [...gaps].sort((a, b) => a - b);
-    const med = sortedG[Math.floor(sortedG.length / 2)] ?? 1000 / fs;
-    const jitterP95 = sortedG[Math.floor(sortedG.length * 0.95)] ?? med;
-    let resampled = false;
-    if (jitterP95 > med * 1.45 || med < 5 || med > 120) {
-      resampled = true;
-      const targetN = clamp(Math.round(((ts[ts.length - 1] - ts[0]) / 1000) * fs), 64, 512);
-      const r = resampleToUniformTimeline(sig, ts, targetN);
-      sig = r.y;
-      fs = r.fs;
-      ts = new Array(sig.length);
-      for (let i = 0; i < sig.length; i++) ts[i] = r.t0 + (i * (r.t1 - r.t0)) / Math.max(1, sig.length - 1);
-    }
+    const uniform = prepareUniformPpgWindow(input.signal, input.timestampsMs, input.samplingRateHz);
+    const sig = uniform.signal;
+    const ts = uniform.timestampsMs;
+    const fs = uniform.samplingRateHz;
+    const resampled = uniform.resampled;
 
     const x = robustNormalizeZeroCenter(bandpassOffline(detrendLinear(sig), fs));
     const dx = derivativeCentral(x, fs);

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { decidePeakEmit, bpmFromEmittedRr } from '../peakEmitPolicy';
 import type { PeakDetectionResult } from '@/types/measurements';
 
-function mockEns(
+function buildTestPeakResult(
   peakTimes: number[],
   sources: Array<'dual' | 'solo_elgendi' | 'solo_pan'>,
   peakScores?: number[],
@@ -26,7 +26,7 @@ function mockEns(
 
 describe('peakEmitPolicy', () => {
   it('emite pico dual en borde vivo', () => {
-    const ens = mockEns([5000], ['dual'], [0.65]);
+    const ens = buildTestPeakResult([5000], ['dual'], [0.65]);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,
@@ -46,7 +46,7 @@ describe('peakEmitPolicy', () => {
   });
 
   it('no emite solo_elgendi sin dedo confirmado', () => {
-    const ens = mockEns([5000], ['solo_elgendi']);
+    const ens = buildTestPeakResult([5000], ['solo_elgendi']);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,
@@ -62,7 +62,7 @@ describe('peakEmitPolicy', () => {
   });
 
   it('emite solo_elgendi en hybrid solo con dedo confirmado y conf alta', () => {
-    const ens = mockEns([5000], ['solo_elgendi'], [0.62]);
+    const ens = buildTestPeakResult([5000], ['solo_elgendi'], [0.62]);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,
@@ -82,7 +82,7 @@ describe('peakEmitPolicy', () => {
   });
 
   it('permite solo_elgendi como primer latido con score suficiente', () => {
-    const ens = mockEns([5000], ['solo_elgendi'], [0.52]);
+    const ens = buildTestPeakResult([5000], ['solo_elgendi'], [0.52]);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,
@@ -102,7 +102,7 @@ describe('peakEmitPolicy', () => {
   });
 
   it('modo reacquire permite solo_elgendi tras stall sin dual', () => {
-    const ens = mockEns([5000], ['solo_elgendi'], [0.64]);
+    const ens = buildTestPeakResult([5000], ['solo_elgendi'], [0.64]);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 2000,
@@ -124,7 +124,7 @@ describe('peakEmitPolicy', () => {
   });
 
   it('prefiere el pico más reciente en la ventana viva', () => {
-    const ens = mockEns([4900, 5050], ['dual', 'dual'], [0.65, 0.66]);
+    const ens = buildTestPeakResult([4900, 5050], ['dual', 'dual'], [0.65, 0.66]);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,
@@ -142,7 +142,7 @@ describe('peakEmitPolicy', () => {
   });
 
   it('sin dedo confirmado solo acepta dual estricto', () => {
-    const ens = mockEns([5000], ['solo_elgendi']);
+    const ens = buildTestPeakResult([5000], ['solo_elgendi']);
     expect(
       decidePeakEmit({
         ens,
@@ -159,7 +159,7 @@ describe('peakEmitPolicy', () => {
   });
 
   it('no emite dos picos dentro del refractario fisiológico', () => {
-    const ens = mockEns([5000, 5120], ['dual', 'dual'], [0.65, 0.66]);
+    const ens = buildTestPeakResult([5000, 5120], ['dual', 'dual'], [0.65, 0.66]);
     const first = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,
@@ -187,7 +187,7 @@ describe('peakEmitPolicy', () => {
   });
 
   it('no re-emite el mismo pico', () => {
-    const ens = mockEns([5000], ['dual']);
+    const ens = buildTestPeakResult([5000], ['dual']);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 5000,

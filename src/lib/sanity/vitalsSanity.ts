@@ -3,12 +3,13 @@
  *
  * Goal: detect implausible patterns coming out of the pipeline
  * (constant value, perfectly periodic loop, zero-variance bursts) and
- * surface an error state instead of letting the UI render fabricated data.
+ * surface an error state instead of letting the UI render non-physiological data.
  *
  * This is a defensive guardrail. The pipeline already returns 0/`--` when
  * the signal is bad; this catches the *opposite* failure mode where some
  * upstream stage somehow injects a "too clean" stream.
  */
+import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 
 export type SanityVerdict =
   | { ok: true }
@@ -42,8 +43,8 @@ export class VitalsSanityChecker {
       minSamples: opt.minSamples ?? 12,
       constantTolerance: opt.constantTolerance ?? 1.5,
       repetitiveStdMin: opt.repetitiveStdMin ?? 0.15,
-      min: opt.min ?? 30,
-      max: opt.max ?? 220,
+      min: opt.min ?? VITAL_THRESHOLDS.HR.MIN,
+      max: opt.max ?? VITAL_THRESHOLDS.HR.MAX,
     };
     this.onVerdict = opt.onVerdict;
   }

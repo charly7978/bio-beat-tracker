@@ -645,12 +645,11 @@ export class VitalSignsProcessor {
    */
   // Buffer para valores R (Ratio-of-Ratios) para filtrado de mediana
   private rValueHistory: number[] = [];
-  private readonly R_HISTORY_SIZE = 7;  // Ventana corta: convergencia rápida, mediana estable
   private calculateSpO2Raw(): number {
+    const spoCfg = VITAL_THRESHOLDS.SPO2;
     const { redAC, redDC, greenAC, greenDC } = this.rgbData;
-    
-    // DC mínimo: necesitamos baseline de canal suficiente
-    if (redDC < 10 || greenDC < 5) return 0;
+
+    if (redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC) return 0;
     
     const piRed = (redAC / redDC) * 100;   // como %
     const piGreen = (greenAC / greenDC) * 100;
@@ -660,8 +659,7 @@ export class VitalSignsProcessor {
       log.info(`[SpO2 Debug] ACr:${redAC.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${greenAC.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}%`);
     }
     
-    // Umbral mínimo de pulsatilidad: PI > 0.02% (relajado para cámara)
-    if (piRed < 0.02 || piGreen < 0.02) return 0;
+    if (piRed < spoCfg.MIN_PI_PERCENT || piGreen < spoCfg.MIN_PI_PERCENT) return 0;
     
     const ratioRed = redAC / redDC;
     const ratioGreen = greenAC / greenDC;
@@ -671,29 +669,29 @@ export class VitalSignsProcessor {
     
     // Rango físico de R para tejido humano con cámara+flash:
     // Con dedo en flash blanco, rojo está cerca de saturación → R puede ser bajo (0.1+)
-    if (currentR < VITAL_THRESHOLDS.SPO2.R_VALUE_MIN || currentR > VITAL_THRESHOLDS.SPO2.R_VALUE_MAX) {
+    if (currentR < spoCfg.R_VALUE_MIN || currentR > spoCfg.R_VALUE_MAX) {
       if (this.frameCount % 15 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
       return 0;
     }
 
     // Acumular R para filtrado de mediana
     this.rValueHistory.push(currentR);
-    if (this.rValueHistory.length > this.R_HISTORY_SIZE) {
+    if (this.rValueHistory.length > spoCfg.R_HISTORY_SAMPLES) {
       this.rValueHistory.shift();
     }
 
-    // Solo necesitamos 3 muestras para mediana estable
     if (this.rValueHistory.length < 3) return 0;
 
-    // Mediana de R: robusto ante outliers
     const sortedR = [...this.rValueHistory].sort((a, b) => a - b);
-    const medianR = sortedR[Math.floor(sortedR.length / 2)];
-    
-    // Curva de calibración optimizada específicamente para cámara de smartphone (Green as IR proxy)
-    // Con flash LED, el canal rojo se satura (DC alto, AC bajo), produciendo valores R muy bajos (~0.1 a 0.5).
-    // Fórmula ajustada para mapear estos valores R a un rango fisiológico normal (95-99%).
-    // Un R de 0.2 dará 99%, un R de 0.6 dará ~95%.
-    const spo2 = Math.min(99, Math.max(70, 101 - 10 * medianR));
+    const medianR = sortedR[Math.floor(sortedR.length / 2)] ?? 0;
+
+    const spo2 = Math.min(
+      spoCfg.DISPLAY_CAP,
+      Math.max(
+        spoCfg.MIN_VALID,
+        spoCfg.R_MODEL_INTERCEPT - spoCfg.R_MODEL_SLOPE * medianR,
+      ),
+    );
     
     if (this.frameCount % 30 === 0) {
       log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}% (n=${this.rValueHistory.length})`);

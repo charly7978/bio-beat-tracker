@@ -5,6 +5,7 @@
 import type { PeakDetectionResult } from '../../../types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { clamp } from '../../../utils/math';
+import { median } from '../../../utils/stats';
 import { isPhysiologicalRR } from '../../../utils/physio';
 import { bpmFromAutocorr } from '../shared/dsp';
 import { computeDetectorCalibration } from '../../../lib/measurement/detectorCalibration';
@@ -20,12 +21,6 @@ export interface PeakDetectionEnsembleInput {
   perfusionIndex?: number;
   legacyPeakIndices?: number[];
   allowSoloElgendiFusion?: boolean;
-}
-
-function median(a: number[]): number {
-  if (a.length === 0) return 0;
-  const s = [...a].sort((x, y) => x - y);
-  return s[Math.floor(s.length / 2)] ?? 0;
 }
 
 type PeakSource = 'dual' | 'solo_elgendi' | 'solo_pan';

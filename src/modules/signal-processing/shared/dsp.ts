@@ -2,7 +2,9 @@
  * Utilidades DSP puras compartidas (sin estado).
  * Los filtros IIR en streaming siguen viviendo en `BandpassFilter`.
  */
+import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { clamp } from '../../../utils/math';
+import { median } from '../../../utils/stats';
 import { BandpassFilter } from '../BandpassFilter';
 import { RESPIRATION_DEFAULTS } from '../../../config/signalProcessing';
 
@@ -97,7 +99,7 @@ export function hampel1D(y: number[], window: number, nSigma = 3): number[] {
       if (j >= 0 && j < n) slice.push(y[j]);
     }
     if (slice.length < 3) continue;
-    const med = [...slice].sort((a, b) => a - b)[Math.floor(slice.length / 2)] ?? 0;
+    const med = median(slice);
     const mad =
       [...slice].reduce((s, v) => s + Math.abs(v - med), 0) / slice.length || 1e-9;
     if (Math.abs(y[i] - med) > nSigma * 1.4826 * mad) {
@@ -134,6 +136,41 @@ export function resampleToUniformTimeline(
     y[k] = vA + u * (vB - vA);
   }
   return { y, fs, t0, t1 };
+}
+
+/** Re-muestrea a timeline uniforme si los Δt son irregulares (cámara / backpressure). */
+export function prepareUniformPpgWindow(
+  signal: number[],
+  timestampsMs: number[],
+  samplingRateHz: number,
+): { signal: number[]; timestampsMs: number[]; samplingRateHz: number; resampled: boolean } {
+  if (signal.length !== timestampsMs.length || signal.length < 2) {
+    return { signal, timestampsMs, samplingRateHz, resampled: false };
+  }
+  const cfg = PEAK_DETECTION_DEFAULTS;
+  const gaps: number[] = [];
+  for (let i = 1; i < timestampsMs.length; i++) gaps.push(timestampsMs[i]! - timestampsMs[i - 1]!);
+  const sortedG = [...gaps].sort((a, b) => a - b);
+  const med = sortedG[Math.floor(sortedG.length / 2)] ?? 1000 / samplingRateHz;
+  const jitterP95 = sortedG[Math.floor(sortedG.length * 0.95)] ?? med;
+  const needsResample =
+    jitterP95 > med * cfg.RESAMPLE_JITTER_FACTOR ||
+    med < cfg.RESAMPLE_DT_MIN_MS ||
+    med > cfg.RESAMPLE_DT_MAX_MS;
+  if (!needsResample) {
+    return { signal, timestampsMs, samplingRateHz, resampled: false };
+  }
+  const targetN = clamp(
+    Math.round(((timestampsMs[timestampsMs.length - 1]! - timestampsMs[0]!) / 1000) * samplingRateHz),
+    cfg.RESAMPLE_TARGET_MIN,
+    cfg.RESAMPLE_TARGET_MAX,
+  );
+  const r = resampleToUniformTimeline(signal, timestampsMs, targetN);
+  const ts = new Array<number>(r.y.length);
+  for (let i = 0; i < r.y.length; i++) {
+    ts[i] = r.t0 + (i * (r.t1 - r.t0)) / Math.max(1, r.y.length - 1);
+  }
+  return { signal: r.y, timestampsMs: ts, samplingRateHz: r.fs, resampled: true };
 }
 
 export function autocorrDominantLag(

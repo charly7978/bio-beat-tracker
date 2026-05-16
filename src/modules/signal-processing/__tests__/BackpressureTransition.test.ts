@@ -38,7 +38,7 @@ function mean(arr: number[]): number {
 }
 
 /**
- * Guardrail dinámico: simula un switch de stride EN CALIENTE dentro de la
+ * Guardrail dinámico: reproduce un switch de stride EN CALIENTE dentro de la
  * misma sesión (lo que el backpressure adaptativo hace en producción) y
  * verifica que ni el BPM detectado ni la confianza colapsan al transicionar.
  */

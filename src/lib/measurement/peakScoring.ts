@@ -2,6 +2,7 @@
  * Ponderación única de candidatos a pico PPG (Elgendi + Pan + espectral + SQI/PI).
  */
 import { clamp } from '@/utils/math';
+import { median } from '@/utils/stats';
 
 /** Suma ≈ 1.0 — dual y acuerdo espectral pesan más (menos falsos positivos). */
 export const PEAK_SCORE_WEIGHTS = {
@@ -69,9 +70,7 @@ export function scorePeakCandidate(input: PeakScoreInput): number {
 
 export function rrMedianMs(intervals: number[]): number {
   const v = intervals.filter((x) => x > 0);
-  if (!v.length) return 0;
-  const s = [...v].sort((a, b) => a - b);
-  return s[Math.floor(s.length / 2)] ?? 0;
+  return v.length ? median(v) : 0;
 }
 
 export function passesRrPlausibility(rrMs: number, prevMedianMs: number): boolean {

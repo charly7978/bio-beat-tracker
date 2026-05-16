@@ -3,6 +3,7 @@
  * BPM y hápticos solo desde picos emitidos (sin metrónomo ni autocorrelación como display).
  */
 import { clamp } from '../utils/math';
+import { robustBounds } from '../utils/stats';
 import { PEAK_DETECTION_DEFAULTS } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
@@ -121,7 +122,8 @@ export class HeartBeatProcessor {
   }
 
   private minNormalizeRange(): number {
-    return this.cameraHints.constrained ? 0.07 : 0.032;
+    const base = PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_MIN_RANGE;
+    return this.cameraHints.constrained ? base * 2.2 : base;
   }
 
   processSignal(filteredValue: number, timestamp?: number): {
@@ -365,30 +367,31 @@ export class HeartBeatProcessor {
     );
   }
 
-  private getRobustBounds(values: number[]): { low: number; high: number; range: number } {
-    const sorted = [...values].sort((a, b) => a - b);
-    if (sorted.length === 0) return { low: 0, high: 0, range: 0 };
-    const low = sorted[Math.floor((sorted.length - 1) * 0.1)] ?? sorted[0];
-    const high = sorted[Math.floor((sorted.length - 1) * 0.9)] ?? sorted[sorted.length - 1];
-    return { low, high, range: Math.max(0, high - low) };
-  }
-
   private normalizeSignal(value: number, windowLen: number = 150): { normalizedValue: number; range: number } {
     const recent = this.signalBuffer.slice(-windowLen);
-    const { low, high, range } = this.getRobustBounds(recent);
-    if (range < this.minNormalizeRange()) return { normalizedValue: value * 8, range };
+    const { low, high, range } = robustBounds(recent);
+    const scale = PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_SCALE;
+    if (range < this.minNormalizeRange()) {
+      return {
+        normalizedValue: value * PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_FALLBACK_GAIN,
+        range,
+      };
+    }
     const clipped = Math.min(high, Math.max(low, value));
-    const normalizedValue = ((clipped - low) / range - 0.5) * 120;
+    const normalizedValue = ((clipped - low) / range - 0.5) * scale;
     return { normalizedValue, range };
   }
 
   private normalizeWindow(values: number[], windowLen: number = 150): number[] {
     const refWindow = this.signalBuffer.slice(-windowLen);
-    const { low, high, range } = this.getRobustBounds(refWindow);
-    if (range < this.minNormalizeRange()) return values.map((v) => v * 8);
+    const { low, high, range } = robustBounds(refWindow);
+    const scale = PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_SCALE;
+    if (range < this.minNormalizeRange()) {
+      return values.map((v) => v * PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_FALLBACK_GAIN);
+    }
     return values.map((v) => {
       const c = Math.min(high, Math.max(low, v));
-      return ((c - low) / range - 0.5) * 120;
+      return ((c - low) / range - 0.5) * scale;
     });
   }
 
@@ -414,7 +417,10 @@ export class HeartBeatProcessor {
     if (this.signalBuffer.length < 60) return { bpm: 0, score: 0 };
 
     const sampleRate = this.estimateSampleRate();
-    const windowLen = this.consecutivePeaks < 3 ? 120 : 180;
+    const windowLen =
+      this.consecutivePeaks < 3
+        ? PEAK_DETECTION_DEFAULTS.HEARTBEAT_WINDOW_WARMUP
+        : PEAK_DETECTION_DEFAULTS.HEARTBEAT_WINDOW_STABLE;
     const recentSignal = this.normalizeWindow(this.signalBuffer.slice(-windowLen), windowLen);
     const mean = recentSignal.reduce((s, v) => s + v, 0) / recentSignal.length;
     const centered = recentSignal.map((v) => v - mean);

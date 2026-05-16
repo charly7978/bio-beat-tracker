@@ -7,6 +7,7 @@
 import { PPGFeatureExtractor, CycleFeatures } from './PPGFeatureExtractor';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { isPhysiologicalRR } from '../../utils/physio';
+import { median } from '../../utils/stats';
 import type { FingerPlacementMode } from '../../types/signal';
 import {
   enforceHemodynamicCoherence,
@@ -131,12 +132,6 @@ export class BloodPressureProcessor {
   }
 
   private medianFeatures(cycles: CycleFeatures[]): PwaMedianFeatures {
-    const median = (arr: number[]) => {
-      const sorted = [...arr].sort((a, b) => a - b);
-      const mid = Math.floor(sorted.length / 2);
-      return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-    };
-
     return {
       bDivA: median(cycles.map((c) => c.apg.bDivA)),
       dDivA: median(cycles.map((c) => c.apg.dDivA)),

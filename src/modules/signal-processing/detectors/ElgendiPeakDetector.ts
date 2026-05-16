@@ -10,7 +10,7 @@ import {
   detrendLinear,
   hampel1D,
   movingAverage,
-  resampleToUniformTimeline,
+  prepareUniformPpgWindow,
   robustNormalizeZeroCenter,
 } from '../shared/dsp';
 
@@ -57,11 +57,7 @@ export class ElgendiPeakDetector {
     const offsetW = input.offsetWeight ?? PEAK_DETECTION_DEFAULTS.offsetWeight;
     const minProm = input.minProminence ?? PEAK_DETECTION_DEFAULTS.minProminence;
 
-    let sig = [...input.signal];
-    let ts = [...input.timestampsMs];
-    let fs = input.samplingRateHz;
-
-    if (sig.length !== ts.length || sig.length < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
+    if (input.signal.length !== input.timestampsMs.length || input.signal.length < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
       return {
         peaks: [],
         peakTimes: [],
@@ -70,25 +66,15 @@ export class ElgendiPeakDetector {
         rejectedCandidates,
         diagnostics: { stage: 'insufficient_input' },
         reason: 'INSUFFICIENT_WINDOW',
-        parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, minProm, fs },
+        parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, minProm, fs: input.samplingRateHz },
       };
     }
 
-    // Jitter alto → re-muestreo uniforme
-    const gaps: number[] = [];
-    for (let i = 1; i < ts.length; i++) gaps.push(ts[i] - ts[i - 1]);
-    const sortedG = [...gaps].sort((a, b) => a - b);
-    const med = sortedG[Math.floor(sortedG.length / 2)] ?? 1000 / fs;
-    const jitterP95 = sortedG[Math.floor(sortedG.length * 0.95)] ?? med;
-    const resample = jitterP95 > med * 1.45 || med < 5 || med > 120;
-    if (resample) {
-      const targetN = clamp(Math.round(((ts[ts.length - 1] - ts[0]) / 1000) * fs), 64, 512);
-      const r = resampleToUniformTimeline(sig, ts, targetN);
-      sig = r.y;
-      fs = r.fs;
-      ts = new Array(sig.length);
-      for (let i = 0; i < sig.length; i++) ts[i] = r.t0 + (i * (r.t1 - r.t0)) / Math.max(1, sig.length - 1);
-    }
+    const uniform = prepareUniformPpgWindow(input.signal, input.timestampsMs, input.samplingRateHz);
+    const sig = uniform.signal;
+    const ts = uniform.timestampsMs;
+    const fs = uniform.samplingRateHz;
+    const resample = uniform.resampled;
 
     const finite = sig.every((v) => Number.isFinite(v));
     if (!finite) {
