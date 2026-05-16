@@ -43,6 +43,9 @@ export interface BPEstimate {
   featureQuality: number;
 }
 
+/** Corrección empírica cámara+dedo sin cuff (suele subestimar MAP/PP vs. referencia). */
+const CAMERA_PPG_BP_OFFSET = { map: 4.5, pp: 3.5 } as const;
+
 /**
  * Coeficientes de regresión adaptados para señales PPG de cámara (smartphone):
  * Al no tener calibración cruzada con tensiómetro, se re-centra la intercepción
@@ -190,7 +193,7 @@ export class BloodPressureProcessor {
   private calculateAdvancedBP(f: MedianFeatures, hr: number, rmssd: number): { sbp: number; dbp: number } {
     // 1. Estimar Presión Media (MAP) - Basada en Resistencia y Gasto Medio
     // El K-value es el mejor proxy para la resistencia periférica total (TPR)
-    let map = 92; // Baseline
+    let map = 92 + CAMERA_PPG_BP_OFFSET.map; // Baseline + sesgo cámara
     map += 45 * (f.kValue - 0.38);
     map += 0.08 * (hr - 72);
     map += 2.2 * f.agi;
@@ -199,7 +202,7 @@ export class BloodPressureProcessor {
 
     // 2. Estimar Presión de Pulso (PP) - Basada en Volumen Sistólico y Complianza
     // vMax y SUT reflejan la dinámica de la eyección sistólica
-    let pp = 42; // Baseline
+    let pp = 42 + CAMERA_PPG_BP_OFFSET.pp; // Baseline + sesgo cámara
     pp += 0.08 * (f.vMax - 60);
     if (f.sutMs > 40) {
       pp += -0.12 * (f.sutMs - 180);

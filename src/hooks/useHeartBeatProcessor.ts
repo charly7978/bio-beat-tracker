@@ -38,6 +38,7 @@ export const useHeartBeatProcessor = () => {
   // Track sustained NO_CONTACT to align with PPGSignalProcessor reset semantics
   const noContactFramesRef = useRef<number>(0);
   const NO_CONTACT_RESET_THRESHOLD = 90; // ~3s @ 30fps
+  const NO_CONTACT_HOLD_FRAMES = 12; // ~0,4 s: no cortar BPM por parpadeo de contacto
 
   useEffect(() => {
     const t = Date.now().toString(36);
@@ -73,13 +74,26 @@ export const useHeartBeatProcessor = () => {
     // Sin dedo: no alimentar el ensemble (la onda PPG puede seguir en otro canal)
     if (contactState === 'NO_CONTACT') {
       noContactFramesRef.current += 1;
+      if (
+        noContactFramesRef.current <= NO_CONTACT_HOLD_FRAMES &&
+        lastBpmRef.current > 0
+      ) {
+        return {
+          bpm: lastBpmRef.current,
+          confidence: lastConfidenceRef.current * 0.82,
+          isPeak: false,
+          filteredValue: lastFilteredValueRef.current,
+          signalQuality: lastSqiRef.current,
+          rrData: EMPTY_RR,
+        };
+      }
       if (noContactFramesRef.current >= NO_CONTACT_RESET_THRESHOLD) {
         processorRef.current.reset();
+        lastBpmRef.current = 0;
+        lastConfidenceRef.current = 0;
+        lastSqiRef.current = 0;
+        lastFilteredValueRef.current = 0;
       }
-      lastBpmRef.current = 0;
-      lastConfidenceRef.current = 0;
-      lastSqiRef.current = 0;
-      lastFilteredValueRef.current = 0;
       return {
         bpm: 0, confidence: 0, isPeak: false,
         filteredValue: 0, signalQuality: 0,

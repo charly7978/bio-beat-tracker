@@ -107,9 +107,9 @@ export class PeakDetectionEnsemble {
     let spectralAgreement = 0;
     if (bpmInstant && specBpm) {
       spectralAgreement = clamp(1 - Math.abs(bpmInstant - specBpm) / Math.max(bpmInstant, specBpm), 0, 1);
-      if (spectralAgreement < 0.52) {
+      if (spectralAgreement < PEAK_DETECTION_DEFAULTS.spectralAgreementMin) {
         if (bpmInstant) rejected.push({ index: fusedIdx[fusedIdx.length - 1] ?? 0, reason: 'SPECTRAL_MISMATCH', detector: 'ensemble' });
-        bpmInstant = spectralAgreement > 0.26 ? bpmInstant : null;
+        bpmInstant = spectralAgreement > 0.18 ? bpmInstant : null;
       }
     }
 
@@ -128,7 +128,7 @@ export class PeakDetectionEnsemble {
       spectralAgreement * 0.1;
 
     if (typeof sqi === 'number' && sqi < PEAK_DETECTION_DEFAULTS.minSQI) {
-      confidence *= 0.58;
+      confidence *= 0.72;
     }
 
     const bpmStable = bpmInstant;

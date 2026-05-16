@@ -16,8 +16,12 @@ export const PEAK_DETECTION_DEFAULTS = {
   /** Peso del offset adaptativo sobre la energía de MA_peak */
   offsetWeight: 0.35,
   /** Picos débiles en cámara móvil: prominencia mínima algo más baja (literatura Elgendi usa umbral adaptativo vía MA) */
-  minProminence: 0.055,
-  minSQI: 12,
+  minProminence: 0.048,
+  minSQI: 10,
+  /** Ventana para emitir pico respecto al frame actual (ms) */
+  peakEmitWindowMs: 380,
+  /** Acuerdo espectral mínimo antes de penalizar BPM instantáneo */
+  spectralAgreementMin: 0.38,
   /** Mínimo de muestras en ventana para correr ensemble */
   minSamplesEnsemble: 72,
   /** Integración Pan–Tompkins PPG (~180 ms de pulso sistólico típico a 30 Hz) */

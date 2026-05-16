@@ -587,7 +587,7 @@ const Index = () => {
   // === PROCESAR SEÑAL PPG ===
   const vitalSignsFrameCounter = useRef<number>(0);
   const unstableFrameCounter = useRef<number>(0);
-  const UNSTABLE_ZERO_THRESHOLD = 180; // 6 segundos de gracia antes de borrar (antes 120)
+  const UNSTABLE_ZERO_THRESHOLD = 360; // ~12 s @ 30 fps — evita borrar HR/BP por parpadeos cortos
   const VITALS_PROCESS_EVERY_N_FRAMES = 3;
   // Throttling de UI: el DSP corre en cada frame, React solo refresca a ritmos sanos.
   const isMonitoringRef = useRef(false);
@@ -624,7 +624,7 @@ const Index = () => {
     const heartBeatResult = processHeartBeat(
       signalValue,
       contactState,
-      lastSignal.timestamp
+      nowT,
     );
 
     const mergedDiag =
@@ -654,7 +654,7 @@ const Index = () => {
     const vitalsReady =
       hrReady &&
       (rawSqi >= Q.MIN_FOR_HR || (lastSignal.quality || 0) >= Q.MIN_FOR_HR) &&
-      (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * 0.35;
+      (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * 0.28;
 
     if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {
       lastSignalPushRef.current = nowT;
