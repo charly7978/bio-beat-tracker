@@ -17,6 +17,11 @@ import {
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 import { hasFingerHemoglobinSignature } from '../../lib/finger/fingerContactSignature';
+import {
+  isExposureFlickerNotFingerPulse,
+  isFingerOnLensScene,
+  isOpenFlashWithoutContact,
+} from '../../lib/finger/fingerSceneClassifier';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -453,7 +458,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const softHold =
         this.fingerDetected &&
         this.instantLostStreak < F.INSTANT_LOST_TO_UNSTABLE &&
-        hasFingerHemoglobinSignature(snap);
+        hasFingerHemoglobinSignature(snap) &&
+        !isOpenFlashWithoutContact(snap) &&
+        roi.coverageRatio >= F.SOFT_HOLD_COVERAGE;
 
       if (softHold) {
         this.contactState = 'UNSTABLE_CONTACT';
@@ -494,9 +501,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
     const minPi = VITAL_THRESHOLDS.QUALITY.MIN_PI;
     const F = VITAL_THRESHOLDS.FINGER;
+    const snap = this.rgbSnapshotFromSmoothed();
     const pulseOk =
-      this.lastRoiRedCv >= F.ROI_RED_CV_MIN * 0.82 &&
-      this.smoothedCoverage >= F.MIN_COVERAGE * 0.9;
+      hasFingerHemoglobinSignature(snap) &&
+      !isOpenFlashWithoutContact(snap) &&
+      this.lastRoiRedCv >= F.ROI_RED_CV_MIN * 0.88 &&
+      this.smoothedCoverage >= F.MIN_COVERAGE * 0.92;
     const piOk = this.cachedPI >= minPi * 0.75;
     const stable =
       this.stableContactCount >= VITAL_THRESHOLDS.QUALITY.STABLE_FRAMES_REQ &&
@@ -540,6 +550,16 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     };
   }
 
+  private rgbSnapshotFromSmoothed() {
+    return {
+      red: this.smoothedRed,
+      green: this.smoothedGreen,
+      blue: this.smoothedBlue,
+      coverage: this.smoothedCoverage,
+      fingerScore: this.smoothedFingerScore,
+    };
+  }
+
   private detectFingerInstant(roi: ROIMetrics): boolean {
     const F = VITAL_THRESHOLDS.FINGER;
     const { rawRed, rawGreen, rawBlue, coverageRatio, fingerScore } = roi;
@@ -564,6 +584,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (!hasFingerHemoglobinSignature(snap)) {
       return false;
     }
+    if (isOpenFlashWithoutContact(snap)) {
+      return false;
+    }
+    if (
+      !this.fingerDetected &&
+      isExposureFlickerNotFingerPulse(this.lastRoiRedCv, snap, F.ACQUIRE_RB_STRICT)
+    ) {
+      return false;
+    }
 
     const r = snap.red;
     const g = Math.max(1, snap.green);
@@ -578,17 +607,23 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     if (this.fingerDetected) {
+      const rawSnap = {
+        red: rawRed,
+        green: rawGreen,
+        blue: rawBlue,
+        coverage: coverageRatio,
+        fingerScore,
+      };
+      if (isOpenFlashWithoutContact(rawSnap)) return false;
       return (
-        hasFingerHemoglobinSignature({
-          red: rawRed,
-          green: rawGreen,
-          blue: rawBlue,
-          coverage: coverageRatio,
-          fingerScore,
-        }) &&
-        (rbRatio >= F.MAINTAIN_RB || this.cachedPI > F.PULSE_HOLD_MIN_PI)
+        hasFingerHemoglobinSignature(rawSnap) &&
+        (rbRatio >= F.MAINTAIN_RB ||
+          this.cachedPI > F.PULSE_HOLD_MIN_PI ||
+          (coverageRatio >= F.MIN_COVERAGE && rbRatio >= F.HEMOGLOBIN_MIN_RB))
       );
     }
+
+    const onLens = isFingerOnLensScene(snap, coverageRatio, roi.fingerScore);
 
     const strictAcquire =
       rbRatio >= F.ACQUIRE_RB_STRICT &&
@@ -598,20 +633,29 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.smoothedFingerScore >= F.ACQUIRE_SMOOTHED_FINGER_MIN;
 
     const softAcquire =
+      onLens &&
       rbRatio >= F.ACQUIRE_SOFT_RB &&
       totalIntensity >= F.ACQUIRE_SOFT_INTENSITY_MIN &&
-      this.smoothedCoverage >= F.MIN_COVERAGE * F.SOFT_COVERAGE_MULT &&
+      this.smoothedCoverage >= F.MIN_COVERAGE &&
       roi.fingerScore >= F.ACQUIRE_SOFT_FINGER_SCORE_ROI &&
       redDominance >= F.ACQUIRE_SOFT_DOMINANCE;
 
-    const pulsatileAcquire =
-      this.lastRoiRedCv >= F.ROI_RED_CV_MIN &&
+    const lensAcquire =
+      onLens &&
       rbRatio >= F.HEMOGLOBIN_MIN_RB &&
+      totalIntensity >= 48 &&
+      totalIntensity <= 480 &&
+      roi.coverageRatio >= F.MIN_COVERAGE * 0.95;
+
+    const pulsatileMaintain =
+      this.fingerDetected &&
+      this.lastRoiRedCv >= F.ROI_RED_CV_MIN &&
+      rbRatio >= F.ACQUIRE_RB_STRICT &&
       this.smoothedCoverage >= F.PULSATILE_ACQUIRE_COVERAGE &&
       roi.fingerScore >= F.PULSATILE_ACQUIRE_FINGER_ROI &&
       redDominance >= F.PULSATILE_ACQUIRE_MIN_DOMINANCE;
 
-    return strictAcquire || softAcquire || pulsatileAcquire;
+    return strictAcquire || softAcquire || lensAcquire || pulsatileMaintain;
   }
 
   private computeRoiRect(width: number, height: number) {
@@ -1032,9 +1076,21 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   /** PI proxy desde CV temporal del ROI (antes de que ACDC llene la ventana). */
   private estimatePulsePiFromRoi(): number {
+    const snap = this.rgbSnapshotFromSmoothed();
+    if (isOpenFlashWithoutContact(snap)) return 0;
+    if (
+      isExposureFlickerNotFingerPulse(
+        this.lastRoiRedCv,
+        snap,
+        VITAL_THRESHOLDS.FINGER.ACQUIRE_RB_STRICT,
+      )
+    ) {
+      return 0;
+    }
     const cv = this.lastRoiRedCv;
-    if (cv < VITAL_THRESHOLDS.FINGER.ROI_RED_CV_MIN * 0.65) return 0;
-    return clamp(cv * 0.018, 0.00015, 0.012);
+    if (cv < VITAL_THRESHOLDS.FINGER.ROI_RED_CV_MIN * 0.75) return 0;
+    if (!hasFingerHemoglobinSignature(snap)) return 0;
+    return clamp(cv * 0.016, 0.00012, 0.01);
   }
 
   private resetBaselines(): void {

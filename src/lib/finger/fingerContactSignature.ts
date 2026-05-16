@@ -31,8 +31,9 @@ export function hasFingerHemoglobinSignature(s: FingerRgbSnapshot): boolean {
   if (redDominance < F.MIN_RED_DOMINANCE) return false;
 
   // Flash al aire: canal verde/azul aún altos frente a rojo
-  if (rg < 1.12 && rb < 1.25) return false;
-  if (g > 100 && b > 85 && redDominance < 28) return false;
+  if (rg < 1.14 && rb < 1.28) return false;
+  if (g > 95 && b > 80 && redDominance < 30) return false;
+  if (total > 200 && rb < 1.38) return false;
 
   const hasSpatial =
     s.coverage >= F.MIN_COVERAGE || s.fingerScore >= F.ACQUIRE_SOFT_FINGER_SCORE_ROI;

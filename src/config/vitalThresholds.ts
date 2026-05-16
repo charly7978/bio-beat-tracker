@@ -71,9 +71,9 @@ export const VITAL_THRESHOLDS = {
     MIN_RED_INTENSITY: 36,
     MIN_RED_DOMINANCE: 7,
     MIN_RG_RATIO: 1.04,
-    MIN_COVERAGE: 0.10,
+    MIN_COVERAGE: 0.12,
     /** R/B mínimo — dedo absorbe azul; flash sin dedo suele fallar esto */
-    HEMOGLOBIN_MIN_RB: 1.18,
+    HEMOGLOBIN_MIN_RB: 1.22,
     SOFT_COVERAGE_MULT: 0.85,
     /** Adquisición estricta */
     ACQUIRE_RB_STRICT: 1.2,
@@ -84,12 +84,12 @@ export const VITAL_THRESHOLDS = {
     /** Adquisición suave (parcial / flash desigual) */
     ACQUIRE_SOFT_MIN_RED: 28,
     ACQUIRE_SOFT_RG: 1.025,
-    ACQUIRE_SOFT_RB: 1.10,
-    ACQUIRE_SOFT_DOMINANCE: 4.6,
+    ACQUIRE_SOFT_RB: 1.16,
+    ACQUIRE_SOFT_DOMINANCE: 8,
     ACQUIRE_SOFT_INTENSITY_MIN: 52,
     ACQUIRE_SOFT_INTENSITY_MAX: 850,
-    ACQUIRE_SOFT_FINGER_SCORE_ROI: 0.14,
-    ACQUIRE_SOFT_SMOOTHED_FINGER: 0.11,
+    ACQUIRE_SOFT_FINGER_SCORE_ROI: 0.18,
+    ACQUIRE_SOFT_SMOOTHED_FINGER: 0.15,
     ACQUIRE_MAX_MOTION_SOFT: 1.9,
     /** Mantener contacto */
     MAINTAIN_MIN_RED: 34,
@@ -107,7 +107,8 @@ export const VITAL_THRESHOLDS = {
     /** Pulsación ROI (CV de rawRed) — tercera vía de adquisición */
     ROI_PULSE_BUFFER: 24,
     ROI_PULSE_MIN_SAMPLES: 12,
-    ROI_RED_CV_MIN: 0.032,
+    /** Solo para mantener contacto ya adquirido (no adquisición inicial) */
+    ROI_RED_CV_MIN: 0.036,
     PULSATILE_ACQUIRE_MIN_RED: 26,
     PULSATILE_ACQUIRE_RG: 1.02,
     PULSATILE_ACQUIRE_RB: 1.05,
@@ -119,16 +120,16 @@ export const VITAL_THRESHOLDS = {
     TILE_MIN_RED: 28,
     TILE_MIN_TOTAL: 52,
     TILE_MIN_DOMINANCE: 4,
-    TILE_MIN_RG: 1.02,
-    TILE_MIN_COMBINED_SCORE: 0.21,
+    TILE_MIN_RG: 1.06,
+    TILE_MIN_COMBINED_SCORE: 0.26,
     TILE_DOMINANCE_SCORE_OFFSET: 5,
     MIN_FINGER_TILES_FOR_WEIGHTING: 3,
-    FINGER_CONFIRM_FRAMES: 5,
+    FINGER_CONFIRM_FRAMES: 6,
     /** Tras perder firma instantánea: frames hasta degradar (≈0,5 s @ 30 fps) */
     INSTANT_LOST_TO_UNSTABLE: 4,
     INSTANT_LOST_TO_NO_CONTACT: 12,
     FINGER_LOST_FRAMES_UI: 18,
-    UNSTABLE_GRACE_FRAMES: 45,
+    UNSTABLE_GRACE_FRAMES: 28,
     /** softHold al perder instantáneo — solo si la firma RGB aún es válida */
     SOFT_HOLD_COVERAGE: 0.11,
     SOFT_HOLD_DOMINANCE_DELTA: 6,

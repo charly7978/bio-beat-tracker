@@ -5,9 +5,9 @@ describe('hasFingerHemoglobinSignature', () => {
   it('rechaza flash sin dedo (RGB altos equilibrados)', () => {
     expect(
       hasFingerHemoglobinSignature({
-        red: 180,
-        green: 165,
-        blue: 150,
+        red: 200,
+        green: 170,
+        blue: 155,
         coverage: 0.2,
         fingerScore: 0.3,
       }),
