@@ -18,6 +18,7 @@ import {
   updateMeasurementSessionLatch,
 } from "@/lib/measurement/measurementSessionLatch";
 import { evaluateMeasurementReadiness } from "@/lib/measurement/measurementReadiness";
+import { bpmFromEmittedRr } from "@/lib/measurement/peakEmitPolicy";
 import {
   smoothDisplayPair,
   smoothDisplayValue,
@@ -630,7 +631,6 @@ const Index = () => {
   const prevHasUsableContactRef = useRef(false);
   const noContactSessionFramesRef = useRef(0);
   const lastHbInputRef = useRef(0);
-  const BPM_DISPLAY_HOLD_MS = 2800;
   const displaySpo2Ref = useRef(0);
   const displayBpRef = useRef({ systolic: 0, diastolic: 0 });
 
@@ -838,11 +838,19 @@ const Index = () => {
       latchPeakMs > 0 &&
       nowT - latchPeakMs < SESSION_LATCH.MAX_PEAK_GAP_MS;
 
-    const bpmLive =
-      fingerConfirmed &&
+    const rrForBpm = heartBeatResult.rrData?.intervals ?? [];
+    const bpmFromRr =
+      rrForBpm.length >= 1 ? Math.round(bpmFromEmittedRr(rrForBpm)) : 0;
+    const bpmProcessor =
       heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
       heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX
         ? heartBeatResult.bpm
+        : 0;
+    const bpmLive =
+      fingerConfirmed && (bpmProcessor > 0 || bpmFromRr > 0)
+        ? bpmProcessor > 0
+          ? bpmProcessor
+          : bpmFromRr
         : 0;
 
     if (bpmLive > 0) {
@@ -850,15 +858,8 @@ const Index = () => {
       lastBpmSeenAtRef.current = nowT;
     }
 
-    const bpmOut = !hasUsableContact
-      ? 0
-      : bpmLive > 0
-        ? bpmLive
-        : peakRecent &&
-            lastGoodBpmRef.current > 0 &&
-            nowT - lastBpmSeenAtRef.current < BPM_DISPLAY_HOLD_MS
-          ? lastGoodBpmRef.current
-          : 0;
+    const bpmOut =
+      hasUsableContact && fingerConfirmed && bpmLive > 0 ? bpmLive : 0;
 
     const piMin = Q.MIN_PI * Math.max(0.04, hints.minPiScale * 0.18);
     const readiness = evaluateMeasurementReadiness({
@@ -903,7 +904,7 @@ const Index = () => {
           signalQuality: sqRounded,
         };
         vitalSignsRef.current = next;
-        return bpmOut > 0 ? applyLiveDisplaySmooth(next) : next;
+        return applyLiveDisplaySmooth(next);
       });
     }
 

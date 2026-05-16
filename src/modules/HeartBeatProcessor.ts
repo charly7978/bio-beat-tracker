@@ -329,13 +329,15 @@ export class HeartBeatProcessor {
       }
     }
 
-    const publishBpm =
-      this.smoothBPM > 0 &&
-      peakAgeMs < this.BPM_PUBLISH_HOLD_MS &&
-      this.consecutivePeaks >= 1 &&
-      this.fingerContactConfirmed
-        ? Math.round(this.smoothBPM)
-        : 0;
+    const rrBpm = bpmFromEmittedRr(this.rrIntervals);
+    let publishBpm = 0;
+    if (
+      this.fingerContactConfirmed &&
+      peakAgeMs < this.BPM_PUBLISH_HOLD_MS
+    ) {
+      if (rrBpm > 0) publishBpm = Math.round(rrBpm);
+      else if (this.smoothBPM > 0) publishBpm = Math.round(this.smoothBPM);
+    }
 
     const confidence = this.calculateConfidence(ensembleConf, isPeak);
 

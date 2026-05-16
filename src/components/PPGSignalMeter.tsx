@@ -226,8 +226,6 @@ const PPGSignalMeter = ({
       bpmTrendRef.current = [];
       pendingTrendArrRef.current = false;
       smoothedBpmRef.current = 0;
-    } else if (!bpm || bpm <= 0) {
-      smoothedBpmRef.current = 0;
     }
 
     if (!isFingerDetected && !preserveResults) {
