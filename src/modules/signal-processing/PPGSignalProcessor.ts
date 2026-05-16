@@ -16,6 +16,7 @@ import {
 } from '../signal-quality/SignalQualityIndex';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
+import { getFingerPlacementHint } from '../../lib/finger/fingerPlacementHint';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -26,6 +27,10 @@ interface ROIMetrics {
   rawBlue: number;
   coverageRatio: number;
   fingerScore: number;
+  roiX: number;
+  roiY: number;
+  roiW: number;
+  roiH: number;
 }
 
 /**
@@ -122,7 +127,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private fingerConfidenceCount = 0;
   private fingerLostCount = 0;
   private stableContactCount = 0;
-  private readonly FINGER_CONFIRM_FRAMES = 4;
+  private readonly FINGER_CONFIRM_FRAMES = VITAL_THRESHOLDS.FINGER.FINGER_CONFIRM_FRAMES;
   private readonly FINGER_LOST_FRAMES = 90;     // ~3s tolerancia antes de degradar
   private readonly UNSTABLE_GRACE = 120;        // ~4s antes de NO_CONTACT total
 
@@ -229,16 +234,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         fingerDetected: false,
         contactState: 'NO_CONTACT',
         motionArtifact,
-        roi: { x: 0, y: 0, width: imageData.width, height: imageData.height },
+        roi: this.signalRoiFromMetrics(roi),
         perfusionIndex: 0,
         rawRed: roi.rawRed,
         rawGreen: roi.rawGreen,
-        diagnostics: {
-          message: `BUSCANDO DEDO C:${(roi.coverageRatio * 100).toFixed(0)}%`,
-          hasPulsatility: false,
-          pulsatilityValue: 0,
-          status: "NO_FINGER" as MeasurementStatus,
-        },
+        diagnostics: this.buildFingerDiagnostics(roi, motionArtifact, "NO_FINGER"),
       });
       return;
     }
@@ -263,13 +263,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         timestamp,
         rawValue: 0, filteredValue: 0, quality: 0,
         fingerDetected: true, contactState: this.contactState,
-        motionArtifact, roi: { x: 0, y: 0, width: imageData.width, height: imageData.height },
-        perfusionIndex: this.cachedPI, rawRed: roi.rawRed, rawGreen: roi.rawGreen,
-        diagnostics: {
+        motionArtifact,
+        roi: this.signalRoiFromMetrics(roi),
+        perfusionIndex: this.cachedPI,
+        rawRed: roi.rawRed,
+        rawGreen: roi.rawGreen,
+        diagnostics: this.buildFingerDiagnostics(roi, motionArtifact, rejectionStatus, {
           message: `RECHAZADO: ${rejectionStatus}`,
-          hasPulsatility: false, pulsatilityValue: 0,
-          status: rejectionStatus,
-        },
+        }),
       });
       // No retornamos aquí para permitir que los buffers sigan llenándose, pero la UI sabrá que no es válido
     }
@@ -369,20 +370,24 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       fingerDetected: this.fingerDetected,
       contactState: this.contactState,
       motionArtifact,
-      roi: { x: 0, y: 0, width: imageData.width, height: imageData.height },
+      roi: this.signalRoiFromMetrics(roi),
       perfusionIndex,
       rawRed: roi.rawRed,
       rawGreen: roi.rawGreen,
       diagnostics: {
-        message:
-          `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
-          `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
-          `C:${(this.smoothedCoverage * 100).toFixed(0)} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
-        hasPulsatility:
-          SignalQualityIndex.isClinicallyValid(this.signalQuality, perfusionIndex) ||
-          SignalQualityIndex.isAdequateForLiveVitals(this.signalQuality, perfusionIndex),
-        pulsatilityValue: this.contactState === 'STABLE_CONTACT' ? Math.max(perfusionIndex, pulseSource.strength * 0.02) : 0,
-        status: displayStatus,
+        ...this.buildFingerDiagnostics(roi, motionArtifact, displayStatus, {
+          message:
+            `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
+            `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
+            `C:${(roi.coverageRatio * 100).toFixed(0)}% ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
+          hasPulsatility:
+            SignalQualityIndex.isClinicallyValid(this.signalQuality, perfusionIndex) ||
+            SignalQualityIndex.isAdequateForLiveVitals(this.signalQuality, perfusionIndex),
+          pulsatilityValue:
+            this.contactState === 'STABLE_CONTACT'
+              ? Math.max(perfusionIndex, pulseSource.strength * 0.02)
+              : 0,
+        }),
         sqm: {
           sqi: this.signalQuality,
           perfusionIndex: perfusionIndex,
@@ -541,13 +546,61 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.motionScore < F.PULSATILE_ACQUIRE_MAX_MOTION &&
       notBlownOut;
 
+    const acquireByCoverage =
+      this.smoothedCoverage >= F.ACQUIRE_COVERAGE_MIN &&
+      r >= F.ACQUIRE_COVERAGE_MIN_RED &&
+      rgRatio > F.ACQUIRE_COVERAGE_RG &&
+      redDominance > F.MIN_RED_DOMINANCE * 0.55 &&
+      this.motionScore < F.ACQUIRE_MAX_MOTION_SOFT &&
+      notBlownOut;
+
     if (acquireContact && this.frameCount % 30 === 0) {
       log.info(
         `[Finger Acquisition] R:${r.toFixed(1)} G:${g.toFixed(1)} B:${b.toFixed(1)} R/G:${rgRatio.toFixed(2)} R/B:${rbRatio.toFixed(2)} CV:${this.lastRoiRedCv.toFixed(4)}`,
       );
     }
 
-    return acquireContact || acquireSoft || acquirePulsatile;
+    return acquireContact || acquireSoft || acquirePulsatile || acquireByCoverage;
+  }
+
+  private computeRoiRect(width: number, height: number) {
+    const roiSize = Math.min(width, height) * VITAL_THRESHOLDS.FINGER.ROI_SIZE_FRACTION;
+    const startX = Math.floor((width - roiSize) / 2);
+    const startY = Math.floor((height - roiSize) / 2);
+    const side = Math.floor(roiSize);
+    return { startX, startY, endX: startX + side, endY: startY + side, roiW: side, roiH: side };
+  }
+
+  private signalRoiFromMetrics(roi: ROIMetrics) {
+    return { x: roi.roiX, y: roi.roiY, width: roi.roiW, height: roi.roiH };
+  }
+
+  private buildFingerDiagnostics(
+    roi: ROIMetrics,
+    motionArtifact: boolean,
+    status: MeasurementStatus,
+    extras?: {
+      message?: string;
+      hasPulsatility?: boolean;
+      pulsatilityValue?: number;
+    },
+  ) {
+    const coverageRatio = roi.coverageRatio;
+    return {
+      message:
+        extras?.message ??
+        `BUSCANDO DEDO · cobertura ${(coverageRatio * 100).toFixed(0)}%`,
+      hasPulsatility: extras?.hasPulsatility ?? false,
+      pulsatilityValue: extras?.pulsatilityValue ?? 0,
+      coverageRatio,
+      placementHint: getFingerPlacementHint({
+        fingerDetected: this.fingerDetected,
+        contactState: this.contactState,
+        coverageRatio,
+        motionArtifact,
+      }),
+      status,
+    };
   }
 
   private updateSampleRate(timestamp: number): void {
@@ -584,11 +637,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const width = imageData.width;
     const height = imageData.height;
 
-    const roiSize = Math.min(width, height) * VITAL_THRESHOLDS.FINGER.ROI_SIZE_FRACTION;
-    const startX = Math.floor((width - roiSize) / 2);
-    const startY = Math.floor((height - roiSize) / 2);
-    const endX = startX + Math.floor(roiSize);
-    const endY = startY + Math.floor(roiSize);
+    const { startX, startY, endX, endY, roiW, roiH } = this.computeRoiRect(width, height);
 
     // Reset reusable tile buffer (no GC churn por frame)
     const tiles = this.tileBuffer;
@@ -678,7 +727,17 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     if (validCount === 0) {
-      return { rawRed: 0, rawGreen: 0, rawBlue: 0, coverageRatio: 0, fingerScore: 0 };
+      return {
+        rawRed: 0,
+        rawGreen: 0,
+        rawBlue: 0,
+        coverageRatio: 0,
+        fingerScore: 0,
+        roiX: startX,
+        roiY: startY,
+        roiW,
+        roiH,
+      };
     }
 
     const useFingerOnly = fingerCount >= F.MIN_FINGER_TILES_FOR_WEIGHTING;
@@ -709,6 +768,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       rawBlue,
       coverageRatio: fingerCount / validCount,
       fingerScore: fingerCount > 0 ? fingerScoreSum / fingerCount : 0,
+      roiX: startX,
+      roiY: startY,
+      roiW,
+      roiH,
     };
   }
 

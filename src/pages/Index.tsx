@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, Brain, Loader2, Settings as SettingsIcon } from "lucide-react";
 import { playCompletionSound } from "@/utils/soundUtils";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
+import FingerPlacementOverlay from "@/components/FingerPlacementOverlay";
 import { useSignalProcessor } from "@/hooks/useSignalProcessor";
 import { useHeartBeatProcessor } from "@/hooks/useHeartBeatProcessor";
 import { useVitalSignsProcessor } from "@/hooks/useVitalSignsProcessor";
@@ -915,23 +916,36 @@ const Index = () => {
             onStreamReady={handleStreamReady}
             isMonitoring={isCameraOn}
           />
+          <FingerPlacementOverlay
+            visible={isMonitoring && !showResults}
+            fingerDetected={!!lastSignal?.fingerDetected}
+            contactState={
+              lastSignal?.contactState ??
+              (lastSignal?.fingerDetected ? "UNSTABLE_CONTACT" : "NO_CONTACT")
+            }
+            coverageRatio={lastSignal?.diagnostics?.coverageRatio ?? 0}
+            hint={
+              lastSignal?.diagnostics?.placementHint ??
+              "Cubre el recuadro con la yema del índice sobre flash y lente"
+            }
+          />
         </div>
 
         {isMonitoring && !showResults && !fingerGuideDismissed && (
           <div className="pointer-events-none absolute inset-x-0 bottom-28 z-20 flex justify-center px-3 sm:px-4">
             <div className="pointer-events-auto max-w-md w-full rounded-xl border border-emerald-500/35 bg-slate-950/90 px-3 py-2.5 shadow-2xl backdrop-blur-md sm:px-4 sm:py-3">
               <p className="text-emerald-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">
-                Cómo colocar el dedo en la cámara
+                Alinea el dedo con el recuadro del visor
               </p>
               <ul className="text-white/90 text-[11px] sm:text-xs leading-snug space-y-1 list-disc pl-3.5 marker:text-emerald-500">
                 <li>
-                  Usa la <span className="font-semibold text-white">yema del índice</span> (no la uña): debe cubrir a la vez el <span className="font-semibold text-white">flash LED y la lente</span> de la cámara trasera.
+                  <span className="font-semibold text-white">Yema del índice</span> dentro del cuadrado: el punto “flash + lente” debe quedar bajo el centro del dedo.
                 </li>
                 <li>
-                  Presión <span className="font-semibold text-white">suave y constante</span>, sin mover el dedo; espera <span className="font-semibold text-white">5–15 s</span> a que suba la calidad y aparezcan latidos.
+                  Cuando el recuadro pase a <span className="font-semibold text-amber-300">amarillo</span> o <span className="font-semibold text-emerald-300">verde</span>, no muevas el dedo 5–15 s.
                 </li>
                 <li>
-                  Ambiente oscuro y pantalla al máximo ayudan; evita luz solar directa sobre el dedo.
+                  Sigue el texto bajo el recuadro (cobertura %): si dice “centra más”, desplaza el dedo sin apretar fuerte.
                 </li>
               </ul>
               <button

@@ -21,6 +21,10 @@ export interface ProcessedSignal {
     message: string;
     hasPulsatility: boolean;
     pulsatilityValue: number;
+    /** Cobertura del ROI por tiles “dedo” (0–1) */
+    coverageRatio?: number;
+    /** Texto corto para colocación del dedo */
+    placementHint?: string;
     status?: import('./measurements').MeasurementStatus;
     sqm?: Partial<import('./measurements').SignalQualityMetrics>;
   };

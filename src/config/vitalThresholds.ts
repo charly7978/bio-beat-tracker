@@ -54,7 +54,7 @@ export const VITAL_THRESHOLDS = {
   // FINGER + ROI (cámara trasera + dedo; hemoglobina + pulsación temporal)
   FINGER: {
     /** Fracción del lado corto del frame usada como ROI cuadrado central (más = más dedo visible) */
-    ROI_SIZE_FRACTION: 0.92,
+    ROI_SIZE_FRACTION: 0.96,
     /** Penalización radial en tiles: menor = más tolerante si el dedo no está perfectamente centrado */
     ROI_CENTER_BIAS_MULT: 0.95,
     ROI_CENTER_BIAS_MIN: 0.35,
@@ -63,7 +63,11 @@ export const VITAL_THRESHOLDS = {
     MIN_RED_INTENSITY: 36,
     MIN_RED_DOMINANCE: 7,
     MIN_RG_RATIO: 1.04,
-    MIN_COVERAGE: 0.10,
+    MIN_COVERAGE: 0.07,
+    /** Adquisición por cobertura alta en el recuadro (dedo grande / flash encendido) */
+    ACQUIRE_COVERAGE_MIN: 0.14,
+    ACQUIRE_COVERAGE_MIN_RED: 24,
+    ACQUIRE_COVERAGE_RG: 1.02,
     SOFT_COVERAGE_MULT: 0.85,
     /** Adquisición estricta */
     ACQUIRE_RB_STRICT: 1.2,
@@ -112,7 +116,9 @@ export const VITAL_THRESHOLDS = {
     TILE_MIN_RG: 1.02,
     TILE_MIN_COMBINED_SCORE: 0.21,
     TILE_DOMINANCE_SCORE_OFFSET: 5,
-    MIN_FINGER_TILES_FOR_WEIGHTING: 3,
+    MIN_FINGER_TILES_FOR_WEIGHTING: 2,
+    /** Frames consecutivos para confirmar dedo (menor = captación más rápida) */
+    FINGER_CONFIRM_FRAMES: 2,
     /** softHold al perder instantáneo */
     SOFT_HOLD_COVERAGE: 0.09,
     SOFT_HOLD_DOMINANCE_DELTA: 6,
