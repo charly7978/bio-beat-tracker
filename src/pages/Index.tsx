@@ -9,7 +9,7 @@ import { useSaveMeasurement } from "@/hooks/useSaveMeasurement";
 import { useHealthAnalysis } from "@/hooks/useHealthAnalysis";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
 import { VitalSignsResult } from "@/modules/vital-signs/VitalSignsProcessor";
-import type { ProcessedSignal } from "@/types/signal";
+import type { ProcessedSignal, ContactState } from "@/types/signal";
 import { toast } from "@/components/ui/use-toast";
 import { ppgPerf } from "@/utils/logger";
 import { usePerfTelemetry, getPerfConsent, setPerfConsent } from "@/hooks/usePerfTelemetry";
@@ -618,7 +618,9 @@ const Index = () => {
   const handleSignalRealtime = useCallback((lastSignal: ProcessedSignal) => {
     if (!isMonitoringRef.current) return;
     const signalValue = lastSignal.filteredValue;
-    const contactState = (lastSignal as any).contactState || (lastSignal.fingerDetected ? 'STABLE_CONTACT' : 'NO_CONTACT');
+    const contactState: ContactState =
+      lastSignal.contactState ??
+      (lastSignal.fingerDetected ? "UNSTABLE_CONTACT" : "NO_CONTACT");
     const diag = lastSignal.diagnostics;
 
     const heartBeatResult = processHeartBeat(

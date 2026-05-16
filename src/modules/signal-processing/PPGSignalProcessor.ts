@@ -11,6 +11,7 @@ import {
 import type { MeasurementStatus, SignalQualityMetrics } from '../../types/measurements';
 import { SignalQualityIndex } from '../signal-quality/SignalQualityIndex';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -28,7 +29,7 @@ interface ROIMetrics {
  * 
  * Mejoras clave:
  * 1. Estado de contacto 3-niveles (NO_CONTACT / UNSTABLE / STABLE)
- * 2. Selección competitiva de canal (R, G, R-G, CHROM 3R-2G)
+ * 2. Selección competitiva de canal (R, G, R-G; sin CHROM — ruido con dedo+flash)
  * 3. SQI unificado — única fuente de verdad
  * 4. Histéresis fuerte para tolerancia a temblores
  */
@@ -130,6 +131,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private readonly RGB_SMOOTH_ALPHA = 0.07;
   private readonly COVERAGE_SMOOTH_ALPHA = 0.09;
 
+  /** Ventana corta de R medio en ROI — CV temporal para distinguir tejido pulsátil vs. rojo estático */
+  private readonly roiRedPulseRing = new RingF32(VITAL_THRESHOLDS.FINGER.ROI_PULSE_BUFFER);
+  private lastRoiRedCv = 0;
+
   // IMU / Motion
   private motionScore = 0;
   private motionListenerActive = false;
@@ -195,6 +200,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const endRoi = ppgPerf.start('roi');
     const roi = this.extractROI(imageData);
     endRoi();
+
+    this.roiRedPulseRing.push(roi.rawRed);
+    const Fpulse = VITAL_THRESHOLDS.FINGER;
+    const nPulse = this.roiRedPulseRing.copyTailInto(this.statScratch, Fpulse.ROI_PULSE_BUFFER);
+    this.lastRoiRedCv =
+      nPulse >= Fpulse.ROI_PULSE_MIN_SAMPLES
+        ? redSeriesCoefficientOfVariation(this.statScratch, nPulse)
+        : 0;
+
     this.updateContactState(roi);
 
     const motionArtifact = this.motionScore > this.MOTION_THRESHOLD;
@@ -282,7 +296,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const endSqi = ppgPerf.start('sqi');
     // SQI unificado basado en múltiples dimensiones técnicas
     const metrics: SignalQualityMetrics = {
-      sqi: 0, // Placeholder
+      sqi: 0, // `calculate` no usa este campo; el SQI efectivo es `this.cachedSqi` / `sqm.sqi` emitido
       perfusionIndex: this.cachedPI,
       snr: pulseSource.strength,
       periodicity: this.calculatePeriodicity(), // Nuevo método centralizado
@@ -394,12 +408,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.stableContactCount = Math.max(0, this.stableContactCount - 0.3);
 
       if (this.fingerDetected) {
-        // Soft hold: mantener contacto con gracia — stricter thresholds
+        const F = VITAL_THRESHOLDS.FINGER;
         const softHold =
-          this.smoothedCoverage > 0.12 &&
-          (this.smoothedRed - (this.smoothedGreen + this.smoothedBlue) / 2) > 6 &&
-          this.smoothedFingerScore > 0.14 &&
-          (this.smoothedRed / Math.max(1, this.smoothedGreen)) > 1.04;
+          this.smoothedCoverage > F.SOFT_HOLD_COVERAGE &&
+          (this.smoothedRed - (this.smoothedGreen + this.smoothedBlue) / 2) > F.SOFT_HOLD_DOMINANCE_DELTA &&
+          this.smoothedFingerScore > F.SOFT_HOLD_FINGER_SCORE &&
+          (this.smoothedRed / Math.max(1, this.smoothedGreen)) > F.SOFT_HOLD_RG;
 
         if (softHold || this.fingerLostCount < this.FINGER_LOST_FRAMES) {
           this.contactState = 'UNSTABLE_CONTACT';
@@ -425,6 +439,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private detectFingerInstant(roi: ROIMetrics): boolean {
+    const F = VITAL_THRESHOLDS.FINGER;
     const { rawRed, rawGreen, rawBlue, coverageRatio, fingerScore } = roi;
 
     // Smooth inputs
@@ -450,58 +465,71 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const totalIntensity = r + g + b;
     const redDominance = r - (g + b) / 2;
     const rgRatio = r / Math.max(1, g);
-    const rbRatio = r / Math.max(1, b); // Hemoglobin absorption is highest in Blue
+    const rbRatio = r / Math.max(1, b);
     const notBlownOut = !(r > 254 && g > 254 && b > 254);
 
-    // === HEMOGLOBIN SIGNATURE: red MUST dominate and blue MUST be very low ===
     if (this.fingerDetected) {
       const maintainContact =
-        r > 38 &&
-        rgRatio > 1.04 &&
-        rbRatio > 1.16 &&
-        redDominance > 7.5 &&
-        this.smoothedCoverage > 0.11 &&
+        r > F.MAINTAIN_MIN_RED &&
+        rgRatio > F.MAINTAIN_RG &&
+        rbRatio > F.MAINTAIN_RB &&
+        redDominance > F.MAINTAIN_DOMINANCE &&
+        this.smoothedCoverage > F.MAINTAIN_COVERAGE &&
         notBlownOut;
       const pulsatilityHold =
-        this.cachedPI > 0.00038 &&
-        r > 34 &&
-        rgRatio > 1.03 &&
-        rbRatio > 1.1 &&
-        this.smoothedCoverage > 0.095 &&
+        this.cachedPI > F.PULSE_HOLD_MIN_PI &&
+        r > F.PULSE_HOLD_MIN_RED &&
+        rgRatio > F.PULSE_HOLD_RG &&
+        rbRatio > F.PULSE_HOLD_RB &&
+        this.smoothedCoverage > F.PULSE_HOLD_COVERAGE &&
         notBlownOut &&
-        this.motionScore < 1.85;
+        this.motionScore < F.PULSE_HOLD_MAX_MOTION;
       return maintainContact || pulsatilityHold;
-    } else {
-      // ACQUIRE: vía estricta (hemoglobina) + vía suave (dedo parcial / flash desigual)
-      const acquireContact =
-        r > VITAL_THRESHOLDS.FINGER.MIN_RED_INTENSITY &&
-        rgRatio > VITAL_THRESHOLDS.FINGER.MIN_RG_RATIO &&
-        rbRatio > 1.2 &&
-        redDominance > VITAL_THRESHOLDS.FINGER.MIN_RED_DOMINANCE &&
-        totalIntensity > 68 && totalIntensity < 780 &&
-        this.smoothedCoverage > VITAL_THRESHOLDS.FINGER.MIN_COVERAGE &&
-        this.smoothedFingerScore > 0.17 &&
-        this.motionScore < 1.75 &&
-        notBlownOut;
-
-      const acquireSoft =
-        r > 31 &&
-        rgRatio > 1.03 &&
-        rbRatio > 1.12 &&
-        redDominance > 5.2 &&
-        totalIntensity > 58 &&
-        totalIntensity < 830 &&
-        this.smoothedCoverage > VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.88 &&
-        this.smoothedFingerScore > 0.125 &&
-        this.motionScore < 1.9 &&
-        notBlownOut &&
-        roi.fingerScore > 0.18;
-
-      if (acquireContact && this.frameCount % 30 === 0) {
-        log.info(`[Finger Acquisition] R:${r.toFixed(1)} G:${g.toFixed(1)} B:${b.toFixed(1)} R/G:${rgRatio.toFixed(2)} R/B:${rbRatio.toFixed(2)}`);
-      }
-      return acquireContact || acquireSoft;
     }
+
+    const acquireContact =
+      r > F.MIN_RED_INTENSITY &&
+      rgRatio > F.MIN_RG_RATIO &&
+      rbRatio > F.ACQUIRE_RB_STRICT &&
+      redDominance > F.MIN_RED_DOMINANCE &&
+      totalIntensity > F.ACQUIRE_INTENSITY_MIN &&
+      totalIntensity < F.ACQUIRE_INTENSITY_MAX &&
+      this.smoothedCoverage > F.MIN_COVERAGE &&
+      this.smoothedFingerScore > F.ACQUIRE_SMOOTHED_FINGER_MIN &&
+      this.motionScore < F.ACQUIRE_MAX_MOTION_STRICT &&
+      notBlownOut;
+
+    const acquireSoft =
+      r > F.ACQUIRE_SOFT_MIN_RED &&
+      rgRatio > F.ACQUIRE_SOFT_RG &&
+      rbRatio > F.ACQUIRE_SOFT_RB &&
+      redDominance > F.ACQUIRE_SOFT_DOMINANCE &&
+      totalIntensity > F.ACQUIRE_SOFT_INTENSITY_MIN &&
+      totalIntensity < F.ACQUIRE_SOFT_INTENSITY_MAX &&
+      this.smoothedCoverage > F.MIN_COVERAGE * F.SOFT_COVERAGE_MULT &&
+      this.smoothedFingerScore > F.ACQUIRE_SOFT_SMOOTHED_FINGER &&
+      this.motionScore < F.ACQUIRE_MAX_MOTION_SOFT &&
+      notBlownOut &&
+      roi.fingerScore > F.ACQUIRE_SOFT_FINGER_SCORE_ROI;
+
+    const acquirePulsatile =
+      this.lastRoiRedCv >= F.ROI_RED_CV_MIN &&
+      r >= F.PULSATILE_ACQUIRE_MIN_RED &&
+      rgRatio > F.PULSATILE_ACQUIRE_RG &&
+      rbRatio > F.PULSATILE_ACQUIRE_RB &&
+      redDominance > F.PULSATILE_ACQUIRE_MIN_DOMINANCE &&
+      this.smoothedCoverage > F.PULSATILE_ACQUIRE_COVERAGE &&
+      roi.fingerScore > F.PULSATILE_ACQUIRE_FINGER_ROI &&
+      this.motionScore < F.PULSATILE_ACQUIRE_MAX_MOTION &&
+      notBlownOut;
+
+    if (acquireContact && this.frameCount % 30 === 0) {
+      log.info(
+        `[Finger Acquisition] R:${r.toFixed(1)} G:${g.toFixed(1)} B:${b.toFixed(1)} R/G:${rgRatio.toFixed(2)} R/B:${rbRatio.toFixed(2)} CV:${this.lastRoiRedCv.toFixed(4)}`,
+      );
+    }
+
+    return acquireContact || acquireSoft || acquirePulsatile;
   }
 
   private updateSampleRate(timestamp: number): void {
@@ -571,6 +599,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     // Reducir tiles a métricas en buffer pre-asignado — sin allocs por frame.
+    const F = VITAL_THRESHOLDS.FINGER;
     const metrics = this.tileMetrics;
     const N = tiles.length;
     let validCount = 0;
@@ -613,11 +642,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       m.centerBias = centerBias; m.frameScore = frameScore; m.combinedScore = combinedScore;
       m.valid = true;
       m.isFinger =
-        red > 32 &&
-        total > 62 &&
-        redDominance > 5 &&
-        rednessRatio > 1.03 &&
-        combinedScore > 0.26;
+        red > F.TILE_MIN_RED &&
+        total > F.TILE_MIN_TOTAL &&
+        redDominance > F.TILE_MIN_DOMINANCE &&
+        rednessRatio > F.TILE_MIN_RG &&
+        combinedScore > F.TILE_MIN_COMBINED_SCORE;
       validCount++;
       if (m.isFinger) {
         fingerCount++;
@@ -629,7 +658,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       return { rawRed: 0, rawGreen: 0, rawBlue: 0, coverageRatio: 0, fingerScore: 0 };
     }
 
-    const useFingerOnly = fingerCount >= 4;
+    const useFingerOnly = fingerCount >= F.MIN_FINGER_TILES_FOR_WEIGHTING;
     let rWs = 0, gWs = 0, bWs = 0, tw = 0;
     
     // MEJORA: Ponderación adaptativa por SNR individual de celda
@@ -889,6 +918,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.sourceBuffers.G.reset();
     this.sourceBuffers.RG.reset();
     this.bandpassFilter.reset();
+    this.roiRedPulseRing.reset();
+    this.lastRoiRedCv = 0;
   }
 
   reset(): void {
@@ -929,6 +960,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.activeSource = 'RG';
     this.lastSourceSwitch = 0;
     this.resetBaselines();
+    this.roiRedPulseRing.reset();
+    this.lastRoiRedCv = 0;
     this.bandpassFilter.setSampleRate(this.estimatedSampleRate);
     this.bandpassFilter.reset();
   }
