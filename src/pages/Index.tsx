@@ -178,18 +178,20 @@ const Index = () => {
     setCameraRuntimeHints,
   } = useSignalProcessor();
 
+  const {
+    processSignal: processHeartBeat,
+    setRuntimeHints: setHeartBeatRuntimeHints,
+    reset: resetHeartBeat,
+  } = useHeartBeatProcessor();
+
   const cameraHintsRef = useRef(inferCameraRuntimeHints());
   const syncCameraHints = useCallback(() => {
     const d = cameraRef.current?.getDiagnostics?.() as Record<string, unknown> | undefined;
     if (!d?.active) return;
     cameraHintsRef.current = inferCameraRuntimeHints(d);
     setCameraRuntimeHints(d);
-  }, [setCameraRuntimeHints]);
-  
-  const { 
-    processSignal: processHeartBeat, 
-    reset: resetHeartBeat,
-  } = useHeartBeatProcessor();
+    setHeartBeatRuntimeHints(cameraHintsRef.current);
+  }, [setCameraRuntimeHints, setHeartBeatRuntimeHints]);
   
   const { 
     processSignal: processVitalSigns, 
@@ -453,7 +455,8 @@ const Index = () => {
     setAuditNegativeCount(0);
 
     startCalibration();
-  }, [isMonitoring, startProcessing, startCalibration, enterFullScreen, sanityProfileId, requestWakeLock]);
+    setHeartBeatRuntimeHints(inferCameraRuntimeHints());
+  }, [isMonitoring, startProcessing, startCalibration, enterFullScreen, sanityProfileId, requestWakeLock, setHeartBeatRuntimeHints]);
 
   // === CUANDO LA CÁMARA ESTÁ LISTA ===
   // CameraView ya esperó internamente a `loadedmetadata` antes de invocar onStreamReady,
@@ -683,18 +686,22 @@ const Index = () => {
       (contactState === 'STABLE_CONTACT'
         ? Q.MIN_ENSEMBLE_CONF_STABLE
         : Q.MIN_ENSEMBLE_CONF_UNSTABLE) * hints.ensembleConfScale;
-    const hrReady =
-      hasUsableContact &&
-      heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
-      heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX &&
-      heartBeatResult.confidence >= minConf;
-
     const rawSqi =
       (diag && typeof diag === 'object' && diag.sqm && typeof diag.sqm.sqi === 'number'
         ? diag.sqm.sqi
         : lastSignal.quality) || 0;
+
+    const hrReady =
+      hasUsableContact &&
+      heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
+      heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX &&
+      (heartBeatResult.confidence >= minConf ||
+        (hints.constrained && heartBeatResult.bpm >= 38 && rawSqi >= 5));
+
     const vitalsReady =
-      hrReady &&
+      hasUsableContact &&
+      (hrReady ||
+        (hints.constrained && heartBeatResult.bpm >= 35 && rawSqi >= 5)) &&
       (rawSqi >= Q.MIN_FOR_HR || (lastSignal.quality || 0) >= Q.MIN_FOR_HR) &&
       (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * hints.minPiScale;
 
@@ -1023,6 +1030,7 @@ const Index = () => {
               camera={{
                 ...(cameraRef.current?.getDiagnostics?.() as Record<string, unknown>),
                 constrained: cameraHintsRef.current.constrained,
+                tclLike: cameraHintsRef.current.tclLike,
                 motorolaLike: cameraHintsRef.current.motorolaLike,
                 torchReliable: cameraHintsRef.current.torchReliable,
               }}

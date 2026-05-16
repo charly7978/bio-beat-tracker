@@ -141,6 +141,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private stableContactCount = 0;
   private instantLostStreak = 0;
   private liveFingerMissStreak = 0;
+  private noContactHardStreak = 0;
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
   private lastInstantFinger = false;
   private readonly FINGER_CONFIRM_FRAMES = VITAL_THRESHOLDS.FINGER.FINGER_CONFIRM_FRAMES;
@@ -251,11 +252,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (this.contactState !== 'NO_CONTACT' && !liveFinger) {
       this.liveFingerMissStreak++;
       const grace = this.cameraHints.liveFingerMissGrace;
-      if (this.liveFingerMissStreak >= grace) {
-        this.forceNoContact();
+      if (this.liveFingerMissStreak >= grace && !this.cameraHints.constrained) {
+        this.setNoContact(/* hardReset */ true);
       } else {
         this.contactState = 'UNSTABLE_CONTACT';
-        this.fingerDetected = this.fingerConfidenceCount >= this.FINGER_CONFIRM_FRAMES;
+        this.fingerDetected =
+          this.fingerConfidenceCount >= this.getFingerConfirmFrames() || this.fingerDetected;
       }
     } else {
       this.liveFingerMissStreak = 0;
@@ -390,7 +392,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     endSqi();
 
     const perfusionIndex = this.cachedPI;
-    const fingerUi = liveFinger && this.fingerDetected && this.lastInstantFinger;
+    const fingerUi =
+      this.fingerDetected &&
+      (liveFinger ||
+        this.lastInstantFinger ||
+        (this.cameraHints.constrained &&
+          (this.cachedPI >= VITAL_THRESHOLDS.FINGER.PULSE_HOLD_MIN_PI * 0.85 ||
+            this.signalQuality >= 6)));
     const displayQuality = fingerUi ? this.displaySqiEma : 0;
     const rawSqiOut = fingerUi ? this.signalQuality : 0;
 
@@ -463,55 +471,75 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     });
   }
 
+  private getFingerConfirmFrames(): number {
+    return this.cameraHints.fingerConfirmFrames;
+  }
+
   // === ESTADO DE CONTACTO UNIFICADO ===
   private updateContactState(roi: ROIMetrics): void {
     const previousState = this.contactState;
-    const F = VITAL_THRESHOLDS.FINGER;
+    const hints = this.cameraHints;
+    const confirmFrames = this.getFingerConfirmFrames();
     const instantDetected = this.detectFingerInstant(roi);
     this.lastInstantFinger = instantDetected;
 
     if (instantDetected) {
       this.instantLostStreak = 0;
+      this.noContactHardStreak = 0;
       this.fingerLostCount = 0;
       this.fingerConfidenceCount = Math.min(this.fingerConfidenceCount + 1, 100);
       this.stableContactCount++;
 
-      if (this.fingerConfidenceCount >= this.FINGER_CONFIRM_FRAMES) {
+      if (this.fingerConfidenceCount >= confirmFrames) {
         this.fingerDetected = true;
         this.contactState = 'UNSTABLE_CONTACT';
       }
     } else {
       this.instantLostStreak++;
-      this.fingerConfidenceCount = Math.max(0, this.fingerConfidenceCount - 3);
+      const decay = hints.constrained ? 1 : 3;
+      this.fingerConfidenceCount = Math.max(0, this.fingerConfidenceCount - decay);
       this.fingerLostCount++;
-      this.stableContactCount = Math.max(0, this.stableContactCount - 2);
+      this.stableContactCount = Math.max(0, this.stableContactCount - (hints.constrained ? 1 : 2));
 
       const rawSnap = this.rawRgbSnapshotFromRoi(roi);
       const smoothSnap = this.rgbSnapshotFromSmoothed();
-      if (
-        isOpenFlashWithoutContact(rawSnap) ||
-        isOpenFlashWithoutContact(smoothSnap) ||
-        this.fingerConfidenceCount < this.FINGER_CONFIRM_FRAMES
-      ) {
-        this.forceNoContact();
-      } else if (
-        this.instantLostStreak <= F.INSTANT_LOST_TO_UNSTABLE &&
-        this.isLiveFingerFrame(roi)
-      ) {
+      const flashOpen =
+        !this.fingerDetected &&
+        (isOpenFlashWithoutContact(rawSnap) || isOpenFlashWithoutContact(smoothSnap));
+
+      if (flashOpen) {
+        this.setNoContact(true);
+      } else if (this.fingerDetected) {
+        if (this.instantLostStreak <= hints.instantLostToUnstable) {
+          this.contactState = 'UNSTABLE_CONTACT';
+        } else if (this.instantLostStreak <= hints.instantLostToNoContact) {
+          this.contactState = 'NO_CONTACT';
+          this.noContactHardStreak++;
+          if (this.noContactHardStreak >= hints.bufferResetAfterNoContact) {
+            this.setNoContact(true);
+          }
+        } else {
+          this.setNoContact(true);
+        }
+      } else if (this.instantLostStreak <= hints.instantLostToUnstable && this.isLiveFingerFrame(roi)) {
         this.contactState = 'UNSTABLE_CONTACT';
+      } else if (this.instantLostStreak <= hints.instantLostToNoContact) {
+        this.contactState = 'NO_CONTACT';
       } else {
-        this.forceNoContact();
+        this.setNoContact(true);
       }
     }
 
     if (previousState === 'NO_CONTACT' && this.contactState !== 'NO_CONTACT') {
-      const minGap = VITAL_THRESHOLDS.QUALITY.BUFFER_RESET_AFTER_NO_CONTACT_FRAMES;
+      const minGap = hints.bufferResetAfterNoContact;
       if (this.consecutiveNoContactFrames >= minGap) {
         this.resetSignalTrackingBuffers();
       }
       this.consecutiveNoContactFrames = 0;
+      this.noContactHardStreak = 0;
     } else if (this.contactState !== 'NO_CONTACT') {
       this.consecutiveNoContactFrames = 0;
+      this.noContactHardStreak = 0;
     }
   }
 
@@ -539,7 +567,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.contactState = stable ? 'STABLE_CONTACT' : 'UNSTABLE_CONTACT';
   }
 
-  private forceNoContact(): void {
+  /** Pérdida de contacto; en modo tolerante evita reset de buffers hasta racha larga. */
+  private setNoContact(hardReset: boolean): void {
     this.contactState = 'NO_CONTACT';
     this.fingerDetected = false;
     this.fingerConfidenceCount = 0;
@@ -547,11 +576,18 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.instantLostStreak = 0;
     this.lastInstantFinger = false;
     this.liveFingerMissStreak = 0;
-    this.decaySmoothedRgbFast();
-    this.resetSignalTrackingBuffers();
-    this.resetBaselines();
-    this.roiRedPulseRing.reset();
-    this.lastRoiRedCv = 0;
+
+    const shouldHard =
+      hardReset &&
+      (!this.cameraHints.constrained || this.noContactHardStreak >= this.cameraHints.bufferResetAfterNoContact);
+
+    if (shouldHard) {
+      this.decaySmoothedRgbFast();
+      this.resetSignalTrackingBuffers();
+      this.resetBaselines();
+      this.roiRedPulseRing.reset();
+      this.lastRoiRedCv = 0;
+    }
   }
 
   private decaySmoothedRgbFast(): void {

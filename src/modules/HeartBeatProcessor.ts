@@ -6,6 +6,10 @@ import { clamp } from '../utils/math';
 import { PEAK_DETECTION_DEFAULTS } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
+import {
+  inferCameraRuntimeHints,
+  type CameraRuntimeHints,
+} from '../lib/device/cameraDeviceProfile';
 
 export interface HeartBeatProcessDiagnostics {
   ensemble?: Record<string, unknown>;
@@ -49,6 +53,7 @@ export class HeartBeatProcessor {
   private lastGoodBpmTime = 0;
   private readonly BPM_HOLD_MS = 2800;
   private readonly GATE_RANGE_MIN = 0.048;
+  private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
 
   constructor() {
     this.setupAudio();
@@ -72,6 +77,14 @@ export class HeartBeatProcessor {
 
   getDiagnostics(): HeartBeatProcessDiagnostics {
     return { ...this.lastDiagnostics };
+  }
+
+  setRuntimeHints(hints: CameraRuntimeHints): void {
+    this.cameraHints = hints;
+  }
+
+  private gateRangeMin(): number {
+    return this.GATE_RANGE_MIN * this.cameraHints.gateRangeScale;
   }
 
   processSignal(filteredValue: number, timestamp?: number): {
@@ -113,7 +126,7 @@ export class HeartBeatProcessor {
       const gSorted = [...recentForGate].sort((a, b) => a - b);
       this.cachedGateRange = (gSorted[Math.floor(gSorted.length * 0.9)] ?? 0) - (gSorted[Math.floor(gSorted.length * 0.1)] ?? 0);
     }
-    if (this.cachedGateRange < this.GATE_RANGE_MIN) {
+    if (this.cachedGateRange < this.gateRangeMin()) {
       if (this.heldBpm > 0 && now - this.lastGoodBpmTime < this.BPM_HOLD_MS) {
         return {
           bpm: Math.round(this.heldBpm),
@@ -164,6 +177,7 @@ export class HeartBeatProcessor {
         timestampsMs: ts,
         samplingRateHz: sampleRate,
         sqi: this.signalQualityIndex,
+        allowSoloElgendiFusion: this.cameraHints.allowSoloElgendiFusion,
       });
       ensembleBpm = ens.bpmInstant;
       ensembleConf = ens.confidence;
@@ -195,11 +209,15 @@ export class HeartBeatProcessor {
       const agreement = ens.agreement;
       const detectorConsensus =
         (agreement.elgendi + agreement.panTompkins) / 2;
+      const minPeakConf =
+        VITAL_THRESHOLDS.QUALITY.MIN_ENSEMBLE_CONF_FOR_PEAK *
+        (this.cameraHints.constrained ? 0.5 : 1);
+      const consensusMin = this.cameraHints.peakConsensusMin;
       if (
         lastT > 0 &&
         peakFresh &&
-        ensembleConf >= VITAL_THRESHOLDS.QUALITY.MIN_ENSEMBLE_CONF_FOR_PEAK &&
-        detectorConsensus >= 0.35 &&
+        ensembleConf >= minPeakConf &&
+        detectorConsensus >= consensusMin &&
         Math.abs(lastT - this.lastEmittedPeakTime) > minEmitGap
       ) {
         isPeak = true;
@@ -231,8 +249,8 @@ export class HeartBeatProcessor {
         ensembleBpm != null &&
         ensembleBpm >= PEAK_DETECTION_DEFAULTS.minBpm &&
         ensembleBpm <= PEAK_DETECTION_DEFAULTS.maxBpm &&
-        ensembleConf >= 0.24 &&
-        detectorConsensus >= 0.32 &&
+        ensembleConf >= (this.cameraHints.constrained ? 0.12 : 0.24) &&
+        detectorConsensus >= (this.cameraHints.constrained ? 0.18 : 0.32) &&
         ens.rrIntervalsMs.length >= 2
       ) {
         const tail = ens.rrIntervalsMs.slice(-4);

@@ -53,11 +53,13 @@ export const DebugTelemetryPanel: React.FC<DebugTelemetryPanelProps> = ({
         <Row
           k="perfil"
           v={
-            camera?.motorolaLike === true
-              ? 'Moto/tolerante'
-              : camera?.constrained === true
-                ? 'tolerante'
-                : 'normal'
+            camera?.tclLike === true
+              ? 'TCL/estricto'
+              : camera?.motorolaLike === true
+                ? 'Moto/tolerante'
+                : camera?.constrained === true
+                  ? 'tolerante'
+                  : 'normal'
           }
         />
         <Row k="acquire" v={acquisitionStatus ?? '—'} />

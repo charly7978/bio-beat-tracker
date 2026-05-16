@@ -1,23 +1,46 @@
 import { describe, it, expect } from 'vitest';
-import { inferCameraRuntimeHints, isMotorolaLikeUserAgent } from '../cameraDeviceProfile';
+import {
+  inferCameraRuntimeHints,
+  isMotorolaLikeUserAgent,
+  isTclLikeUserAgent,
+} from '../cameraDeviceProfile';
 import { passesFingerMaintain } from '@/lib/finger/fingerSceneClassifier';
 
 describe('cameraDeviceProfile', () => {
-  it('detecta Motorola en user agent', () => {
-    expect(isMotorolaLikeUserAgent('Mozilla/5.0 Motorola moto g84')).toBe(true);
-    expect(isMotorolaLikeUserAgent('Mozilla/5.0 TCL')).toBe(false);
+  it('TCL usa perfil estricto', () => {
+    const h = inferCameraRuntimeHints({ userAgent: 'Mozilla TCL 6156' });
+    expect(h.tclLike).toBe(true);
+    expect(h.constrained).toBe(false);
+    expect(h.fingerConfirmFrames).toBe(5);
+    expect(h.allowSoloElgendiFusion).toBe(false);
   });
 
-  it('marca perfil tolerante sin torch confirmado', () => {
+  it('Samsung/Motorola usan perfil tolerante por defecto', () => {
+    const moto = inferCameraRuntimeHints({ userAgent: 'Motorola moto g84' });
+    expect(moto.constrained).toBe(true);
+    expect(moto.allowSoloElgendiFusion).toBe(true);
+    expect(moto.instantLostToUnstable).toBeGreaterThan(10);
+
+    const sam = inferCameraRuntimeHints({ userAgent: 'Samsung SM-A546' });
+    expect(sam.constrained).toBe(true);
+    expect(sam.tclLike).toBe(false);
+  });
+
+  it('detecta Motorola en user agent', () => {
+    expect(isMotorolaLikeUserAgent('Mozilla/5.0 Motorola moto g84')).toBe(true);
+    expect(isTclLikeUserAgent('Mozilla/5.0 TCL')).toBe(true);
+    expect(isTclLikeUserAgent('Mozilla/5.0 Samsung')).toBe(false);
+  });
+
+  it('marca tolerante extra con torch apagado o FPS bajo', () => {
     const h = inferCameraRuntimeHints({
-      userAgent: 'Android',
+      userAgent: 'Android Chrome',
       torchSupported: true,
       torchActive: false,
-      fpsEffective: 28,
+      fpsEffective: 16,
     });
     expect(h.constrained).toBe(true);
-    expect(h.minPiScale).toBeLessThan(0.28);
-    expect(h.liveFingerMissGrace).toBeGreaterThan(6);
+    expect(h.liveFingerMissGrace).toBeGreaterThanOrEqual(40);
   });
 });
 

@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { HeartBeatProcessor } from '../modules/HeartBeatProcessor';
 import type { ContactState } from '../types/signal';
+import type { CameraRuntimeHints } from '../lib/device/cameraDeviceProfile';
 
 interface HeartBeatResult {
   bpm: number;
@@ -129,6 +130,10 @@ export const useHeartBeatProcessor = () => {
     };
   }, []);
 
+  const setRuntimeHints = useCallback((hints: CameraRuntimeHints) => {
+    processorRef.current?.setRuntimeHints(hints);
+  }, []);
+
   const reset = useCallback(() => {
     if (processingStateRef.current === 'RESETTING') return;
     processingStateRef.current = 'RESETTING';
@@ -147,6 +152,7 @@ export const useHeartBeatProcessor = () => {
 
   return {
     processSignal,
+    setRuntimeHints,
     reset,
     debugInfo: {
       sessionId: sessionIdRef.current,

@@ -16,6 +16,8 @@ export interface PeakDetectionEnsembleInput {
   sqi?: number;
   /** Picos índice heredados (p.ej. morfología local) — opcional */
   legacyPeakIndices?: number[];
+  /** Cámara no-TCL: aceptar picos Elgendi sin match Pan si no hay alternativa */
+  allowSoloElgendiFusion?: boolean;
 }
 
 function median(a: number[]): number {
@@ -27,7 +29,7 @@ function median(a: number[]): number {
 export class PeakDetectionEnsemble {
   static analyze(input: PeakDetectionEnsembleInput): PeakDetectionResult {
     const rejected: PeakDetectionResult['rejectedPeaks'] = [];
-    const { signal, timestampsMs, samplingRateHz, sqi } = input;
+    const { signal, timestampsMs, samplingRateHz, sqi, allowSoloElgendiFusion } = input;
 
     if (signal.length < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble || signal.length !== timestampsMs.length) {
       return {
@@ -83,6 +85,10 @@ export class PeakDetectionEnsemble {
         const mid = Math.round((ie + ip) / 2);
         fusedIdx.push(clamp(mid, 0, signal.length - 1));
         fusedTimes.push((timestampsMs[ie]! + timestampsMs[ip]!) / 2);
+      } else if (allowSoloElgendiFusion && el.confidence >= 0.2) {
+        fusedIdx.push(ie);
+        fusedTimes.push(te);
+        rejected.push({ index: ie, reason: 'SOLO_ELGENDI_RELAXED', detector: 'Elgendi' });
       } else {
         rejected.push({ index: ie, reason: 'NO_PAN_MATCH', detector: 'Elgendi' });
       }
