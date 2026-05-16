@@ -49,6 +49,7 @@ export function applyPulseAgc(
   periodicity: number,
   motionScore: number,
   cfg: PulseAgcConfig = DEFAULT_PULSE_AGC,
+  contactStable = false,
 ): number {
   if (!Number.isFinite(filtered)) return 0;
 
@@ -62,7 +63,10 @@ export function applyPulseAgc(
   }
 
   const rr = robustRange(state.tail);
-  const periodGate = clamp((periodicity - 0.12) / 0.5, 0, 1);
+  const periodGate = Math.max(
+    clamp((periodicity - 0.12) / 0.5, 0, 1),
+    contactStable ? 0.38 : 0,
+  );
   const motionGate = clamp(1 - motionScore * 1.15, 0.25, 1);
   const rangeGate = clamp(rr / cfg.minRobustRange, 0, 1);
 

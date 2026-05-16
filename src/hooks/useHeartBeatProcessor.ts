@@ -35,10 +35,10 @@ export const useHeartBeatProcessor = () => {
   const noContactFramesRef = useRef<number>(0);
   const wasNoContactRef = useRef(true);
 
-  /** ~4 frames sin dedo antes de vaciar picos (~130 ms @ 30 fps) */
-  const NO_CONTACT_PEAK_RESET_FRAMES = 12;
-  /** ~1 s sin dedo: reset completo del procesador */
-  const NO_CONTACT_FULL_RESET_FRAMES = 30;
+  /** ~0,8 s sin dedo antes de re-adquisición suave (evita vaciar buffer en micro-parpadeos) */
+  const NO_CONTACT_PEAK_RESET_FRAMES = 24;
+  /** ~1,2 s sin dedo: reset completo del procesador */
+  const NO_CONTACT_FULL_RESET_FRAMES = 36;
   const NO_CONTACT_HOLD_FRAMES = 4;
 
   useEffect(() => {
@@ -123,9 +123,14 @@ export const useHeartBeatProcessor = () => {
 
     if (wasNoContactRef.current) {
       wasNoContactRef.current = false;
-      processorRef.current.resetPeakTracking();
-      lastBpmRef.current = 0;
-      lastConfidenceRef.current = 0;
+      const framesLost = noContactFramesRef.current;
+      if (framesLost >= NO_CONTACT_FULL_RESET_FRAMES) {
+        lastBpmRef.current = 0;
+        lastConfidenceRef.current = 0;
+      } else if (framesLost >= NO_CONTACT_PEAK_RESET_FRAMES) {
+        processorRef.current.softReacquirePeaks(timestamp);
+        lastBpmRef.current = 0;
+      }
     }
     noContactFramesRef.current = 0;
     processedSignalsRef.current++;
@@ -163,6 +168,10 @@ export const useHeartBeatProcessor = () => {
     processorRef.current?.setFingerPlacementMode(mode);
   }, []);
 
+  const reacquirePeaks = useCallback((timestamp?: number) => {
+    processorRef.current?.softReacquirePeaks(timestamp);
+  }, []);
+
   const reset = useCallback(() => {
     if (processingStateRef.current === 'RESETTING') return;
     processingStateRef.current = 'RESETTING';
@@ -184,6 +193,7 @@ export const useHeartBeatProcessor = () => {
     processSignal,
     setFingerPlacementMode,
     setRuntimeHints,
+    reacquirePeaks,
     reset,
     debugInfo: {
       sessionId: sessionIdRef.current,

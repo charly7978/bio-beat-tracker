@@ -98,6 +98,28 @@ describe('peakEmitPolicy', () => {
     expect(d.emit).toBe(false);
   });
 
+  it('modo reacquire permite solo_elgendi tras stall sin dual', () => {
+    const ens = mockEns([5000], ['solo_elgendi'], [0.64]);
+    const d = decidePeakEmit({
+      ens,
+      lastEmittedPeakMs: 2000,
+      minPeakConf: 0.1,
+      consensusMin: 0.12,
+      allowSoloElgendi: true,
+      sampleRateHz: 30,
+      windowSamples: 90,
+      fingerContactConfirmed: true,
+      nowMs: 5200,
+      emittedPeakCount: 0,
+      peakStallMs: 3200,
+      reacquireMode: true,
+      sqi: 50,
+      perfusionIndex: 0.005,
+    });
+    expect(d.emit).toBe(true);
+    expect(d.reason).toBe('SOLO_ELGENDI');
+  });
+
   it('prefiere el pico más reciente en la ventana viva', () => {
     const ens = mockEns([4900, 5050], ['dual', 'dual'], [0.65, 0.66]);
     const d = decidePeakEmit({

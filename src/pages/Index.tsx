@@ -184,6 +184,7 @@ const Index = () => {
     setRuntimeHints: setHeartBeatRuntimeHints,
     setFingerPlacementMode,
     reset: resetHeartBeat,
+    reacquirePeaks: reacquireHeartPeaks,
   } = useHeartBeatProcessor();
 
   const cameraHintsRef = useRef(inferCameraRuntimeHints());
@@ -619,6 +620,9 @@ const Index = () => {
   const unstableFrameCounter = useRef<number>(0);
   const UNSTABLE_ZERO_THRESHOLD = 60; // ~2 s sin dedo: limpiar vitales en UI
   const NO_CONTACT_SESSION_RESET_FRAMES = 18;
+  /** Mínimo sin contacto antes de reset de sesión al volver el dedo (~0,7 s) */
+  const CONTACT_REGAIN_RESET_MIN_FRAMES = 20;
+  const STALE_PEAK_REACQUIRE_FRAMES = 55;
   const measurementLatchRef = useRef(createMeasurementSessionLatch());
   const lastRrSnapshotRef = useRef<{ intervals: number[]; lastPeakTime: number | null } | null>(null);
   const lastGoodBpmRef = useRef(0);
@@ -751,7 +755,11 @@ const Index = () => {
     const hasUsableContact =
       fingerConfirmed && contactState !== 'NO_CONTACT';
 
-    if (hasUsableContact && !prevHasUsableContactRef.current) {
+    if (
+      hasUsableContact &&
+      !prevHasUsableContactRef.current &&
+      noContactSessionFramesRef.current >= CONTACT_REGAIN_RESET_MIN_FRAMES
+    ) {
       resetFingerContactSession();
     }
     prevHasUsableContactRef.current = hasUsableContact;
@@ -933,11 +941,18 @@ const Index = () => {
           unstableFrameCounter.current + 1,
           UNSTABLE_ZERO_THRESHOLD,
         );
+        if (
+          hasUsableContact &&
+          unstableFrameCounter.current === STALE_PEAK_REACQUIRE_FRAMES
+        ) {
+          reacquireHeartPeaks(nowT);
+        }
         const STALE_FINGER_NO_BPM = 90;
         if (
           hasUsableContact &&
           unstableFrameCounter.current === STALE_FINGER_NO_BPM
         ) {
+          reacquireHeartPeaks(nowT);
           setVitalSigns(prev => ({
             ...prev,
             spo2: { ...prev.spo2, value: 0, status: 'NO_VALID_SIGNAL' },
@@ -1151,6 +1166,7 @@ const Index = () => {
     setFingerPlacementMode,
     setVitalsPlacementMode,
     resetFingerContactSession,
+    reacquireHeartPeaks,
     applyLiveDisplaySmooth,
   ]);
 

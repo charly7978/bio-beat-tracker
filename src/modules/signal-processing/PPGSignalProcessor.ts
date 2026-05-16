@@ -37,6 +37,7 @@ import {
 import {
   applyPulseAgc,
   createPulseAgcState,
+  DEFAULT_PULSE_AGC,
   resetPulseAgc,
 } from './shared/pulseAgc';
 
@@ -393,6 +394,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       filtered,
       this.cachedPeriodicity > 0 ? this.cachedPeriodicity : this.periodicityEma,
       this.motionScore,
+      DEFAULT_PULSE_AGC,
+      this.contactState === 'STABLE_CONTACT',
     );
     endFilt();
     this.filteredBuffer.push(enhanced);

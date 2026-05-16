@@ -38,7 +38,11 @@ export class HeartBeatProcessor {
   private lastBeepTime = 0;
 
   private consecutivePeaks = 0;
+  /** Picos emitidos (independiente de si el BPM aceptó el outlier). */
+  private emittedPeakCount = 0;
   private signalQualityIndex = 0;
+  private gateRelaxUntilMs = 0;
+  private reacquireModeUntilMs = 0;
 
   private frameTick = 0;
   private cachedGateRange = 0;
@@ -177,9 +181,18 @@ export class HeartBeatProcessor {
     const sampleRate = this.estimateSampleRate();
     let ensembleConf = 0;
 
+    const peakStallMs =
+      this.lastEmittedPeakTime > 0 ? now - this.lastEmittedPeakTime : 0;
+    const autoGateRelax =
+      this.fingerContactConfirmed && peakStallMs > 2600
+        ? clamp(0.52, 1 - (peakStallMs - 2600) / 9000, 1)
+        : 1;
+    const manualRelax = now < this.gateRelaxUntilMs ? 0.58 : 1;
+    const gateScale =
+      Math.min(autoGateRelax, manualRelax) *
+      (this.ppgPerfusionIndex > 0 && this.ppgPerfusionIndex < 0.004 ? 0.72 : 1);
     const gateOk =
-      this.cachedGateRange >=
-      this.gateRangeMin() * (this.ppgPerfusionIndex > 0 && this.ppgPerfusionIndex < 0.004 ? 0.72 : 1);
+      this.cachedGateRange >= this.gateRangeMin() * gateScale;
 
     if (gateOk && this.signalBuffer.length >= PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
       const win = Math.min(this.BUFFER_SIZE, this.signalBuffer.length);
@@ -212,7 +225,9 @@ export class HeartBeatProcessor {
         placementMode: this.placementMode,
         fingerContactConfirmed: this.fingerContactConfirmed,
         nowMs: now,
-        emittedPeakCount: this.consecutivePeaks,
+        emittedPeakCount: this.emittedPeakCount,
+        peakStallMs,
+        reacquireMode: now < this.reacquireModeUntilMs || peakStallMs >= 2800,
         recentRrMs: this.rrIntervals,
         sqi: ensSqi,
         perfusionIndex: this.ppgPerfusionIndex,
@@ -225,6 +240,9 @@ export class HeartBeatProcessor {
         const prevEmitted = this.lastEmittedPeakTime;
         this.lastEmittedPeakTime = decision.peakTimeMs;
         this.lastPeakTime = decision.peakTimeMs;
+        this.emittedPeakCount += 1;
+        this.reacquireModeUntilMs = 0;
+        this.gateRelaxUntilMs = 0;
 
         if (prevEmitted > 0) {
           const rrMs = decision.peakTimeMs - prevEmitted;
@@ -288,9 +306,13 @@ export class HeartBeatProcessor {
     }
 
     const peakAgeMs = this.lastPeakTime > 0 ? now - this.lastPeakTime : Number.POSITIVE_INFINITY;
-    if (!isPeak && peakAgeMs > this.BPM_PUBLISH_HOLD_MS) {
-      if (peakAgeMs > this.BPM_PUBLISH_HOLD_MS * 1.15) {
-        this.consecutivePeaks = 0;
+    if (
+      !isPeak &&
+      peakAgeMs > this.BPM_PUBLISH_HOLD_MS &&
+      peakAgeMs > this.BPM_PUBLISH_HOLD_MS * 1.15
+    ) {
+      this.consecutivePeaks = 0;
+      if (!this.fingerContactConfirmed) {
         this.smoothBPM = 0;
       }
     }
@@ -492,6 +514,16 @@ export class HeartBeatProcessor {
   getRRIntervals(): number[] { return [...this.rrIntervals]; }
   getLastPeakTime(): number { return this.lastPeakTime; }
 
+  /**
+   * Reabre detección sin vaciar buffers (dedo quieto que dejó de latir).
+   */
+  softReacquirePeaks(nowMs?: number): void {
+    const t = nowMs ?? (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    this.gateRelaxUntilMs = t + 6500;
+    this.reacquireModeUntilMs = t + 6500;
+    this.consecutivePeaks = 0;
+  }
+
   /** Limpia estado de picos/RR al quitar el dedo o al volver a colocarlo. */
   resetPeakTracking(): void {
     this.signalBuffer = [];
@@ -502,8 +534,11 @@ export class HeartBeatProcessor {
     this.lastPeakTime = 0;
     this.lastEmittedPeakTime = 0;
     this.consecutivePeaks = 0;
+    this.emittedPeakCount = 0;
     this.frameTick = 0;
     this.cachedGateRange = 0;
+    this.gateRelaxUntilMs = 0;
+    this.reacquireModeUntilMs = 0;
     this.lastDiagnostics = {};
   }
 

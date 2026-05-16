@@ -31,6 +31,10 @@ export interface PeakEmitPolicyInput {
   fingerContactConfirmed?: boolean;
   nowMs?: number;
   emittedPeakCount?: number;
+  /** Tiempo desde el último pico emitido (ms). */
+  peakStallMs?: number;
+  /** Tras stall prolongado: relajar arranque y ventana viva. */
+  reacquireMode?: boolean;
   recentRrMs?: number[];
   sqi?: number;
   perfusionIndex?: number;
@@ -49,10 +53,16 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     fingerContactConfirmed = true,
     nowMs,
     emittedPeakCount = 0,
+    peakStallMs = 0,
+    reacquireMode = false,
     recentRrMs = [],
     sqi = 0,
     perfusionIndex = 0,
   } = input;
+
+  const stallReacquire =
+    reacquireMode ||
+    (fingerContactConfirmed && peakStallMs >= 2800);
 
   const minGap =
     VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS *
@@ -72,7 +82,9 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
   let bestRank = 0;
   let bestScore = 0;
 
-  const liveEdgeMs = PEAK_DETECTION_DEFAULTS.peakEmitWindowMs;
+  const liveEdgeMs = stallReacquire
+    ? PEAK_DETECTION_DEFAULTS.peakEmitWindowMs * 1.4
+    : PEAK_DETECTION_DEFAULTS.peakEmitWindowMs;
   const liveEdgeSamples = Math.max(4, Math.round(sampleRateHz * (liveEdgeMs / 1000)));
 
   const rankSource = (src: string | undefined): number => {
@@ -95,7 +107,7 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     }
 
     const src = ens.peakSources?.[i];
-    if (emittedPeakCount < 1 && src !== 'dual') continue;
+    if (emittedPeakCount < 1 && src !== 'dual' && !stallReacquire) continue;
 
     const rrMs = lastEmittedPeakMs > 0 ? t - lastEmittedPeakMs : undefined;
     if (rrMs != null && prevRrMed > 0 && !passesRrPlausibility(rrMs, prevRrMed)) {
@@ -108,18 +120,18 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     const soloEl =
       fingerContactConfirmed &&
       allowSoloElgendi &&
-      emittedPeakCount >= 1 &&
+      (emittedPeakCount >= 1 || stallReacquire) &&
       src === 'solo_elgendi' &&
       elConf >= (placementMode === 'hybrid' ? 0.22 : 0.24) &&
-      spectralAgreement >= 0.22;
+      spectralAgreement >= (stallReacquire ? 0.18 : 0.22);
     const soloPan =
       fingerContactConfirmed &&
       allowSoloElgendi &&
-      emittedPeakCount >= 2 &&
+      (emittedPeakCount >= 2 || (stallReacquire && emittedPeakCount >= 1)) &&
       src === 'solo_pan' &&
-      panConf >= 0.3 &&
+      panConf >= (stallReacquire ? 0.26 : 0.3) &&
       elConf >= 0.12 &&
-      spectralAgreement >= 0.28;
+      spectralAgreement >= (stallReacquire ? 0.22 : 0.28);
 
     if (!dual && !soloEl && !soloPan) continue;
 
@@ -138,8 +150,8 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
       });
 
     const minScore = dual
-      ? PEAK_SCORE_THRESHOLDS.dualMin
-      : PEAK_SCORE_THRESHOLDS.soloMin;
+      ? PEAK_SCORE_THRESHOLDS.dualMin * (stallReacquire ? 0.94 : 1)
+      : PEAK_SCORE_THRESHOLDS.soloMin * (stallReacquire ? 0.96 : 1);
     if (weightedScore < minScore) continue;
 
     const reason = dual ? 'DUAL_FUSED' : src === 'solo_pan' ? 'SOLO_PAN' : 'SOLO_ELGENDI';
