@@ -39,7 +39,8 @@ export interface APGFeatures {
 export interface CycleFeatures {
   // Temporal (in ms)
   sutMs: number;         // Systolic Upstroke Time
-  diastolicTimeMs: number; // Diastolic time (peak to next onset)
+  diastolicTimeMs: number; // Pico sistólico → siguiente onset (ciclo tardío)
+  diastolicPhaseMs: number; // Muesca dicrótica → siguiente onset (fase diastólica real)
   pw10Ms: number;        // Pulse width at 10% amplitude
   pw25Ms: number;        // Pulse width at 25% amplitude
   pw50Ms: number;        // Pulse width at 50% amplitude
@@ -151,6 +152,10 @@ export class PPGFeatureExtractor {
     // ── Temporal features ──
     const sutMs = (systolicPeak - onset) * msPerSample;
     const diastolicTimeMs = (nextOnset - systolicPeak) * msPerSample;
+    const divideForPhase = dicroticNotch >= 0
+      ? dicroticNotch
+      : Math.round(systolicPeak + (nextOnset - systolicPeak) * 0.42);
+    const diastolicPhaseMs = (nextOnset - divideForPhase) * msPerSample;
     const dicroticNotchTimeMs = dicroticNotch >= 0 
       ? (dicroticNotch - onset) * msPerSample 
       : diastolicTimeMs * 0.6; // estimate
@@ -228,7 +233,7 @@ export class PPGFeatureExtractor {
     );
 
     return {
-      sutMs, diastolicTimeMs,
+      sutMs, diastolicTimeMs, diastolicPhaseMs,
       pw10Ms, pw25Ms, pw50Ms, pw75Ms,
       dicroticNotchTimeMs,
       systolicAmplitude, diastolicAmplitude, dicroticDepth,

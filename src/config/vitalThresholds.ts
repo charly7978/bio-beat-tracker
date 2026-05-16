@@ -37,12 +37,12 @@ export const VITAL_THRESHOLDS = {
 
   // BLOOD PRESSURE (mmHg + pipeline morfológico)
   BP: {
-    /** Pisos PPG móvil (estimación suele ser baja vs esfigmomanómetro) */
-    SYSTOLIC_MIN: 68,
+    /** Límites PPG cámara — evitar pisos que fijan DBP en un valor constante */
+    SYSTOLIC_MIN: 75,
     SYSTOLIC_MAX: 250,
-    DIASTOLIC_MIN: 40,
-    DIASTOLIC_MAX: 150,
-    MIN_PP: 12,
+    DIASTOLIC_MIN: 50,
+    DIASTOLIC_MAX: 130,
+    MIN_PP: 20,
     MAX_PP: 110,
     MIN_CYCLES: 3,
     MIN_CYCLE_QUALITY: 0.28,

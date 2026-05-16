@@ -45,8 +45,10 @@ export interface BPEstimate {
   featureQuality: number;
 }
 
-/** Corrección empírica cámara+dedo sin cuff (suele subestimar MAP/PP vs. referencia). */
-const CAMERA_PPG_BP_OFFSET = { map: 4.5, pp: 3.5 } as const;
+/** Corrección empírica cámara+dedo (PPG periférico suele subestimar DBP vs. brazalete). */
+const CAMERA_PPG_BP_OFFSET = { map: 7, pp: 2.5, dbp: 11 } as const;
+/** Relación DBP/SBP típica en PPG de dedo cuando la morfología subestima DBP. */
+const CAMERA_PPG_DBP_SYS_RATIO = 0.63;
 
 /**
  * Coeficientes de regresión adaptados para señales PPG de cámara (smartphone):
@@ -73,9 +75,9 @@ const SBP_COEFF = {
 };
 
 const DBP_COEFF = {
-  intercept: 72.0,
-  PW50: 0.015,        // PW50 alto -> DBP alta (resistencia periférica)
-  DT: 0.012,          // Tiempo diastólico
+  intercept: 76.0,
+  PW50: 0.018,        // PW50 alto -> DBP alta (resistencia periférica)
+  DT: 0.014,          // Fase diastólica (muesca → siguiente onset)
   RMSSD: -0.04,       // Tono vagal (HRV)
   dicroticDepth: -4.0,
   areaRatio: 1.2,
@@ -151,41 +153,62 @@ export class BloodPressureProcessor {
     const hr = 60000 / avgRR;
     const rrVar = PPGFeatureExtractor.extractRRVariability(validRR);
 
-    // 5. Modelos de regresión Avanzados (Ensemble Fidelity Model v5.2 - MAP/PP Integration) // anti-sim-allow: reason="Clinical BP calculation model name" ref="BP-5.2"
-    // Usamos el enfoque sistémico de desacoplar Presión Media (MAP) de Presión de Pulso (PP)
-    const bp = this.calculateAdvancedBP(mf, hr, rrVar.rmssd);
+    // 5. Fusión MAP/PP + regresión morfológica (DBP desde fase diastólica real)
+    const bp = this.calculateFusedBP(mf, hr, rrVar.rmssd);
     let rawSBP = bp.sbp;
-    let rawDBP = bp.dbp;
+    let rawDBP = bp.dbp + CAMERA_PPG_BP_OFFSET.dbp;
 
-    // 6. Refinamiento Sistémico y Balance
-    const pp = rawSBP - rawDBP;
-    
-    // Anclaje dinámico suave (solo para extremos absurdos)
-    if (pp > 110) {
-      const excess = pp - 110;
-      rawSBP -= excess * 0.5;
-      rawDBP += excess * 0.3;
-    } else if (pp < VITAL_THRESHOLDS.BP.MIN_PP + 2) {
-      rawDBP = rawSBP - (VITAL_THRESHOLDS.BP.MIN_PP + 2);
+    // 6. Coherencia hemodinámica (sin forzar DBP desde SBP salvo incoherencia grave)
+    let pp = rawSBP - rawDBP;
+    if (pp > VITAL_THRESHOLDS.BP.MAX_PP) {
+      const excess = pp - VITAL_THRESHOLDS.BP.MAX_PP;
+      rawSBP -= excess * 0.55;
+      rawDBP += excess * 0.25;
+      pp = rawSBP - rawDBP;
+    }
+    if (pp < VITAL_THRESHOLDS.BP.MIN_PP) {
+      const deficit = VITAL_THRESHOLDS.BP.MIN_PP - pp;
+      rawSBP += deficit * 0.55;
+      rawDBP -= deficit * 0.45;
+    }
+    if (rawDBP >= rawSBP) {
+      rawDBP = rawSBP - VITAL_THRESHOLDS.BP.MIN_PP;
     }
 
-    // 7. Límites Clínicos y Coherencia (Fidelity Guard)
-    let sbp = Math.min(VITAL_THRESHOLDS.BP.SYSTOLIC_MAX, Math.max(VITAL_THRESHOLDS.BP.SYSTOLIC_MIN, rawSBP));
-    let dbp = Math.min(VITAL_THRESHOLDS.BP.DIASTOLIC_MAX, Math.max(VITAL_THRESHOLDS.BP.DIASTOLIC_MIN, rawDBP));
+    // 7. Límites clínicos (después de coherencia, no antes)
+    let sbp = Math.min(
+      VITAL_THRESHOLDS.BP.SYSTOLIC_MAX,
+      Math.max(VITAL_THRESHOLDS.BP.SYSTOLIC_MIN, rawSBP),
+    );
+    let dbp = Math.min(
+      VITAL_THRESHOLDS.BP.DIASTOLIC_MAX,
+      Math.max(VITAL_THRESHOLDS.BP.DIASTOLIC_MIN, rawDBP),
+    );
+    if (dbp >= sbp - VITAL_THRESHOLDS.BP.MIN_PP) {
+      dbp = sbp - VITAL_THRESHOLDS.BP.MIN_PP;
+    }
 
-    // 8. Validación de Calidad Final
+    // Recuperar DBP si quedó en piso (PPG cámara suele subestimar la diastólica)
+    const diaFloor = VITAL_THRESHOLDS.BP.DIASTOLIC_MIN;
+    if (dbp <= diaFloor + 3 && sbp > diaFloor + VITAL_THRESHOLDS.BP.MIN_PP) {
+      const implied = Math.round(sbp * CAMERA_PPG_DBP_SYS_RATIO);
+      dbp = Math.min(
+        VITAL_THRESHOLDS.BP.DIASTOLIC_MAX,
+        Math.max(diaFloor + 1, implied),
+      );
+      if (sbp - dbp < VITAL_THRESHOLDS.BP.MIN_PP) {
+        dbp = sbp - VITAL_THRESHOLDS.BP.MIN_PP;
+      }
+    }
+
+    // 8. Validación de calidad
     let confidence: BPEstimate['confidence'] = 'LOW';
     const fq = this.assessFeatureQuality(mf, useCycles.length);
     if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_HIGH) confidence = 'HIGH';
     else if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_MEDIUM) confidence = 'MEDIUM';
 
-    if (dbp >= sbp) {
-      dbp = Math.min(sbp - VITAL_THRESHOLDS.BP.MIN_PP, dbp);
-    }
-    if (sbp - dbp < VITAL_THRESHOLDS.BP.MIN_PP) {
-      dbp = sbp - VITAL_THRESHOLDS.BP.MIN_PP;
-    }
-    if (dbp >= sbp || dbp < VITAL_THRESHOLDS.BP.DIASTOLIC_MIN) {
+    const diaRatio = sbp > 0 ? dbp / sbp : 0;
+    if (dbp >= sbp || diaRatio < 0.38 || diaRatio > 0.92) {
       confidence = 'INSUFFICIENT';
     }
 
@@ -210,36 +233,77 @@ export class BloodPressureProcessor {
     };
   }
 
-  /**
-   * FIDELITY MODEL V5.2 — fusión MAP/PP (modelo hemodinámico) // anti-sim-allow: reason="Clinical BP calculation model name" ref="BP-5.2"
-   */
-  private calculateAdvancedBP(f: MedianFeatures, hr: number, rmssd: number): { sbp: number; dbp: number } {
-    // 1. Estimar Presión Media (MAP) - Basada en Resistencia y Gasto Medio
-    // El K-value es el mejor proxy para la resistencia periférica total (TPR)
-    let map = 92 + CAMERA_PPG_BP_OFFSET.map; // Baseline + sesgo cámara
+  /** MAP/PP hemodinámico (SBP) + morfología PWA (DBP). */
+  private calculateFusedBP(
+    f: MedianFeatures,
+    hr: number,
+    rmssd: number,
+  ): { sbp: number; dbp: number } {
+    const hemo = this.calculateHemodynamicBP(f, hr);
+    const morph = this.calculateMorphologyBP(f, hr, rmssd);
+    return {
+      sbp: hemo.sbp * 0.62 + morph.sbp * 0.38,
+      dbp: hemo.dbp * 0.18 + morph.dbp * 0.82,
+    };
+  }
+
+  private calculateHemodynamicBP(f: MedianFeatures, hr: number): { sbp: number; dbp: number } {
+    let map = 96 + CAMERA_PPG_BP_OFFSET.map;
     map += 45 * (f.kValue - 0.38);
     map += 0.08 * (hr - 72);
     map += 2.2 * f.agi;
     map += 1.5 * (f.areaRatio - 1.6);
     map += -8 * (f.dDivA + 0.5);
 
-    // 2. Estimar Presión de Pulso (PP) - Basada en Volumen Sistólico y Complianza
-    // vMax y SUT reflejan la dinámica de la eyección sistólica
-    let pp = 42 + CAMERA_PPG_BP_OFFSET.pp; // Baseline + sesgo cámara
+    let pp = 42 + CAMERA_PPG_BP_OFFSET.pp;
     pp += 0.08 * (f.vMax - 60);
     if (f.sutMs > 40) {
       pp += -0.12 * (f.sutMs - 180);
     }
-    pp += -10 * (f.bDivA + 0.85); // Stiffness factor
+    pp += -10 * (f.bDivA + 0.85);
     pp += 0.12 * (f.augmentationIndex - 12);
+    pp = Math.max(VITAL_THRESHOLDS.BP.MIN_PP, Math.min(VITAL_THRESHOLDS.BP.MAX_PP, pp));
 
-    // 3. Síntesis Final (SBP/DBP acoplados por MAP)
-    // SBP = MAP + 2/3 * PP
-    // DBP = MAP - 1/3 * PP
     return {
-      sbp: map + (0.66 * pp),
-      dbp: map - (0.33 * pp)
+      sbp: map + (2 / 3) * pp,
+      dbp: map - (1 / 3) * pp,
     };
+  }
+
+  /** Regresión morfológica (PW50, fase diastólica, APG) — principal para DBP. */
+  private calculateMorphologyBP(
+    f: MedianFeatures,
+    hr: number,
+    rmssd: number,
+  ): { sbp: number; dbp: number } {
+    const sutDtRatio =
+      f.sutMs > 10 ? Math.min(6, f.diastolicPhaseMs / f.sutMs) : 2.4;
+    const sutTerm = f.sutMs > 0 ? SBP_COEFF.sutWeight / f.sutMs : 0;
+
+    const sbp =
+      SBP_COEFF.intercept +
+      SBP_COEFF.bDivA * f.bDivA +
+      SBP_COEFF.dDivA * f.dDivA +
+      sutTerm +
+      SBP_COEFF.SI * f.stiffnessIndex +
+      SBP_COEFF.AIx * (f.augmentationIndex - 12) +
+      SBP_COEFF.HR * (hr - 70) +
+      SBP_COEFF.areaRatio * (f.areaRatio - 1.5) +
+      SBP_COEFF.agi * f.agi +
+      SBP_COEFF.dicroticDepth * f.dicroticDepth;
+
+    const dbp =
+      DBP_COEFF.intercept +
+      DBP_COEFF.PW50 * f.pw50Ms +
+      DBP_COEFF.DT * f.diastolicPhaseMs +
+      DBP_COEFF.RMSSD * rmssd +
+      DBP_COEFF.dicroticDepth * f.dicroticDepth +
+      DBP_COEFF.areaRatio * (f.areaRatio - 1.5) +
+      DBP_COEFF.SI * f.stiffnessIndex +
+      DBP_COEFF.HR * (hr - 70) +
+      DBP_COEFF.sutDtRatio * (sutDtRatio - 2.2);
+
+    return { sbp, dbp };
   }
 
   /**
@@ -258,6 +322,7 @@ export class BloodPressureProcessor {
       agi: median(cycles.map(c => c.apg.agi)),
       sutMs: median(cycles.map(c => c.sutMs)),
       diastolicTimeMs: median(cycles.map(c => c.diastolicTimeMs)),
+      diastolicPhaseMs: median(cycles.map(c => c.diastolicPhaseMs)),
       stiffnessIndex: median(cycles.map(c => c.stiffnessIndex)),
       augmentationIndex: median(cycles.map(c => c.augmentationIndex)),
       dicroticDepth: median(cycles.map(c => c.dicroticDepth)),
@@ -282,7 +347,7 @@ export class BloodPressureProcessor {
 
     // Temporal features válidos (max 20)
     if (f.sutMs > 30 && f.sutMs < 500) score += 10;
-    if (f.diastolicTimeMs > 50 && f.diastolicTimeMs < 1000) score += 10;
+    if (f.diastolicPhaseMs > 40 && f.diastolicPhaseMs < 900) score += 10;
 
     // Morfología válida (max 25)
     if (f.stiffnessIndex > 0) score += 8;
@@ -308,6 +373,7 @@ interface MedianFeatures {
   agi: number;
   sutMs: number;
   diastolicTimeMs: number;
+  diastolicPhaseMs: number;
   stiffnessIndex: number;
   augmentationIndex: number;
   dicroticDepth: number;
