@@ -45,46 +45,71 @@ export class SignalQualityIndex {
       saturationRatio,
       frameDropRatio,
       fpsEffective,
-      timestampJitterMs
+      timestampJitterMs,
     } = metrics;
 
     // PPG por cámara: PI en AC/DC suele ser 1e-4–1e-2; no anular todo el SQI por debajo de 0.1 %.
-    if (perfusionIndex < 0.00012) return 0;
+    if (perfusionIndex < 0.00008) return 0;
     if (saturationRatio > 0.8) return 5;
     const under = metrics.underexposureRatio ?? 0;
     if (under > 0.82) return 4;
 
     let score = 0;
 
-    // 1. Perfusión (30%) — curva calibrada para smartphone + flash
-    const piScore = clamp((perfusionIndex - 0.00025) / 0.01, 0, 1) * 30;
+    // 1. Perfusión (32%) — curva amplia para smartphone + flash
+    const piScore = clamp((perfusionIndex - 0.00012) / 0.0045, 0, 1) * 32;
     score += piScore;
 
-    // 2. SNR (25%) — `strength` del pipeline suele ser O(1), no exigir 1.2 como mínimo duro
+    // 2. SNR (24%) — `strength` del pipeline suele ser O(0.3–2)
     const snrVal = snr ?? 0;
-    const snrScore = clamp((snrVal - 0.25) / 2.2, 0, 1) * 25;
+    const snrScore = clamp((snrVal - 0.12) / 1.35, 0, 1) * 24;
     score += snrScore;
 
-    // 3. Periodicidad (20%) — autocorrelación en ventana corta rara vez supera 0.45 estable
+    // 3. Periodicidad (22%) — autocorrelación en ventana corta rara vez supera 0.5 estable
     const pVal = periodicity ?? 0;
-    const pScore = clamp((pVal - 0.18) / 0.42, 0, 1) * 20;
+    const pScore = clamp((pVal - 0.1) / 0.38, 0, 1) * 22;
     score += pScore;
 
-    // 4. Penalizaciones por Estabilidad y Artefactos (-X)
-    const motionPenalty = (motionScore ?? 0) * 45;
-    const jitterPenalty = clamp((timestampJitterMs - 22) / 55, 0, 1) * 26;
-    const dropPenalty = frameDropRatio * 95;
-    const lowFpsPenalty = fpsEffective < 25 ? (25 - fpsEffective) * 5 : 0;
+    // 4. Penalizaciones acotadas (móvil: motion/jitter/drops son normales)
+    const motion = motionScore ?? 0;
+    const motionPenalty = clamp((motion - 0.22) / 0.55, 0, 1) * 14;
+    const jitterPenalty = clamp((timestampJitterMs - 38) / 48, 0, 1) * 10;
+    const dropPenalty = Math.min(14, (frameDropRatio ?? 0) * 42);
+    const lowFpsPenalty = fpsEffective < 22 ? (22 - fpsEffective) * 3.5 : 0;
 
     const agree = metrics.detectorAgreement ?? 0;
-    const agreeBonus = agree > 0 ? clamp(agree, 0, 1) * 12 : 0;
+    const agreeBonus = agree > 0 ? clamp(agree, 0, 1) * 10 : 0;
 
     score = Math.max(0, score - motionPenalty - jitterPenalty - dropPenalty - lowFpsPenalty) + agreeBonus;
 
-    // 5. Bonus por consistencia (si PI y SNR son razonables para cámara)
-    if (perfusionIndex > 0.0025 && snrVal > 0.9) score += 12;
+    // 5. Bonus por consistencia (PI/SNR razonables en cámara)
+    if (perfusionIndex > 0.0018 && snrVal > 0.55) score += 10;
+    if (pVal > 0.22 && perfusionIndex > 0.0005) score += 6;
 
     return Math.round(clamp(score, 0, 100));
+  }
+
+  /**
+   * SQI mostrado en UI: EMA del crudo, sin compresión por contacto inestable.
+   */
+  static smoothDisplayedSqi(
+    prev: number,
+    raw: number,
+    contactState: ContactState,
+    rejectionScale = 1,
+  ): number {
+    const alpha = VITAL_THRESHOLDS.QUALITY.DISPLAY_SQI_EMA_ALPHA;
+    const scaled = raw * clamp(rejectionScale, 0.35, 1);
+
+    if (contactState === 'NO_CONTACT') {
+      return prev > 0 ? Math.round(prev * 0.86) : 0;
+    }
+    if (scaled <= 0) {
+      return prev > 0 ? Math.round(prev * 0.92) : 0;
+    }
+    if (prev <= 0) return Math.round(clamp(scaled, 0, 100));
+    const next = prev * (1 - alpha) + scaled * alpha;
+    return Math.round(clamp(next, 0, 100));
   }
 
   /**

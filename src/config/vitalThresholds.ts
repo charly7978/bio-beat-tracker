@@ -36,17 +36,21 @@ export const VITAL_THRESHOLDS = {
   // SIGNAL QUALITY (SQI)
   QUALITY: {
     /** SQI mínimo para publicar BPM en UI (la onda puede verse antes) */
-    MIN_FOR_HR: 10,
+    MIN_FOR_HR: 8,
     /** Confianza mínima del ensemble para mostrar BPM en contacto inestable */
-    MIN_ENSEMBLE_CONF_UNSTABLE: 0.1,
-    MIN_ENSEMBLE_CONF_STABLE: 0.08,
+    MIN_ENSEMBLE_CONF_UNSTABLE: 0.08,
+    MIN_ENSEMBLE_CONF_STABLE: 0.06,
     MIN_FOR_CLINICAL: 55,
     /** PI (AC/DC) mínimo para marcar contacto STABLE — cámara suele dar 0.001–0.008 al inicio */
-    MIN_PI: 0.0012,
-    MAX_MOTION: 0.6,
-    MAX_JITTER_MS: 50,
-    /** Frames con dedo candidato antes de STABLE (≈1 s @ 30 fps) */
-    STABLE_FRAMES_REQ: 22,
+    MIN_PI: 0.0009,
+    MAX_MOTION: 0.75,
+    MAX_JITTER_MS: 55,
+    /** Frames con dedo candidato antes de STABLE (≈0,4 s @ 30 fps) */
+    STABLE_FRAMES_REQ: 12,
+    /** EMA del SQI mostrado en UI (0–1 por frame) */
+    DISPLAY_SQI_EMA_ALPHA: 0.2,
+    /** Solo vaciar buffers DSP tras este tiempo en NO_CONTACT (evita “todo/nada”) */
+    BUFFER_RESET_AFTER_NO_CONTACT_FRAMES: 8,
     /** Overlay diagnóstico — evita parpadeo VALID ↔ LOW_SIGNAL_QUALITY */
     DIAG_SQI_EMA_ALPHA: 0.14,
     DIAG_ENTER_LOW_SQI: 22,

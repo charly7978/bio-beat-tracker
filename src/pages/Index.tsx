@@ -647,11 +647,14 @@ const Index = () => {
       heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX &&
       heartBeatResult.confidence >= minConf;
 
+    const rawSqi =
+      (diag && typeof diag === 'object' && diag.sqm && typeof diag.sqm.sqi === 'number'
+        ? diag.sqm.sqi
+        : lastSignal.quality) || 0;
     const vitalsReady =
       hrReady &&
-      contactState === 'STABLE_CONTACT' &&
-      (lastSignal.quality || 0) >= Q.MIN_FOR_HR &&
-      (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * 0.45;
+      (rawSqi >= Q.MIN_FOR_HR || (lastSignal.quality || 0) >= Q.MIN_FOR_HR) &&
+      (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * 0.35;
 
     if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {
       lastSignalPushRef.current = nowT;
@@ -690,7 +693,11 @@ const Index = () => {
               value: heartBeatResult.bpm,
               status: contactState === 'STABLE_CONTACT' ? 'VALID' : 'WARMUP',
             },
-            signalQuality: Math.round(lastSignal.quality || 0),
+            signalQuality: Math.round(
+              (diag && typeof diag === 'object' && diag.sqm?.sqi != null
+                ? diag.sqm.sqi
+                : lastSignal.quality) || 0,
+            ),
           }));
         }
       }

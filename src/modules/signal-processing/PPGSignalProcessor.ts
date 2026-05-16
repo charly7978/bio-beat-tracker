@@ -157,6 +157,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   // sobre ventanas estadísticas de 30-90 muestras que cambian lentamente.
   private cachedSqi = 0;
   private cachedPeriodicity = 0;
+  private periodicityEma = 0;
+  private displaySqiEma = 0;
+  private consecutiveNoContactFrames = 0;
+  private periodicitySkip = 0;
   private readonly diagStatusState: DiagnosticStatusState = createDiagnosticStatusState();
 
   // === MULTI-SOURCE RANKING (CHROM eliminado — amplifica ruido sin dedo) ===
@@ -225,7 +229,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const motionArtifact = this.motionScore > this.MOTION_THRESHOLD;
 
     if (this.contactState === 'NO_CONTACT') {
+      this.consecutiveNoContactFrames++;
       this.signalQuality = 0;
+      this.displaySqiEma = SignalQualityIndex.smoothDisplayedSqi(
+        this.displaySqiEma,
+        0,
+        'NO_CONTACT',
+      );
       Object.assign(this.diagStatusState, createDiagnosticStatusState());
       this.onSignalReady({
         timestamp,
@@ -257,7 +267,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     else if (r < 15 && g < 10) rejectionStatus = "UNDEREXPOSED";
     else if (motionArtifact) rejectionStatus = "MOTION_ARTIFACT";
     else if (this.pixelStride > 6) rejectionStatus = "LOW_FPS";
-    else if (this.frameCount < 45) rejectionStatus = "WARMUP";
+    else if (this.frameCount < 28) rejectionStatus = "WARMUP";
 
     if (rejectionStatus && rejectionStatus !== "WARMUP" && rejectionStatus !== "MOTION_ARTIFACT") {
       this.onSignalReady({
@@ -283,13 +293,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.greenBuffer.push(roi.rawGreen);
     this.blueBuffer.push(roi.rawBlue);
 
-    // ACDC over a 36+ sample window changes slowly — recompute every 3 frames
-    // (~10 Hz) instead of every frame to cut 3 slice+sort allocations.
-    if (this.redBuffer.length >= 36 && this.frameCount % 3 === 0) {
+    // ACDC: más frecuente con dedo para que PI/SQI no queden en 0 varios segundos
+    if (this.redBuffer.length >= 36 && this.frameCount % 2 === 0) {
       this.calculateACDCPrecise();
     }
-    // Calcular PI UNA sola vez por frame — todos los consumidores leen del cache.
-    this.cachedPI = this.calculatePerfusionIndex();
+    const acPi = this.calculatePerfusionIndex();
+    const pulsePi = this.estimatePulsePiFromRoi();
+    this.cachedPI = Math.max(acPi, pulsePi);
     this.reconcileStableContact();
 
     // Multi-source extraction
@@ -303,48 +313,58 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.filteredBuffer.push(filtered);
 
     const endSqi = ppgPerf.start('sqi');
-    this.cachedPeriodicity = this.calculatePeriodicity();
-    // SQI unificado basado en múltiples dimensiones técnicas
+    this.periodicitySkip++;
+    if (this.periodicitySkip >= 4 || this.filteredBuffer.length < 90) {
+      this.periodicitySkip = 0;
+      const pInstant = this.calculatePeriodicity();
+      this.periodicityEma =
+        this.periodicityEma <= 0
+          ? pInstant
+          : this.periodicityEma * 0.72 + pInstant * 0.28;
+    }
+    this.cachedPeriodicity = this.periodicityEma;
+
+    const snapPerf = ppgPerf.snapshot();
     const metrics: SignalQualityMetrics = {
-      sqi: 0, // `calculate` no usa este campo; el SQI efectivo es `this.cachedSqi` / `sqm.sqi` emitido
+      sqi: 0,
       perfusionIndex: this.cachedPI,
       snr: pulseSource.strength,
       periodicity: this.cachedPeriodicity,
       motionScore: this.motionScore,
-      saturationRatio: (roi.rawRed > 250 ? 1 : 0),
+      saturationRatio: roi.rawRed > 250 ? 1 : 0,
       underexposureRatio: this.underexposureEma,
-      frameDropRatio: ppgPerf.snapshot().droppedEstimate / Math.max(1, this.frameCount),
+      frameDropRatio: snapPerf.droppedEstimate / Math.max(1, this.frameCount),
       fpsEffective: this.estimatedSampleRate,
-      timestampJitterMs: ppgPerf.snapshot().jitterMs,
+      timestampJitterMs: snapPerf.jitterMs,
     };
-    
+
     this.cachedSqi = SignalQualityIndex.calculate(metrics);
     this.signalQuality = this.cachedSqi;
+
+    const rejectionScale =
+      rejectionStatus === 'MOTION_ARTIFACT'
+        ? 0.78
+        : rejectionStatus && rejectionStatus !== 'WARMUP'
+          ? 0.45
+          : 1;
+    this.displaySqiEma = SignalQualityIndex.smoothDisplayedSqi(
+      this.displaySqiEma,
+      this.signalQuality,
+      this.contactState,
+      rejectionScale,
+    );
     endSqi();
 
     const perfusionIndex = this.cachedPI;
-    const adjustedQuality = motionArtifact
-      ? Math.max(0, this.signalQuality * 0.75)
-      : this.signalQuality;
-
-    const minPiStable = VITAL_THRESHOLDS.QUALITY.MIN_PI;
-    let gatedQuality: number;
-    if (this.contactState === 'STABLE_CONTACT' && perfusionIndex >= minPiStable * 0.85) {
-      gatedQuality = adjustedQuality;
-    } else if (this.fingerDetected && this.contactState === 'UNSTABLE_CONTACT') {
-      // Contacto inestable con dedo: no comprimir a ~18 — permite HR/latidos mientras converge STABLE
-      gatedQuality = Math.round(clamp(adjustedQuality * 0.9, 16, 88));
-    } else {
-      gatedQuality = Math.min(14, Math.round(adjustedQuality * 0.42));
-    }
+    const displayQuality = this.displaySqiEma;
 
     const now = timestamp;
     if (now - this.lastLogTime >= 2000) {
       this.lastLogTime = now;
       const snap = ppgPerf.snapshot();
       log.info(
-        `[${pulseSource.label}] Filt=${filtered.toFixed(3)} Q=${gatedQuality.toFixed(0)}% ` +
-        `PI=${perfusionIndex.toFixed(2)} Contact=${this.contactState} ` +
+        `[${pulseSource.label}] Filt=${filtered.toFixed(3)} Q=${displayQuality} raw=${this.signalQuality} ` +
+        `PI=${perfusionIndex.toFixed(4)} P=${this.cachedPeriodicity.toFixed(2)} Contact=${this.contactState} ` +
         `FPS=${snap.fps.toFixed(1)} jitter=${snap.jitterMs.toFixed(1)}ms ` +
         `roi=${(snap.stages.roi?.p95 ?? 0).toFixed(2)}ms ` +
         `filt=${(snap.stages.bandpass?.p95 ?? 0).toFixed(2)}ms ` +
@@ -368,7 +388,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       timestamp,
       rawValue: pulseSource.value,
       filteredValue: filtered,
-      quality: gatedQuality,
+      quality: displayQuality,
       fingerDetected: this.fingerDetected,
       contactState: this.contactState,
       motionArtifact,
@@ -454,7 +474,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     if (previousState === 'NO_CONTACT' && this.contactState !== 'NO_CONTACT') {
-      this.resetSignalTrackingBuffers();
+      const minGap = VITAL_THRESHOLDS.QUALITY.BUFFER_RESET_AFTER_NO_CONTACT_FRAMES;
+      if (this.consecutiveNoContactFrames >= minGap) {
+        this.resetSignalTrackingBuffers();
+      }
+      this.consecutiveNoContactFrames = 0;
+    } else if (this.contactState !== 'NO_CONTACT') {
+      this.consecutiveNoContactFrames = 0;
     }
   }
 
@@ -467,10 +493,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       return;
     }
     const minPi = VITAL_THRESHOLDS.QUALITY.MIN_PI;
+    const F = VITAL_THRESHOLDS.FINGER;
+    const pulseOk =
+      this.lastRoiRedCv >= F.ROI_RED_CV_MIN * 0.82 &&
+      this.smoothedCoverage >= F.MIN_COVERAGE * 0.9;
+    const piOk = this.cachedPI >= minPi * 0.75;
     const stable =
       this.stableContactCount >= VITAL_THRESHOLDS.QUALITY.STABLE_FRAMES_REQ &&
-      this.cachedPI >= minPi * 0.9 &&
-      this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE;
+      (piOk || pulseOk) &&
+      this.smoothedCoverage >= F.MIN_COVERAGE * 0.88;
     this.contactState = stable ? 'STABLE_CONTACT' : 'UNSTABLE_CONTACT';
   }
 
@@ -999,6 +1030,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return 0;
   }
 
+  /** PI proxy desde CV temporal del ROI (antes de que ACDC llene la ventana). */
+  private estimatePulsePiFromRoi(): number {
+    const cv = this.lastRoiRedCv;
+    if (cv < VITAL_THRESHOLDS.FINGER.ROI_RED_CV_MIN * 0.65) return 0;
+    return clamp(cv * 0.018, 0.00015, 0.012);
+  }
+
   private resetBaselines(): void {
     this.redBaseline = 0;
     this.greenBaseline = 0;
@@ -1040,6 +1078,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.cachedSqi = 0;
     this.cachedPI = 0;
     this.cachedPeriodicity = 0;
+    this.periodicityEma = 0;
+    this.displaySqiEma = 0;
+    this.consecutiveNoContactFrames = 0;
+    this.periodicitySkip = 0;
     Object.assign(this.diagStatusState, createDiagnosticStatusState());
     this.underexposureEma = 0;
     this.fingerConfidenceCount = 0;
