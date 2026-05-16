@@ -8,6 +8,9 @@ import { useVitalSignsProcessor } from "@/hooks/useVitalSignsProcessor";
 import { useSaveMeasurement } from "@/hooks/useSaveMeasurement";
 import { useHealthAnalysis } from "@/hooks/useHealthAnalysis";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
+import { DebugTelemetryPanel } from "@/components/DebugTelemetryPanel";
+import { SignalQualityIndex } from "@/modules/signal-quality/SignalQualityIndex";
+import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
 import { VitalSignsResult } from "@/modules/vital-signs/VitalSignsProcessor";
 import type { ProcessedSignal, ContactState } from "@/types/signal";
 import { toast } from "@/components/ui/use-toast";
@@ -612,6 +615,30 @@ const Index = () => {
   // Toda la lógica DSP vive en refs; sólo se emite a React con throttle.
   const [currentDiagnostics, setCurrentDiagnostics] = useState<any>(null);
 
+  const acquisitionStatusLabel = React.useMemo(() => {
+    if (!lastSignal) return "WARMUP";
+    const d = lastSignal.diagnostics as Record<string, unknown> | undefined;
+    const sqm = d?.sqm as Record<string, number> | undefined;
+    const cam = cameraRef.current?.getDiagnostics?.() as Record<string, unknown> | undefined;
+    const cs: ContactState =
+      lastSignal.contactState ??
+      (lastSignal.fingerDetected ? "UNSTABLE_CONTACT" : "NO_CONTACT");
+    return resolveAcquisitionStatus({
+      contactState: cs,
+      fingerDetected: !!lastSignal.fingerDetected,
+      coverageRatio: (d?.coverageRatio as number) ?? 0,
+      perfusionIndex: lastSignal.perfusionIndex ?? 0,
+      motionScore: sqm?.motionScore ?? 0,
+      saturationRatio: sqm?.saturationRatio ?? 0,
+      underexposureRatio: sqm?.underexposureRatio ?? 0,
+      fpsEffective: sqm?.fpsEffective ?? 30,
+      frameDropRatio: sqm?.frameDropRatio ?? 0,
+      timestampJitterMs: sqm?.timestampJitterMs ?? 0,
+      torchActive: cam?.torchActive as boolean | undefined,
+      torchSupported: cam?.torchSupported as boolean | undefined,
+    });
+  }, [lastSignal]);
+
   const handleSignalRealtime = useCallback((lastSignal: ProcessedSignal) => {
     if (!isMonitoringRef.current) return;
     const signalValue = lastSignal.filteredValue;
@@ -767,6 +794,23 @@ const Index = () => {
         });
       }
 
+      const peakDiag = heartBeatResult.ensembleDiagnostics as
+        | { agreement?: { elgendi?: number; panTompkins?: number; spectral?: number }; confidence?: number }
+        | undefined;
+      const sqmRaw = diag?.sqm && typeof diag.sqm === "object" ? diag.sqm : {};
+      const enrichedSqm = SignalQualityIndex.enrichMetrics(
+        {
+          ...sqmRaw,
+          sqi: rawSqi || lastSignal.quality || 0,
+          perfusionIndex: lastSignal.perfusionIndex ?? 0,
+        },
+        {
+          agreement: peakDiag?.agreement,
+          elgendiConfidence: peakDiag?.agreement?.elgendi,
+          panTompkinsConfidence: peakDiag?.agreement?.panTompkins,
+        },
+      );
+
       const vitals = processVitalSigns(
         lastSignal.filteredValue,
         lastSignal.quality || 0,
@@ -774,7 +818,8 @@ const Index = () => {
         heartBeatResult.rrData && heartBeatResult.rrData.intervals.length >= 2 && heartBeatResult.confidence > 0.12
           ? heartBeatResult.rrData
           : undefined,
-        lastSignal.perfusionIndex
+        lastSignal.perfusionIndex,
+        enrichedSqm,
       );
 
       // Mantener siempre la última computación en ref para finalize/save.
@@ -947,6 +992,28 @@ const Index = () => {
         {/* MODAL DE AJUSTES REMOVIDO PARA PRODUCCIÓN */}
 
         <div className="relative z-10 h-full">
+          {isMonitoring && (
+            <DebugTelemetryPanel
+              camera={cameraRef.current?.getDiagnostics?.() as Record<string, unknown>}
+              sqm={
+                (lastSignal?.diagnostics as { sqm?: Record<string, unknown> })?.sqm as {
+                  sqi?: number;
+                  perfusionIndex?: number;
+                  fpsEffective?: number;
+                  timestampJitterMs?: number;
+                  detectorAgreement?: number | null;
+                  elgendiConfidence?: number | null;
+                  panTompkinsConfidence?: number | null;
+                }
+              }
+              acquisitionStatus={acquisitionStatusLabel}
+              peakDetection={currentDiagnostics?.peakDetection as Record<string, unknown>}
+              contactState={
+                lastSignal?.contactState ??
+                (lastSignal?.fingerDetected ? "UNSTABLE_CONTACT" : "NO_CONTACT")
+              }
+            />
+          )}
           <div className="flex-1 h-full">
             <PPGSignalMeter 
               value={heartbeatSignal}

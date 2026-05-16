@@ -89,6 +89,46 @@ export class SignalQualityIndex {
     return Math.round(clamp(score, 0, 100));
   }
 
+  /** Fusiona métricas PPG con telemetría del ensemble (sin recalcular SQI en otro módulo). */
+  static enrichMetrics(
+    base: Partial<SignalQualityMetrics> & { sqi?: number },
+    peak?: {
+      elgendiConfidence?: number;
+      panTompkinsConfidence?: number;
+      agreement?: { elgendi?: number; panTompkins?: number; spectral?: number };
+    },
+  ): SignalQualityMetrics {
+    const el = peak?.elgendiConfidence ?? base.elgendiConfidence ?? null;
+    const pan = peak?.panTompkinsConfidence ?? base.panTompkinsConfidence ?? null;
+    const agreeRaw =
+      peak?.agreement != null
+        ? (peak.agreement.elgendi ?? 0) * 0.45 +
+          (peak.agreement.panTompkins ?? 0) * 0.35 +
+          (peak.agreement.spectral ?? 0) * 0.2
+        : base.detectorAgreement ?? null;
+
+    const merged: SignalQualityMetrics = {
+      sqi: base.sqi ?? 0,
+      perfusionIndex: base.perfusionIndex ?? 0,
+      snr: base.snr ?? null,
+      periodicity: base.periodicity ?? null,
+      motionScore: base.motionScore ?? null,
+      saturationRatio: base.saturationRatio ?? 0,
+      underexposureRatio: base.underexposureRatio ?? 0,
+      frameDropRatio: base.frameDropRatio ?? 0,
+      fpsEffective: base.fpsEffective ?? 30,
+      timestampJitterMs: base.timestampJitterMs ?? 0,
+      elgendiConfidence: el,
+      panTompkinsConfidence: pan,
+      detectorAgreement: agreeRaw,
+    };
+
+    if (typeof base.sqi !== 'number' || base.sqi <= 0) {
+      merged.sqi = this.calculate(merged);
+    }
+    return merged;
+  }
+
   /**
    * SQI mostrado en UI: EMA del crudo, sin compresión por contacto inestable.
    */

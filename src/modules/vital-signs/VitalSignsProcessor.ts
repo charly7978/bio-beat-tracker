@@ -108,6 +108,7 @@ export class VitalSignsProcessor {
   private lastBPM: number = 0;
   /** PI del pipeline PPG (AC/DC canónico); evita que `isClinicallyValid` dependa solo del ratio RGB usado en SpO2 */
   private lastPpgPerfusionIndex = 0;
+  private lastSqmBundle: SignalQualityMetrics | null = null;
 
   constructor() {
     this.arrhythmiaProcessor = new ArrhythmiaProcessor();
@@ -152,7 +153,8 @@ export class VitalSignsProcessor {
     signalQuality: number,
     currentBPM: number,
     rrData?: RRData,
-    perfusionIndexFromPpg?: number
+    perfusionIndexFromPpg?: number,
+    sqmBundle?: Partial<SignalQualityMetrics>,
   ): VitalSignsResult {
     this.frameCount++;
 
@@ -175,8 +177,13 @@ export class VitalSignsProcessor {
       }
     }
 
-    // Usar el SQI unificado proporcionado por el procesador de señal
     this.measurements.signalQuality = signalQuality;
+    if (sqmBundle) {
+      this.lastSqmBundle = SignalQualityIndex.enrichMetrics(
+        { ...sqmBundle, sqi: signalQuality || sqmBundle.sqi },
+        undefined,
+      );
+    }
 
     // Validar pulso real (solo afecta a BP y arritmias)
     this.validateRealPulse(rrData);
@@ -255,16 +262,16 @@ export class VitalSignsProcessor {
         ? estimateRespiratoryModulationRpm(respBuf, this.VITAL_SIGNAL_ESTIMATE_HZ)
         : null;
 
-    const commonSQM: SignalQualityMetrics = {
+    const commonSQM: SignalQualityMetrics = this.lastSqmBundle ?? {
       sqi,
       perfusionIndex: pi,
-      snr: null, // Proporcionado por PPGSignalProcessor si se mapea
+      snr: null,
       periodicity: null,
       motionScore: null,
       saturationRatio: 0,
       frameDropRatio: 0,
       fpsEffective: 30,
-      timestampJitterMs: 0
+      timestampJitterMs: 0,
     };
 
     const hrMinSqi = VITAL_THRESHOLDS.QUALITY.MIN_FOR_HR;
@@ -467,13 +474,24 @@ export class VitalSignsProcessor {
       this.lastBPFeatureQuality = bpEstimate.featureQuality;
       
       if (bpEstimate.systolic > 0 && bpEstimate.confidence !== 'INSUFFICIENT') {
-        // BP se actualiza con MEDIUM+ confidence tras estabilidad mínima
-        // HIGH confidence pasa inmediatamente (suficientes ciclos PPG de calidad)
+        const calib = CalibrationManager.getInstance();
+        const adjusted = calib.applyBloodPressureCalibration(
+          bpEstimate.systolic,
+          bpEstimate.diastolic,
+        );
         const bpReady = bpEstimate.confidence === 'HIGH' ||
           (this.stableFramesCount >= this.STABILITY_BP_FRAMES && confidence !== 'INVALID');
         if (bpReady) {
-          this.measurements.systolicPressure = this.smoothValue(this.measurements.systolicPressure, bpEstimate.systolic, 'stable');
-          this.measurements.diastolicPressure = this.smoothValue(this.measurements.diastolicPressure, bpEstimate.diastolic, 'stable');
+          this.measurements.systolicPressure = this.smoothValue(
+            this.measurements.systolicPressure,
+            adjusted.systolic,
+            'stable',
+          );
+          this.measurements.diastolicPressure = this.smoothValue(
+            this.measurements.diastolicPressure,
+            adjusted.diastolic,
+            'stable',
+          );
         }
       }
     }

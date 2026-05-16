@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { VitalSignsProcessor, VitalSignsResult, RGBData } from '../modules/vital-signs/VitalSignsProcessor';
+import type { SignalQualityMetrics } from '../types/measurements';
 
 /**
  * HOOK DE SIGNOS VITALES - OPTIMIZADO
@@ -45,7 +46,8 @@ export const useVitalSignsProcessor = () => {
     bpm: number,
     rrData?: { intervals: number[], lastPeakTime: number | null, timestampNow?: number },
     /** PI (AC/DC) del PPGSignalProcessor — alinea SpO2/“clínico” con la perfusión real del dedo */
-    perfusionIndexFromPpg?: number
+    perfusionIndexFromPpg?: number,
+    sqmBundle?: Partial<SignalQualityMetrics>,
   ): VitalSignsResult => {
     const defaultResult: VitalSignsResult = {
       heartRate: { name: "HR", value: 0, unit: "bpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
@@ -60,7 +62,14 @@ export const useVitalSignsProcessor = () => {
     
     if (!processorRef.current) return defaultResult;
 
-    const result = processorRef.current.processSignal(value, quality, bpm, rrData, perfusionIndexFromPpg);
+    const result = processorRef.current.processSignal(
+      value,
+      quality,
+      bpm,
+      rrData,
+      perfusionIndexFromPpg,
+      sqmBundle,
+    );
     
     // Guardar la última ventana realmente válida para cierre/exportación
     if (

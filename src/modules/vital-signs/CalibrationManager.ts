@@ -107,6 +107,24 @@ export class CalibrationManager {
     };
   }
 
+  /** Aplica offsets de perfil BP vigente (referencia tensiómetro). */
+  public applyBloodPressureCalibration(
+    systolic: number,
+    diastolic: number,
+  ): { systolic: number; diastolic: number; applied: boolean } {
+    const profile = this.getActiveProfile('BP');
+    if (!profile || profile.expiresAt <= Date.now()) {
+      return { systolic, diastolic, applied: false };
+    }
+    const sbpOff = profile.coefficients.sbpOffset ?? profile.coefficients.systolicOffset ?? 0;
+    const dbpOff = profile.coefficients.dbpOffset ?? profile.coefficients.diastolicOffset ?? 0;
+    return {
+      systolic: systolic + sbpOff,
+      diastolic: diastolic + dbpOff,
+      applied: sbpOff !== 0 || dbpOff !== 0,
+    };
+  }
+
   public reset(): void {
     this.profiles.clear();
     this.activeProfileId = null;
