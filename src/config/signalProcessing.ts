@@ -23,7 +23,7 @@ export const PEAK_DETECTION_DEFAULTS = {
   /** Ventana para emitir pico respecto al frame actual (ms) */
   peakEmitWindowMs: 380,
   /** Acuerdo espectral mínimo antes de penalizar BPM instantáneo */
-  spectralAgreementMin: 0.38,
+  spectralAgreementMin: 0.28,
   /** Mínimo de muestras en ventana para correr ensemble */
   minSamplesEnsemble: 72,
   /** Integración Pan–Tompkins PPG (~180 ms de pulso sistólico típico a 30 Hz) */

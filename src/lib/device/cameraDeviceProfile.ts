@@ -52,9 +52,9 @@ const STRICT_TCL: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 'torchRe
   instantLostToUnstable: 2,
   instantLostToNoContact: 4,
   bufferResetAfterNoContact: 8,
-  allowSoloElgendiFusion: false,
-  gateRangeScale: 1,
-  peakConsensusMin: 0.35,
+  allowSoloElgendiFusion: true,
+  gateRangeScale: 0.85,
+  peakConsensusMin: 0.2,
 };
 
 export function inferCameraRuntimeHints(

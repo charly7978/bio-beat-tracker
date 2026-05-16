@@ -411,8 +411,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         (this.cameraHints.constrained &&
           (this.cachedPI >= VITAL_THRESHOLDS.FINGER.PULSE_HOLD_MIN_PI * 0.85 ||
             this.signalQuality >= 6)));
-    const displayQuality = fingerUi ? this.displaySqiEma : 0;
-    const rawSqiOut = fingerUi ? this.signalQuality : 0;
+    const signalPathActive = true;
+    const displayQuality = signalPathActive
+      ? fingerUi
+        ? this.displaySqiEma
+        : Math.round(this.displaySqiEma * 0.55)
+      : 0;
+    const rawSqiOut = signalPathActive ? this.signalQuality : 0;
 
     const now = timestamp;
     if (now - this.lastLogTime >= 2000) {
@@ -442,11 +447,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     this.onSignalReady({
       timestamp,
-      rawValue: fingerUi ? pulseSource.value : 0,
-      filteredValue: fingerUi ? enhanced : 0,
+      rawValue: signalPathActive ? pulseSource.value : 0,
+      filteredValue: signalPathActive ? enhanced : 0,
       quality: displayQuality,
-      fingerDetected: fingerUi,
-      contactState: fingerUi ? this.contactState : 'NO_CONTACT',
+      fingerDetected: signalPathActive && this.fingerDetected,
+      contactState: this.contactState,
       motionArtifact,
       roi: this.signalRoiFromMetrics(roi),
       perfusionIndex,

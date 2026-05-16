@@ -12,7 +12,7 @@ describe('cameraDeviceProfile', () => {
     expect(h.tclLike).toBe(true);
     expect(h.constrained).toBe(false);
     expect(h.fingerConfirmFrames).toBe(5);
-    expect(h.allowSoloElgendiFusion).toBe(false);
+    expect(h.allowSoloElgendiFusion).toBe(true);
   });
 
   it('Samsung/Motorola usan perfil tolerante por defecto', () => {

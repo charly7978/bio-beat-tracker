@@ -14,7 +14,6 @@ import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionSt
 import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
 import {
   createMeasurementSessionLatch,
-  isMeasurementPipelineLive,
   SESSION_LATCH,
   updateMeasurementSessionLatch,
 } from "@/lib/measurement/measurementSessionLatch";
@@ -689,8 +688,7 @@ const Index = () => {
         : { peakDetection: heartBeatResult.ensembleDiagnostics };
     setCurrentDiagnostics(mergedDiag);
 
-    const hasUsableContact =
-      lastSignal.fingerDetected && contactState !== 'NO_CONTACT';
+    const hasUsableContact = contactState !== 'NO_CONTACT';
 
     if (vitalSignsFrameCounter.current % 45 === 0) {
       syncCameraHints();
@@ -714,71 +712,40 @@ const Index = () => {
       nowT,
       heartBeatResult.isPeak,
     );
-    const sessionLive = measurementLatchRef.current.established;
     const lastPeakAt = heartBeatResult.rrData?.lastPeakTime ?? 0;
     const peakRecent =
-      lastPeakAt > 0 && nowT - lastPeakAt < SESSION_LATCH.MAX_PEAK_GAP_MS;
-
-    if (
-      heartBeatResult.isPeak &&
-      heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
-      heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX
-    ) {
-      lastGoodBpmRef.current = heartBeatResult.bpm;
-    }
+      heartBeatResult.isPeak ||
+      (lastPeakAt > 0 && nowT - lastPeakAt < SESSION_LATCH.MAX_PEAK_GAP_MS);
 
     const bpmOut =
+      peakRecent &&
       heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
       heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX
         ? heartBeatResult.bpm
-        : peakRecent
-          ? lastGoodBpmRef.current
-          : 0;
+        : 0;
 
     const hrReady =
       hasUsableContact &&
       peakRecent &&
-      bpmOut >= VITAL_THRESHOLDS.HR.MIN &&
-      bpmOut <= VITAL_THRESHOLDS.HR.MAX &&
-      (heartBeatResult.confidence >= minConf ||
-        (hints.constrained && bpmOut >= 38 && rawSqi >= 5));
-
-    const vitalsGate =
-      hasUsableContact &&
-      (hrReady ||
-        (sessionLive && bpmOut >= 35) ||
-        (hints.constrained && bpmOut >= 35 && rawSqi >= 5)) &&
-      (rawSqi >= Q.MIN_FOR_HR ||
-        sessionLive ||
-        (lastSignal.quality || 0) >= Q.MIN_FOR_HR) &&
-      (sessionLive ||
-        (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * hints.minPiScale);
+      bpmOut > 0 &&
+      (heartBeatResult.confidence >= minConf || rawSqi >= Q.MIN_FOR_HR);
 
     const pipelineLive =
-      hasUsableContact &&
-      (vitalsGate ||
-        isMeasurementPipelineLive(
-          measurementLatchRef.current,
-          hasUsableContact,
-          rawSqi,
-          nowT,
-        ));
+      hrReady &&
+      rawSqi >= Q.MIN_FOR_HR &&
+      (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * hints.minPiScale * 0.85;
 
-    const showWaveform =
-      hasUsableContact ||
-      (sessionLive && nowT - measurementLatchRef.current.lastContactMs < 2500);
+    const showWaveform = hasUsableContact;
 
     if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {
       lastSignalPushRef.current = nowT;
       setHeartbeatSignal(showWaveform ? signalValue : 0);
     }
 
-    const hrPublish = hrReady && peakRecent;
-
-    if (hrPublish) {
+    if (hrReady) {
       unstableFrameCounter.current = 0;
       const verdict = bpmSanityRef.current.push(bpmOut);
-      const blockHrUpdate = verdict.ok === false && !sessionLive;
+      const blockHrUpdate = verdict.ok === false;
       if (blockHrUpdate) {
         const msg = `BPM stream ${verdict.reason} (${verdict.detail})`;
         if (sanityErrorRef.current !== verdict.reason) {
@@ -806,8 +773,7 @@ const Index = () => {
             heartRate: {
               ...prev.heartRate,
               value: bpmOut,
-              status:
-                contactState === 'STABLE_CONTACT' || sessionLive ? 'VALID' : 'WARMUP',
+              status: contactState === 'STABLE_CONTACT' ? 'VALID' : 'WARMUP',
             },
             signalQuality: Math.round(
               (diag && typeof diag === 'object' && diag.sqm?.sqi != null
@@ -817,7 +783,7 @@ const Index = () => {
           }));
         }
       }
-    } else if (!sessionLive) {
+    } else {
       if (!hasUsableContact) {
         unstableFrameCounter.current++;
       } else if (bpmOut <= 0) {

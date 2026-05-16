@@ -37,12 +37,27 @@ export function updateMeasurementSessionLatch(
   nowMs: number,
   isPeak: boolean,
 ): MeasurementSessionLatch {
+  const peakStale =
+    latch.lastPeakMs > 0 && nowMs - latch.lastPeakMs > SESSION_LATCH.MAX_PEAK_GAP_MS;
+
   if (!hasUsableContact) {
     return {
       ...latch,
       goodStreak: 0,
       established:
-        latch.established && nowMs - latch.lastContactMs < SESSION_LATCH.CONTACT_GRACE_MS,
+        latch.established &&
+        !peakStale &&
+        nowMs - latch.lastContactMs < SESSION_LATCH.CONTACT_GRACE_MS,
+    };
+  }
+
+  if (peakStale) {
+    return {
+      established: false,
+      goodStreak: 0,
+      lastBpm: latch.lastBpm,
+      lastContactMs: nowMs,
+      lastPeakMs: latch.lastPeakMs,
     };
   }
 
