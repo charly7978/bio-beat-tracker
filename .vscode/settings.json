@@ -1,0 +1,8 @@
+{
+  "github-actions.use-enterprise": false,
+  "yaml.schemaStore.enable": true,
+  "yaml.validate": true,
+  "yaml.schemas": {
+    "https://json.schemastore.org/github-workflow.json": ".github/workflows/ci.yml"
+  }
+}
