@@ -51,8 +51,8 @@ export class HeartBeatProcessor {
 
   private lastDiagnostics: HeartBeatProcessDiagnostics = {};
   private lastEmittedPeakTime = 0;
-  /** Mantener BPM publicado entre latidos (~3 s a 45 BPM). */
-  private readonly BPM_PUBLISH_HOLD_MS = 4200;
+  /** Mantener BPM publicado entre latidos (~5 s a 55 BPM). */
+  private readonly BPM_PUBLISH_HOLD_MS = 5200;
   private readonly GATE_RANGE_MIN = 0.022;
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
   private placementMode: FingerPlacementMode = 'hybrid';
@@ -271,25 +271,27 @@ export class HeartBeatProcessor {
         if (instantBpm > 0) {
           const soloEmit =
             decision.reason.includes('SOLO');
-          const maxJump = soloEmit ? 0.28 : 0.4;
-          const acceptOutlier =
-            this.smoothBPM <= 0 ||
-            Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= maxJump;
-          if (acceptOutlier) {
-            if (this.smoothBPM === 0) {
-              this.smoothBPM = instantBpm;
+          const maxJump = soloEmit ? 0.18 : 0.28;
+          if (this.smoothBPM <= 0) {
+            this.smoothBPM = instantBpm;
+          } else {
+            const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
+            if (rel <= maxJump) {
+              const trust = clamp(0.2 + wScore * 0.28, 0.2, 0.45);
+              this.smoothBPM = this.smoothBPM * (1 - trust) + instantBpm * trust;
             } else {
-              const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
-              const trust = clamp(0.14 + wScore * 0.24, 0.14, 0.36);
-              const alpha = rel > 0.22 ? trust * 0.7 : rel > 0.12 ? trust : trust * 1.2;
-              this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
+              const dir = instantBpm > this.smoothBPM ? 1 : -1;
+              this.smoothBPM = Math.round(
+                this.smoothBPM * (1 + dir * maxJump),
+              );
             }
           }
         }
 
         if (
-          decision.reason.includes('DUAL') ||
-          (wScore >= 0.5 && this.rrIntervals.length >= 2)
+          decision.reason.includes('DUAL') &&
+          !decision.reason.includes('_FB') &&
+          (wScore >= 0.52 || this.rrIntervals.length >= 2)
         ) {
           this.vibrate();
           this.playBeep();
@@ -329,12 +331,12 @@ export class HeartBeatProcessor {
       }
     }
 
+    const rrBpm = bpmFromEmittedRr(this.rrIntervals);
     const publishBpm =
-      this.smoothBPM > 0 &&
+      this.fingerContactConfirmed &&
       peakAgeMs < this.BPM_PUBLISH_HOLD_MS &&
-      this.consecutivePeaks >= 1 &&
-      this.fingerContactConfirmed
-        ? Math.round(this.smoothBPM)
+      (rrBpm > 0 || this.smoothBPM > 0)
+        ? Math.round(rrBpm > 0 ? rrBpm : this.smoothBPM)
         : 0;
 
     const confidence = this.calculateConfidence(ensembleConf, isPeak);

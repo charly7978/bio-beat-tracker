@@ -7,6 +7,7 @@ import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import type { FingerPlacementMode } from '@/types/signal';
 import {
   PEAK_SCORE_THRESHOLDS,
+  passesRrPlausibility,
   rrMedianMs,
   scorePeakCandidate,
 } from './peakScoring';
@@ -30,9 +31,7 @@ export interface PeakEmitPolicyInput {
   fingerContactConfirmed?: boolean;
   nowMs?: number;
   emittedPeakCount?: number;
-  /** Tiempo desde el último pico emitido (ms). */
   peakStallMs?: number;
-  /** Tras stall prolongado: relajar arranque y ventana viva. */
   reacquireMode?: boolean;
   recentRrMs?: number[];
   sqi?: number;
@@ -44,7 +43,6 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     ens,
     lastEmittedPeakMs,
     minPeakConf,
-    consensusMin,
     allowSoloElgendi,
     sampleRateHz,
     windowSamples,
@@ -60,8 +58,7 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
   } = input;
 
   const stallReacquire =
-    reacquireMode ||
-    (fingerContactConfirmed && peakStallMs >= 1800);
+    reacquireMode || (fingerContactConfirmed && peakStallMs >= 2400);
 
   const minGap =
     VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS *
@@ -82,13 +79,9 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
   let bestScore = 0;
 
   const liveEdgeMs = stallReacquire
-    ? PEAK_DETECTION_DEFAULTS.peakEmitWindowMs * 1.25
-    : PEAK_DETECTION_DEFAULTS.peakEmitWindowMs;
+    ? PEAK_DETECTION_DEFAULTS.peakEmitWindowMs * 1.15
+    : PEAK_DETECTION_DEFAULTS.peakEmitWindowMs * 0.92;
   const liveEdgeSamples = Math.max(6, Math.round(sampleRateHz * (liveEdgeMs / 1000)));
-  const rrPlausibilityMaxDev =
-    emittedPeakCount < 4
-      ? PEAK_SCORE_THRESHOLDS.rrMedianMaxRelDev * 1.25
-      : PEAK_SCORE_THRESHOLDS.rrMedianMaxRelDev;
 
   const rankSource = (src: string | undefined): number => {
     if (src === 'dual') return 3;
@@ -100,7 +93,6 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
   for (let i = 0; i < ens.peakTimes.length; i++) {
     const t = ens.peakTimes[i] ?? 0;
     if (t <= 0 || t < lastEmittedPeakMs + minGap) continue;
-
     if (nowMs != null && t < nowMs - liveEdgeMs) continue;
 
     const idx = ens.peaks[i] ?? -1;
@@ -110,35 +102,10 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     }
 
     const src = ens.peakSources?.[i];
-
     const rrMs = lastEmittedPeakMs > 0 ? t - lastEmittedPeakMs : undefined;
-    if (
-      rrMs != null &&
-      prevRrMed > 0 &&
-      Math.abs(rrMs - prevRrMed) / prevRrMed > rrPlausibilityMaxDev
-    ) {
+    if (rrMs != null && prevRrMed > 0 && !passesRrPlausibility(rrMs, prevRrMed)) {
       continue;
     }
-
-    const dual =
-      src === 'dual' &&
-      ens.confidence >= minPeakConf * 0.65;
-    const soloEl =
-      fingerContactConfirmed &&
-      allowSoloElgendi &&
-      src === 'solo_elgendi' &&
-      elConf >= (placementMode === 'hybrid' ? 0.16 : 0.18) &&
-      spectralAgreement >= (stallReacquire ? 0.1 : 0.14);
-    const soloPan =
-      fingerContactConfirmed &&
-      allowSoloElgendi &&
-      (emittedPeakCount >= 1 || stallReacquire) &&
-      src === 'solo_pan' &&
-      panConf >= (stallReacquire ? 0.2 : 0.24) &&
-      elConf >= 0.08 &&
-      spectralAgreement >= (stallReacquire ? 0.12 : 0.18);
-
-    if (!dual && !soloEl && !soloPan) continue;
 
     const weightedScore =
       ens.peakScores?.[i] ??
@@ -154,10 +121,38 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
         prevRrMedianMs: prevRrMed > 0 ? prevRrMed : undefined,
       });
 
-    const minScore = dual
-      ? PEAK_SCORE_THRESHOLDS.dualMin * (stallReacquire ? 0.9 : 0.96)
-      : PEAK_SCORE_THRESHOLDS.soloMin * (stallReacquire ? 0.9 : 0.96);
-    if (weightedScore < minScore) continue;
+    const dual =
+      src === 'dual' &&
+      ens.confidence >= minPeakConf * 0.72 &&
+      weightedScore >= PEAK_SCORE_THRESHOLDS.dualMin;
+
+    const soloEl =
+      fingerContactConfirmed &&
+      allowSoloElgendi &&
+      emittedPeakCount >= 1 &&
+      src === 'solo_elgendi' &&
+      elConf >= (placementMode === 'hybrid' ? 0.2 : 0.22) &&
+      spectralAgreement >= 0.2 &&
+      weightedScore >= PEAK_SCORE_THRESHOLDS.soloMin;
+
+    const soloPan =
+      fingerContactConfirmed &&
+      allowSoloElgendi &&
+      emittedPeakCount >= 2 &&
+      src === 'solo_pan' &&
+      panConf >= 0.28 &&
+      elConf >= 0.14 &&
+      spectralAgreement >= 0.24 &&
+      weightedScore >= PEAK_SCORE_THRESHOLDS.soloMin + 0.04;
+
+    const bootOk =
+      emittedPeakCount >= 2 ||
+      stallReacquire ||
+      dual ||
+      (soloEl && weightedScore >= PEAK_SCORE_THRESHOLDS.soloMin + 0.06);
+
+    if (!bootOk) continue;
+    if (!dual && !soloEl && !soloPan) continue;
 
     const reason = dual ? 'DUAL_FUSED' : src === 'solo_pan' ? 'SOLO_PAN' : 'SOLO_ELGENDI';
     const rank = rankSource(src);
@@ -178,60 +173,6 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     return { emit: true, peakTimeMs: bestT, reason: bestReason, weightedScore: bestScore };
   }
 
-  // Respaldo: mejor candidato en borde vivo por índice (timestamps a veces van rezagados)
-  let fbT = 0;
-  let fbReason = '';
-  let fbScore = 0;
-  for (let i = 0; i < ens.peakTimes.length; i++) {
-    const t = ens.peakTimes[i] ?? 0;
-    if (t <= 0 || t < lastEmittedPeakMs + minGap) continue;
-    const idx = ens.peaks[i] ?? -1;
-    const nearLive =
-      nowMs == null
-        ? idx >= 0 && windowSamples - 1 - idx <= liveEdgeSamples
-        : t >= (nowMs ?? t) - liveEdgeMs;
-    if (!nearLive) continue;
-    const src = ens.peakSources?.[i];
-    const score =
-      ens.peakScores?.[i] ??
-      scorePeakCandidate({
-        source: src ?? 'solo_elgendi',
-        elConf,
-        panConf,
-        ensConf: ens.confidence,
-        spectralAgreement,
-        sqi,
-        perfusionIndex,
-      });
-    if (src === 'solo_pan' && emittedPeakCount < 1) continue;
-    const fbMin =
-      src === 'dual'
-        ? PEAK_SCORE_THRESHOLDS.dualMin * 0.92
-        : PEAK_SCORE_THRESHOLDS.soloMin * 0.94;
-    if (score < fbMin || !fingerContactConfirmed) continue;
-    if (!stallReacquire && src !== 'dual' && score < PEAK_SCORE_THRESHOLDS.soloMin) {
-      continue;
-    }
-    if (t > fbT || (t === fbT && score > fbScore)) {
-      fbT = t;
-      fbScore = score;
-      fbReason =
-        src === 'dual'
-          ? 'DUAL_FUSED'
-          : src === 'solo_pan'
-            ? 'SOLO_PAN'
-            : 'SOLO_ELGENDI';
-    }
-  }
-  if (fbT > 0) {
-    return {
-      emit: true,
-      peakTimeMs: fbT,
-      reason: `${fbReason}_FB`,
-      weightedScore: fbScore,
-    };
-  }
-
   return { emit: false, peakTimeMs: 0, reason: 'NO_NEW_PEAK' };
 }
 
@@ -248,7 +189,7 @@ export function bpmFromEmittedRr(rrMs: number[]): number {
   const med = sorted[Math.floor(sorted.length / 2)] ?? sorted[0]!;
   const trimmed =
     tail.length >= 3
-      ? tail.filter((d) => Math.abs(d - med) / med <= 0.22)
+      ? tail.filter((d) => Math.abs(d - med) / med <= 0.18)
       : tail;
   const use = trimmed.length >= 2 ? trimmed : tail;
   const sortedUse = [...use].sort((a, b) => a - b);
