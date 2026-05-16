@@ -63,11 +63,9 @@ export const VITAL_THRESHOLDS = {
     MIN_RED_INTENSITY: 36,
     MIN_RED_DOMINANCE: 7,
     MIN_RG_RATIO: 1.04,
-    MIN_COVERAGE: 0.07,
-    /** Adquisición por cobertura alta en el recuadro (dedo grande / flash encendido) */
-    ACQUIRE_COVERAGE_MIN: 0.14,
-    ACQUIRE_COVERAGE_MIN_RED: 24,
-    ACQUIRE_COVERAGE_RG: 1.02,
+    MIN_COVERAGE: 0.10,
+    /** R/B mínimo — dedo absorbe azul; flash sin dedo suele fallar esto */
+    HEMOGLOBIN_MIN_RB: 1.18,
     SOFT_COVERAGE_MULT: 0.85,
     /** Adquisición estricta */
     ACQUIRE_RB_STRICT: 1.2,
@@ -101,7 +99,7 @@ export const VITAL_THRESHOLDS = {
     /** Pulsación ROI (CV de rawRed) — tercera vía de adquisición */
     ROI_PULSE_BUFFER: 24,
     ROI_PULSE_MIN_SAMPLES: 12,
-    ROI_RED_CV_MIN: 0.022,
+    ROI_RED_CV_MIN: 0.032,
     PULSATILE_ACQUIRE_MIN_RED: 26,
     PULSATILE_ACQUIRE_RG: 1.02,
     PULSATILE_ACQUIRE_RB: 1.05,
@@ -116,11 +114,15 @@ export const VITAL_THRESHOLDS = {
     TILE_MIN_RG: 1.02,
     TILE_MIN_COMBINED_SCORE: 0.21,
     TILE_DOMINANCE_SCORE_OFFSET: 5,
-    MIN_FINGER_TILES_FOR_WEIGHTING: 2,
-    /** Frames consecutivos para confirmar dedo (menor = captación más rápida) */
-    FINGER_CONFIRM_FRAMES: 2,
-    /** softHold al perder instantáneo */
-    SOFT_HOLD_COVERAGE: 0.09,
+    MIN_FINGER_TILES_FOR_WEIGHTING: 3,
+    FINGER_CONFIRM_FRAMES: 5,
+    /** Tras perder firma instantánea: frames hasta degradar (≈0,5 s @ 30 fps) */
+    INSTANT_LOST_TO_UNSTABLE: 4,
+    INSTANT_LOST_TO_NO_CONTACT: 12,
+    FINGER_LOST_FRAMES_UI: 18,
+    UNSTABLE_GRACE_FRAMES: 45,
+    /** softHold al perder instantáneo — solo si la firma RGB aún es válida */
+    SOFT_HOLD_COVERAGE: 0.11,
     SOFT_HOLD_DOMINANCE_DELTA: 6,
     SOFT_HOLD_FINGER_SCORE: 0.14,
     SOFT_HOLD_RG: 1.04,

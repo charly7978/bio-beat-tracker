@@ -195,6 +195,14 @@ const Index = () => {
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
   /** Guía de colocación del dedo; se resetea al iniciar medición */
   const [fingerGuideDismissed, setFingerGuideDismissed] = useState(false);
+  const placementUiRef = useRef({
+    fingerDetected: false,
+    contactState: 'NO_CONTACT' as ContactState,
+    coverageRatio: 0,
+    hint: '',
+  });
+  const placementBumpAtRef = useRef(0);
+  const [, bumpPlacementUi] = useState(0);
 
   // ---- Telemetría de rendimiento (opt-in) ----
   const telemetryOn = false;
@@ -623,12 +631,27 @@ const Index = () => {
       lastSignal.contactState ??
       (lastSignal.fingerDetected ? "UNSTABLE_CONTACT" : "NO_CONTACT");
     const diag = lastSignal.diagnostics;
+    const nowT = performance.now();
+
+    const hrContact: ContactState =
+      contactState === 'STABLE_CONTACT' ? 'STABLE_CONTACT' : 'NO_CONTACT';
 
     const heartBeatResult = processHeartBeat(
       signalValue,
-      contactState,
+      hrContact,
       lastSignal.timestamp
     );
+
+    placementUiRef.current = {
+      fingerDetected: lastSignal.fingerDetected,
+      contactState,
+      coverageRatio: diag?.coverageRatio ?? 0,
+      hint: diag?.placementHint ?? placementUiRef.current.hint,
+    };
+    if (nowT - placementBumpAtRef.current >= 66) {
+      placementBumpAtRef.current = nowT;
+      bumpPlacementUi((n) => n + 1);
+    }
 
     const mergedDiag =
       diag && typeof diag === 'object'
@@ -636,13 +659,13 @@ const Index = () => {
         : { peakDetection: heartBeatResult.ensembleDiagnostics };
     setCurrentDiagnostics(mergedDiag);
 
-    const hasUsableContact = contactState !== 'NO_CONTACT' && lastSignal.fingerDetected;
+    const hasUsableContact =
+      lastSignal.fingerDetected && contactState !== 'NO_CONTACT';
     const stableHumanSignal =
-      hasUsableContact &&
-      (lastSignal.quality || 0) >= 2 &&
-      (lastSignal.perfusionIndex || 0) >= VITAL_THRESHOLDS.QUALITY.MIN_PI * 0.22;
-
-    const nowT = performance.now();
+      contactState === 'STABLE_CONTACT' &&
+      lastSignal.fingerDetected &&
+      (lastSignal.quality || 0) >= VITAL_THRESHOLDS.QUALITY.MIN_FOR_HR &&
+      (lastSignal.perfusionIndex || 0) >= VITAL_THRESHOLDS.QUALITY.MIN_PI * 0.55;
     if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {
       lastSignalPushRef.current = nowT;
       // Siempre dibujar la onda si hay contacto, incluso si la calidad es baja
@@ -918,14 +941,11 @@ const Index = () => {
           />
           <FingerPlacementOverlay
             visible={isMonitoring && !showResults}
-            fingerDetected={!!lastSignal?.fingerDetected}
-            contactState={
-              lastSignal?.contactState ??
-              (lastSignal?.fingerDetected ? "UNSTABLE_CONTACT" : "NO_CONTACT")
-            }
-            coverageRatio={lastSignal?.diagnostics?.coverageRatio ?? 0}
+            fingerDetected={placementUiRef.current.fingerDetected}
+            contactState={placementUiRef.current.contactState}
+            coverageRatio={placementUiRef.current.coverageRatio}
             hint={
-              lastSignal?.diagnostics?.placementHint ??
+              placementUiRef.current.hint ||
               "Cubre el recuadro con la yema del índice sobre flash y lente"
             }
           />

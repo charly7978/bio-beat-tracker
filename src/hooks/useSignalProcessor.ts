@@ -26,6 +26,10 @@ export const useSignalProcessor = () => {
   // Throttle del snapshot UI (lastSignal): ~10 Hz es suficiente para HUD.
   const lastUiPushRef = useRef<number>(0);
   const UI_SNAPSHOT_INTERVAL_MS = 100;
+  const lastUiContactRef = useRef<{ finger: boolean; contact: string }>({
+    finger: false,
+    contact: 'NO_CONTACT',
+  });
 
   // Single-instance lifecycle guard.
   const instanceLock = useRef<boolean>(false);
@@ -48,7 +52,17 @@ export const useSignalProcessor = () => {
       }
       // 2) Snapshot UI throttleado a ~10 Hz para HUD/diagnóstico.
       const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      if (nowMs - lastUiPushRef.current >= UI_SNAPSHOT_INTERVAL_MS) {
+      const contactChanged =
+        signal.fingerDetected !== lastUiContactRef.current.finger ||
+        signal.contactState !== lastUiContactRef.current.contact;
+      if (contactChanged) {
+        lastUiContactRef.current = {
+          finger: signal.fingerDetected,
+          contact: signal.contactState,
+        };
+        lastUiPushRef.current = nowMs;
+        setLastSignal(signal);
+      } else if (nowMs - lastUiPushRef.current >= UI_SNAPSHOT_INTERVAL_MS) {
         lastUiPushRef.current = nowMs;
         setLastSignal(signal);
       }
@@ -99,6 +113,7 @@ export const useSignalProcessor = () => {
     setIsProcessing(false);
     setLastSignal(null);
     lastUiPushRef.current = 0;
+    lastUiContactRef.current = { finger: false, contact: 'NO_CONTACT' };
   }, []);
 
 

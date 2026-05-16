@@ -21,19 +21,23 @@ export default function FingerPlacementOverlay({
   if (!visible) return null;
 
   const pct = Math.round(coverageRatio * 100);
-  const border =
-    contactState === 'STABLE_CONTACT'
-      ? 'border-emerald-400 shadow-[0_0_24px_rgba(52,211,153,0.45)]'
-      : fingerDetected
-        ? 'border-amber-400/90 shadow-[0_0_18px_rgba(251,191,36,0.35)]'
-        : 'border-white/50 shadow-[0_0_12px_rgba(255,255,255,0.15)] animate-pulse';
+  const minCov = VITAL_THRESHOLDS.FINGER.MIN_COVERAGE;
+  const signalOk =
+    fingerDetected &&
+    contactState === 'STABLE_CONTACT' &&
+    coverageRatio >= minCov;
 
-  const label =
-    contactState === 'STABLE_CONTACT'
-      ? 'SEÑAL OK'
-      : fingerDetected
-        ? 'AJUSTANDO…'
-        : 'COLOCA EL DEDO';
+  const border = signalOk
+    ? 'border-emerald-400 shadow-[0_0_24px_rgba(52,211,153,0.45)]'
+    : fingerDetected
+      ? 'border-amber-400/90 shadow-[0_0_18px_rgba(251,191,36,0.35)]'
+      : 'border-white/50 shadow-[0_0_12px_rgba(255,255,255,0.15)] animate-pulse';
+
+  const label = signalOk
+    ? 'SEÑAL OK'
+    : fingerDetected
+      ? 'AJUSTANDO…'
+      : 'COLOCA EL DEDO';
 
   return (
     <div className="pointer-events-none absolute inset-0 z-[15] flex flex-col items-center justify-center">

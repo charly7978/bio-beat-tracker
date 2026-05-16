@@ -17,6 +17,7 @@ import {
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 import { getFingerPlacementHint } from '../../lib/finger/fingerPlacementHint';
+import { hasFingerHemoglobinSignature } from '../../lib/finger/fingerContactSignature';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -127,9 +128,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private fingerConfidenceCount = 0;
   private fingerLostCount = 0;
   private stableContactCount = 0;
+  private instantLostStreak = 0;
+  private lastInstantFinger = false;
   private readonly FINGER_CONFIRM_FRAMES = VITAL_THRESHOLDS.FINGER.FINGER_CONFIRM_FRAMES;
-  private readonly FINGER_LOST_FRAMES = 90;     // ~3s tolerancia antes de degradar
-  private readonly UNSTABLE_GRACE = 120;        // ~4s antes de NO_CONTACT total
 
   // Suavizado temporal — más lentos = más estable
   private smoothedRed = 0;
@@ -226,6 +227,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     if (this.contactState === 'NO_CONTACT') {
       this.signalQuality = 0;
+      Object.assign(this.diagStatusState, createDiagnosticStatusState());
       this.onSignalReady({
         timestamp,
         rawValue: 0,
@@ -289,6 +291,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
     // Calcular PI UNA sola vez por frame — todos los consumidores leen del cache.
     this.cachedPI = this.calculatePerfusionIndex();
+    this.reconcileStableContact();
 
     // Multi-source extraction
     const pulseSource = this.extractBestPulseSignal(roi.rawRed, roi.rawGreen, roi.rawBlue, motionArtifact);
@@ -407,65 +410,110 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   // === ESTADO DE CONTACTO UNIFICADO ===
   private updateContactState(roi: ROIMetrics): void {
     const previousState = this.contactState;
+    const F = VITAL_THRESHOLDS.FINGER;
     const instantDetected = this.detectFingerInstant(roi);
+    this.lastInstantFinger = instantDetected;
 
     if (instantDetected) {
+      this.instantLostStreak = 0;
       this.fingerLostCount = 0;
       this.fingerConfidenceCount = Math.min(this.fingerConfidenceCount + 1, 100);
       this.stableContactCount++;
 
       if (this.fingerConfidenceCount >= this.FINGER_CONFIRM_FRAMES) {
         this.fingerDetected = true;
-        // Require real perfusion for STABLE — not just visual contact
-        this.contactState =
-          this.stableContactCount >= VITAL_THRESHOLDS.QUALITY.STABLE_FRAMES_REQ &&
-          this.cachedPI > VITAL_THRESHOLDS.QUALITY.MIN_PI * 0.78
-            ? 'STABLE_CONTACT'
-            : 'UNSTABLE_CONTACT';
+        this.contactState = 'UNSTABLE_CONTACT';
       }
     } else {
-      // Decremento lento — no perder confianza por un solo frame malo
-      this.fingerConfidenceCount = Math.max(0, this.fingerConfidenceCount - 0.5);
+      this.instantLostStreak++;
+      this.fingerConfidenceCount = Math.max(0, this.fingerConfidenceCount - 1);
       this.fingerLostCount++;
-      // stableContactCount decrementa lento para no perder STABLE por glitches
-      this.stableContactCount = Math.max(0, this.stableContactCount - 0.3);
+      this.stableContactCount = Math.max(0, this.stableContactCount - 1);
 
-      if (this.fingerDetected) {
-        const F = VITAL_THRESHOLDS.FINGER;
-        const softHold =
-          this.smoothedCoverage > F.SOFT_HOLD_COVERAGE &&
-          (this.smoothedRed - (this.smoothedGreen + this.smoothedBlue) / 2) > F.SOFT_HOLD_DOMINANCE_DELTA &&
-          this.smoothedFingerScore > F.SOFT_HOLD_FINGER_SCORE &&
-          (this.smoothedRed / Math.max(1, this.smoothedGreen)) > F.SOFT_HOLD_RG;
+      const snap = this.rgbSnapshotFromRoi(roi);
+      const softHold =
+        this.fingerDetected &&
+        this.instantLostStreak < F.INSTANT_LOST_TO_UNSTABLE &&
+        hasFingerHemoglobinSignature(snap);
 
-        if (softHold || this.fingerLostCount < this.FINGER_LOST_FRAMES) {
-          this.contactState = 'UNSTABLE_CONTACT';
-        } else if (this.fingerLostCount < this.UNSTABLE_GRACE) {
-          this.contactState = 'UNSTABLE_CONTACT';
-          // Don't reset buffers yet
-        } else {
-          this.contactState = 'NO_CONTACT';
-          this.fingerDetected = false;
-          this.stableContactCount = 0;
-          this.resetSignalTrackingBuffers();
-          this.resetBaselines();
-        }
+      if (softHold) {
+        this.contactState = 'UNSTABLE_CONTACT';
+      } else if (
+        this.fingerDetected &&
+        this.instantLostStreak < F.INSTANT_LOST_TO_NO_CONTACT &&
+        this.fingerLostCount < F.FINGER_LOST_FRAMES_UI
+      ) {
+        this.contactState = 'UNSTABLE_CONTACT';
+      } else if (
+        this.fingerDetected &&
+        this.fingerLostCount < F.UNSTABLE_GRACE_FRAMES
+      ) {
+        this.contactState = 'UNSTABLE_CONTACT';
       } else {
-        this.contactState = 'NO_CONTACT';
+        this.forceNoContact();
       }
     }
 
-    // Resetear buffers solo al entrar en contacto desde NO_CONTACT
     if (previousState === 'NO_CONTACT' && this.contactState !== 'NO_CONTACT') {
       this.resetSignalTrackingBuffers();
     }
+  }
+
+  /** STABLE solo con PI real ya calculado en este frame (no en updateContactState). */
+  private reconcileStableContact(): void {
+    if (!this.fingerDetected || !this.lastInstantFinger) {
+      if (this.contactState === 'STABLE_CONTACT') {
+        this.contactState = 'UNSTABLE_CONTACT';
+      }
+      return;
+    }
+    const minPi = VITAL_THRESHOLDS.QUALITY.MIN_PI;
+    const stable =
+      this.stableContactCount >= VITAL_THRESHOLDS.QUALITY.STABLE_FRAMES_REQ &&
+      this.cachedPI >= minPi * 0.9 &&
+      this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE;
+    this.contactState = stable ? 'STABLE_CONTACT' : 'UNSTABLE_CONTACT';
+  }
+
+  private forceNoContact(): void {
+    this.contactState = 'NO_CONTACT';
+    this.fingerDetected = false;
+    this.fingerConfidenceCount = 0;
+    this.stableContactCount = 0;
+    this.instantLostStreak = 0;
+    this.lastInstantFinger = false;
+    this.decaySmoothedRgbFast();
+    this.resetSignalTrackingBuffers();
+    this.resetBaselines();
+    this.roiRedPulseRing.reset();
+    this.lastRoiRedCv = 0;
+  }
+
+  private decaySmoothedRgbFast(): void {
+    const k = 0.55;
+    this.smoothedRed *= 1 - k;
+    this.smoothedGreen *= 1 - k;
+    this.smoothedBlue *= 1 - k;
+    this.smoothedCoverage *= 1 - k;
+    this.smoothedFingerScore *= 1 - k;
+    if (this.smoothedRed < 2) this.smoothedRed = 0;
+    if (this.smoothedCoverage < 0.02) this.smoothedCoverage = 0;
+  }
+
+  private rgbSnapshotFromRoi(roi: ROIMetrics) {
+    return {
+      red: this.smoothedRed || roi.rawRed,
+      green: this.smoothedGreen || roi.rawGreen,
+      blue: this.smoothedBlue || roi.rawBlue,
+      coverage: roi.coverageRatio,
+      fingerScore: roi.fingerScore,
+    };
   }
 
   private detectFingerInstant(roi: ROIMetrics): boolean {
     const F = VITAL_THRESHOLDS.FINGER;
     const { rawRed, rawGreen, rawBlue, coverageRatio, fingerScore } = roi;
 
-    // Smooth inputs
     if (this.smoothedRed === 0) {
       this.smoothedRed = rawRed;
       this.smoothedGreen = rawGreen;
@@ -482,85 +530,58 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.smoothedFingerScore = this.smoothedFingerScore * (1 - ca) + fingerScore * ca;
     }
 
-    const r = this.smoothedRed;
-    const g = this.smoothedGreen;
-    const b = this.smoothedBlue;
-    const totalIntensity = r + g + b;
-    const redDominance = r - (g + b) / 2;
-    const rgRatio = r / Math.max(1, g);
-    const rbRatio = r / Math.max(1, b);
-    const notBlownOut = !(r > 254 && g > 254 && b > 254);
-
-    if (this.fingerDetected) {
-      const maintainContact =
-        r > F.MAINTAIN_MIN_RED &&
-        rgRatio > F.MAINTAIN_RG &&
-        rbRatio > F.MAINTAIN_RB &&
-        redDominance > F.MAINTAIN_DOMINANCE &&
-        this.smoothedCoverage > F.MAINTAIN_COVERAGE &&
-        notBlownOut;
-      const pulsatilityHold =
-        this.cachedPI > F.PULSE_HOLD_MIN_PI &&
-        r > F.PULSE_HOLD_MIN_RED &&
-        rgRatio > F.PULSE_HOLD_RG &&
-        rbRatio > F.PULSE_HOLD_RB &&
-        this.smoothedCoverage > F.PULSE_HOLD_COVERAGE &&
-        notBlownOut &&
-        this.motionScore < F.PULSE_HOLD_MAX_MOTION;
-      return maintainContact || pulsatilityHold;
+    const snap = this.rgbSnapshotFromRoi(roi);
+    if (!hasFingerHemoglobinSignature(snap)) {
+      return false;
     }
 
-    const acquireContact =
-      r > F.MIN_RED_INTENSITY &&
-      rgRatio > F.MIN_RG_RATIO &&
-      rbRatio > F.ACQUIRE_RB_STRICT &&
-      redDominance > F.MIN_RED_DOMINANCE &&
-      totalIntensity > F.ACQUIRE_INTENSITY_MIN &&
-      totalIntensity < F.ACQUIRE_INTENSITY_MAX &&
-      this.smoothedCoverage > F.MIN_COVERAGE &&
-      this.smoothedFingerScore > F.ACQUIRE_SMOOTHED_FINGER_MIN &&
-      this.motionScore < F.ACQUIRE_MAX_MOTION_STRICT &&
-      notBlownOut;
+    const r = snap.red;
+    const g = Math.max(1, snap.green);
+    const b = Math.max(1, snap.blue);
+    const totalIntensity = r + g + b;
+    const redDominance = r - (g + b) / 2;
+    const rgRatio = r / g;
+    const rbRatio = r / b;
+    const notBlownOut = !(r > 254 && g > 254 && b > 254);
+    if (!notBlownOut || this.motionScore > F.ACQUIRE_MAX_MOTION_SOFT) {
+      return false;
+    }
 
-    const acquireSoft =
-      r > F.ACQUIRE_SOFT_MIN_RED &&
-      rgRatio > F.ACQUIRE_SOFT_RG &&
-      rbRatio > F.ACQUIRE_SOFT_RB &&
-      redDominance > F.ACQUIRE_SOFT_DOMINANCE &&
-      totalIntensity > F.ACQUIRE_SOFT_INTENSITY_MIN &&
-      totalIntensity < F.ACQUIRE_SOFT_INTENSITY_MAX &&
-      this.smoothedCoverage > F.MIN_COVERAGE * F.SOFT_COVERAGE_MULT &&
-      this.smoothedFingerScore > F.ACQUIRE_SOFT_SMOOTHED_FINGER &&
-      this.motionScore < F.ACQUIRE_MAX_MOTION_SOFT &&
-      notBlownOut &&
-      roi.fingerScore > F.ACQUIRE_SOFT_FINGER_SCORE_ROI;
-
-    const acquirePulsatile =
-      this.lastRoiRedCv >= F.ROI_RED_CV_MIN &&
-      r >= F.PULSATILE_ACQUIRE_MIN_RED &&
-      rgRatio > F.PULSATILE_ACQUIRE_RG &&
-      rbRatio > F.PULSATILE_ACQUIRE_RB &&
-      redDominance > F.PULSATILE_ACQUIRE_MIN_DOMINANCE &&
-      this.smoothedCoverage > F.PULSATILE_ACQUIRE_COVERAGE &&
-      roi.fingerScore > F.PULSATILE_ACQUIRE_FINGER_ROI &&
-      this.motionScore < F.PULSATILE_ACQUIRE_MAX_MOTION &&
-      notBlownOut;
-
-    const acquireByCoverage =
-      this.smoothedCoverage >= F.ACQUIRE_COVERAGE_MIN &&
-      r >= F.ACQUIRE_COVERAGE_MIN_RED &&
-      rgRatio > F.ACQUIRE_COVERAGE_RG &&
-      redDominance > F.MIN_RED_DOMINANCE * 0.55 &&
-      this.motionScore < F.ACQUIRE_MAX_MOTION_SOFT &&
-      notBlownOut;
-
-    if (acquireContact && this.frameCount % 30 === 0) {
-      log.info(
-        `[Finger Acquisition] R:${r.toFixed(1)} G:${g.toFixed(1)} B:${b.toFixed(1)} R/G:${rgRatio.toFixed(2)} R/B:${rbRatio.toFixed(2)} CV:${this.lastRoiRedCv.toFixed(4)}`,
+    if (this.fingerDetected) {
+      return (
+        hasFingerHemoglobinSignature({
+          red: rawRed,
+          green: rawGreen,
+          blue: rawBlue,
+          coverage: coverageRatio,
+          fingerScore,
+        }) &&
+        (rbRatio >= F.MAINTAIN_RB || this.cachedPI > F.PULSE_HOLD_MIN_PI)
       );
     }
 
-    return acquireContact || acquireSoft || acquirePulsatile || acquireByCoverage;
+    const strictAcquire =
+      rbRatio >= F.ACQUIRE_RB_STRICT &&
+      totalIntensity >= F.ACQUIRE_INTENSITY_MIN &&
+      totalIntensity <= F.ACQUIRE_INTENSITY_MAX &&
+      this.smoothedCoverage >= F.MIN_COVERAGE &&
+      this.smoothedFingerScore >= F.ACQUIRE_SMOOTHED_FINGER_MIN;
+
+    const softAcquire =
+      rbRatio >= F.ACQUIRE_SOFT_RB &&
+      totalIntensity >= F.ACQUIRE_SOFT_INTENSITY_MIN &&
+      this.smoothedCoverage >= F.MIN_COVERAGE * F.SOFT_COVERAGE_MULT &&
+      roi.fingerScore >= F.ACQUIRE_SOFT_FINGER_SCORE_ROI &&
+      redDominance >= F.ACQUIRE_SOFT_DOMINANCE;
+
+    const pulsatileAcquire =
+      this.lastRoiRedCv >= F.ROI_RED_CV_MIN &&
+      rbRatio >= F.HEMOGLOBIN_MIN_RB &&
+      this.smoothedCoverage >= F.PULSATILE_ACQUIRE_COVERAGE &&
+      roi.fingerScore >= F.PULSATILE_ACQUIRE_FINGER_ROI &&
+      redDominance >= F.PULSATILE_ACQUIRE_MIN_DOMINANCE;
+
+    return strictAcquire || softAcquire || pulsatileAcquire;
   }
 
   private computeRoiRect(width: number, height: number) {
@@ -1031,6 +1052,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.fingerConfidenceCount = 0;
     this.fingerLostCount = 0;
     this.stableContactCount = 0;
+    this.instantLostStreak = 0;
+    this.lastInstantFinger = false;
     this.smoothedRed = 0;
     this.smoothedGreen = 0;
     this.smoothedBlue = 0;
