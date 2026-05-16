@@ -64,15 +64,9 @@ export const useSaveMeasurement = () => {
 
       const vs = data.vitalSigns;
       const hr = Math.round(vs.heartRate.value ?? 0);
-      const spo2 = vs.spo2.status === 'VALID' && vs.spo2.value != null ? Math.round(vs.spo2.value) : 0;
-      const sys =
-        vs.bloodPressure.status === 'VALID' && vs.bloodPressure.value
-          ? Math.round(vs.bloodPressure.value.systolic)
-          : 0;
-      const dia =
-        vs.bloodPressure.status === 'VALID' && vs.bloodPressure.value
-          ? Math.round(vs.bloodPressure.value.diastolic)
-          : 0;
+      const spo2 = Math.round(vs.spo2.value ?? 0);
+      const sys = Math.round(vs.bloodPressure.value?.systolic ?? 0);
+      const dia = Math.round(vs.bloodPressure.value?.diastolic ?? 0);
 
       const measurementRecord = {
         user_id: user.id,

@@ -18,7 +18,7 @@ interface PPGSignalMeterProps {
   } | null;
   preserveResults?: boolean;
   isPeak?: boolean;
-  bpm?: number;
+  bpm?: number | null;
   spo2?: number;
   rrIntervals?: number[];
   elapsedTime?: number;
@@ -100,7 +100,7 @@ const PPGSignalMeter = ({
   rawArrhythmiaData,
   preserveResults = false,
   isPeak = false,
-  bpm = 0,
+  bpm = null,
   spo2 = 0,
   rrIntervals = [],
   elapsedTime = 0,
@@ -217,6 +217,8 @@ const PPGSignalMeter = ({
       bpmStatsRef.current = { min: 0, max: 0, sum: 0, n: 0 };
       bpmTrendRef.current = [];
       pendingTrendArrRef.current = false;
+      smoothedBpmRef.current = 0;
+    } else if (!bpm || bpm <= 0) {
       smoothedBpmRef.current = 0;
     }
   }, [value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus, arrhythmiaCount, isMonitoring, diagnostics]);
@@ -430,7 +432,10 @@ const PPGSignalMeter = ({
     ctx.stroke();
 
     // === HR ===
-    const dispBpm = Math.round(smoothedBpmRef.current || bpm);
+    const { isFingerDetected: fingerOn, preserveResults: preserve } = propsRef.current;
+    const dispBpm = Math.round(
+      (!fingerOn && !preserve ? 0 : smoothedBpmRef.current) || bpm || 0,
+    );
     const hrColor = dispBpm <= 0 ? COLORS.TEXT_DIM
       : dispBpm < 50 ? COLORS.TEXT_DANGER
       : dispBpm < 60 ? COLORS.TEXT_WARN
@@ -746,7 +751,7 @@ const PPGSignalMeter = ({
       } else {
         beatArrhythmiaRef.current = false;
       }
-      const storedRR = Math.round(lastRR);
+      const storedRR = isPhysiologicalRR(lastRR) ? Math.round(lastRR) : 0;
       beatHistoryRef.current.push({
         isArrhythmia: beatArrhythmiaRef.current,
         time: now - VISUAL_DELAY_MS, // Sincronizar el latido con el pico real
@@ -1008,7 +1013,7 @@ const PPGSignalMeter = ({
       const p1 = visiblePeaks[i];
       const p2 = visiblePeaks[i + 1];
       const ibiMs = Math.abs(p2.time - p1.time);
-      if (ibiMs > 270 && ibiMs < 2200) {
+      if (isPhysiologicalRR(ibiMs)) {
         const midX = (p1.x + p2.x) / 2;
         const topY = Math.min(p1.y, p2.y) - 18;
         ctx.strokeStyle = 'rgba(103,232,249,0.45)';

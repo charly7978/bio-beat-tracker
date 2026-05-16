@@ -510,12 +510,20 @@ const Index = () => {
     
     const savedResults = resetVitalSigns();
     
-    // Guardar medición en la base de datos automáticamente
-    if (savedResults || vitalSigns.spo2.value > 0) {
-      const dataToSave = savedResults || vitalSigns;
+    const dataToSave = savedResults ?? vitalSignsRef.current;
+    const sqForSave = Math.round(
+      dataToSave.signalQuality ?? lastSignal?.quality ?? 0,
+    );
+    const hasMeasurable =
+      (dataToSave.heartRate.value != null && dataToSave.heartRate.value > 0) ||
+      (dataToSave.spo2.value != null &&
+        dataToSave.spo2.value >= VITAL_THRESHOLDS.SPO2.MIN_VALID) ||
+      (dataToSave.bloodPressure.value?.systolic ?? 0) > 0;
+
+    if (hasMeasurable) {
       await saveMeasurement({
         vitalSigns: dataToSave,
-        signalQuality: lastSignal?.quality || 0
+        signalQuality: sqForSave,
       });
     }
     
@@ -622,10 +630,12 @@ const Index = () => {
   const VITALS_PUSH_THROTTLE_MS = 300;
   const RR_PUSH_THROTTLE_MS = 250;
   const SIGNAL_PUSH_THROTTLE_MS = 33; // ~30 Hz a la onda (ya throttleada por el monitor RAF)
+  const DIAG_PUSH_THROTTLE_MS = 200;
 
   // Hot path: corre por cada frame de cámara SIN pasar por React.
   // Toda la lógica DSP vive en refs; sólo se emite a React con throttle.
   const [currentDiagnostics, setCurrentDiagnostics] = useState<any>(null);
+  const lastDiagPushRef = useRef(0);
 
   const acquisitionStatusLabel = React.useMemo(() => {
     if (!lastSignal) return "WARMUP";
@@ -699,7 +709,10 @@ const Index = () => {
       diag && typeof diag === 'object'
         ? { ...diag, peakDetection: heartBeatResult.ensembleDiagnostics }
         : { peakDetection: heartBeatResult.ensembleDiagnostics };
-    setCurrentDiagnostics(mergedDiag);
+    if (nowT - lastDiagPushRef.current >= DIAG_PUSH_THROTTLE_MS) {
+      lastDiagPushRef.current = nowT;
+      setCurrentDiagnostics(mergedDiag);
+    }
 
     const bpmForLatch = heartBeatResult.bpm > 0 ? heartBeatResult.bpm : lastGoodBpmRef.current;
     if (bpmForLatch > 0) lastGoodBpmRef.current = bpmForLatch;
@@ -744,7 +757,6 @@ const Index = () => {
       vitalsDspReady,
       fullVitalsReady,
       hrDisplayReady: hrReady,
-      pipelineLive,
     } = readiness;
 
     const showWaveform = hasUsableContact;
@@ -811,6 +823,34 @@ const Index = () => {
           unstableFrameCounter.current + 1,
           UNSTABLE_ZERO_THRESHOLD,
         );
+        const STALE_FINGER_NO_BPM = 90;
+        if (
+          hasUsableContact &&
+          unstableFrameCounter.current === STALE_FINGER_NO_BPM
+        ) {
+          setVitalSigns(prev => ({
+            ...prev,
+            spo2: { ...prev.spo2, value: 0, status: 'NO_VALID_SIGNAL' },
+            bloodPressure: {
+              ...prev.bloodPressure,
+              value: { systolic: 0, diastolic: 0 },
+              status: 'NO_VALID_SIGNAL',
+            },
+          }));
+          vitalSignsRef.current = {
+            ...vitalSignsRef.current,
+            spo2: {
+              ...vitalSignsRef.current.spo2,
+              value: 0,
+              status: 'NO_VALID_SIGNAL',
+            },
+            bloodPressure: {
+              ...vitalSignsRef.current.bloodPressure,
+              value: { systolic: 0, diastolic: 0 },
+              status: 'NO_VALID_SIGNAL',
+            },
+          };
+        }
       } else {
         unstableFrameCounter.current = Math.max(0, unstableFrameCounter.current - 2);
       }
@@ -849,18 +889,25 @@ const Index = () => {
     const peakEmitReason =
       (heartBeatResult.ensembleDiagnostics as { emitReason?: string } | undefined)
         ?.emitReason;
-    const fusedPeak =
+    const emittedPeak =
       hasUsableContact &&
       heartBeatResult.isPeak &&
-      peakEmitReason === 'DUAL_FUSED';
+      (peakEmitReason === 'DUAL_FUSED' || peakEmitReason === 'SOLO_ELGENDI');
 
-    if (fusedPeak) {
+    if (
+      hasUsableContact &&
+      heartBeatResult.isPeak &&
+      peakEmitReason === 'DUAL_FUSED'
+    ) {
       setBeatMarker(1);
       if (beatMarkerTimerRef.current) window.clearTimeout(beatMarkerTimerRef.current);
       beatMarkerTimerRef.current = window.setTimeout(() => {
         setBeatMarker(0);
         beatMarkerTimerRef.current = null;
       }, 300);
+    }
+
+    if (emittedPeak) {
       totalBeatsRef.current++;
       const currentArrCount = vitalSignsRef.current.arrhythmia.value.count || 0;
       if (currentArrCount > lastArrhythmiaCountForBeatsRef.current) {
@@ -870,8 +917,7 @@ const Index = () => {
     }
 
     if (
-      hasUsableContact &&
-      heartBeatResult.isPeak &&
+      emittedPeak &&
       heartBeatResult.rrData?.intervals &&
       heartBeatResult.rrData.intervals.length > 0 &&
       nowT - lastRrPushRef.current >= RR_PUSH_THROTTLE_MS
@@ -881,6 +927,19 @@ const Index = () => {
     }
 
     if (!vitalsDspReady) {
+      if (
+        hasUsableContact &&
+        (vitalSignsRef.current.spo2.value ?? 0) > 0 &&
+        nowT - lastVitalsPushRef.current >= VITALS_PUSH_THROTTLE_MS
+      ) {
+        lastVitalsPushRef.current = nowT;
+        setVitalSigns(prev => ({
+          ...prev,
+          spo2: vitalSignsRef.current.spo2,
+          bloodPressure: vitalSignsRef.current.bloodPressure,
+          signalQuality: Math.round(rawSqi),
+        }));
+      }
       return;
     }
 
@@ -1167,7 +1226,7 @@ const Index = () => {
               rawArrhythmiaData={lastArrhythmiaData.current}
               preserveResults={showResults}
               isPeak={beatMarker === 1}
-              bpm={vitalSigns.heartRate.value}
+              bpm={vitalSigns.heartRate.value ?? null}
               spo2={vitalSigns.spo2.value || 0}
               arrhythmiaCount={vitalSigns.arrhythmia.value.count}
               rrIntervals={rrIntervals}

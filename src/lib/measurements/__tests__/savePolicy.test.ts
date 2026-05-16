@@ -32,11 +32,11 @@ function makeVs(hrStatus: VitalSignsResult['heartRate']['status'], sqiRound: num
     spo2: m('SpO2', 97),
     bloodPressure: {
       name: 'BP',
-      value: { systolic: 0, diastolic: 0 },
+      value: { systolic: 120, diastolic: 80 },
       unit: 'mmHg',
       timestamp: now,
-      confidence: 0.2,
-      status: 'REQUIRES_CALIBRATION',
+      confidence: 0.7,
+      status: 'VALID',
       reason: '',
       signalQuality: { ...sqm, sqi: sqiRound },
       diagnostics: {},
@@ -74,5 +74,20 @@ describe('evaluateFinalMeasurementSave', () => {
   it('rechaza HR no VALID', () => {
     const r = evaluateFinalMeasurementSave(makeVs('LOW_SIGNAL_QUALITY', 60), 60);
     expect(r.canSaveFinal).toBe(false);
+  });
+
+  it('rechaza SpO2 no VALID aunque HR sea válido', () => {
+    const vs = makeVs('VALID', 60);
+    vs.spo2 = { ...vs.spo2, value: 0, status: 'NO_VALID_SIGNAL' };
+    const r = evaluateFinalMeasurementSave(vs, 60);
+    expect(r.canSaveFinal).toBe(false);
+    expect(r.reasons).toContain('SPO2_NOT_VALID');
+  });
+
+  it('acepta HR en el límite inferior fisiológico (30 BPM)', () => {
+    const vs = makeVs('VALID', 60);
+    vs.heartRate = { ...vs.heartRate, value: 30 };
+    const r = evaluateFinalMeasurementSave(vs, 60);
+    expect(r.canSaveFinal).toBe(true);
   });
 });

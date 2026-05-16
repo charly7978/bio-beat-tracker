@@ -72,18 +72,42 @@ export function evaluateFinalMeasurementSave(
     reasons.push('HR_VALUE_MISSING');
   }
 
+  const hrVal = vitalSigns.heartRate.value;
   const hrOk =
     statusOk(vitalSigns.heartRate.status) &&
-    vitalSigns.heartRate.value != null &&
-    vitalSigns.heartRate.value > VITAL_THRESHOLDS.HR.MIN &&
-    vitalSigns.heartRate.value < VITAL_THRESHOLDS.HR.MAX;
+    hrVal != null &&
+    hrVal >= VITAL_THRESHOLDS.HR.MIN &&
+    hrVal <= VITAL_THRESHOLDS.HR.MAX;
 
   if (!hrOk) {
     reasons.push('HR_OUT_OF_RANGE_OR_INVALID');
   }
 
+  const spo2Val = vitalSigns.spo2.value;
+  const spo2Ok =
+    vitalSigns.spo2.status === 'VALID' &&
+    spo2Val != null &&
+    spo2Val >= VITAL_THRESHOLDS.SPO2.MIN_VALID &&
+    spo2Val <= VITAL_THRESHOLDS.SPO2.MAX_VALID;
+
+  if (!spo2Ok) {
+    reasons.push('SPO2_NOT_VALID');
+  }
+
+  const bpVal = vitalSigns.bloodPressure.value;
+  const bpOk =
+    (vitalSigns.bloodPressure.status === 'VALID' ||
+      vitalSigns.bloodPressure.status === 'REQUIRES_CALIBRATION') &&
+    bpVal != null &&
+    bpVal.systolic > 0 &&
+    bpVal.diastolic > 0;
+
+  if (!bpOk) {
+    reasons.push('BP_NOT_VALID');
+  }
+
   const sqiOk = signalQuality >= minSqi;
-  const canSaveFinal = hrOk && sqiOk;
+  const canSaveFinal = hrOk && sqiOk && spo2Ok && bpOk;
 
   let outcome: MeasurementAttemptOutcome = 'valid_saved';
   if (!canSaveFinal) {
