@@ -456,6 +456,7 @@ const Index = () => {
     startCalibration();
     measurementLatchRef.current = createMeasurementSessionLatch();
     lastGoodBpmRef.current = 0;
+    lastBpmSeenAtRef.current = 0;
     lastRrSnapshotRef.current = null;
     setHeartBeatRuntimeHints(inferCameraRuntimeHints());
   }, [isMonitoring, startProcessing, startCalibration, enterFullScreen, sanityProfileId, requestWakeLock, setHeartBeatRuntimeHints]);
@@ -593,6 +594,7 @@ const Index = () => {
     unstableFrameCounter.current = 0;
     measurementLatchRef.current = createMeasurementSessionLatch();
     lastGoodBpmRef.current = 0;
+    lastBpmSeenAtRef.current = 0;
     lastRrSnapshotRef.current = null;
     setHeartbeatSignal(0);
     setBeatMarker(0);
@@ -611,6 +613,8 @@ const Index = () => {
   const measurementLatchRef = useRef(createMeasurementSessionLatch());
   const lastRrSnapshotRef = useRef<{ intervals: number[]; lastPeakTime: number | null } | null>(null);
   const lastGoodBpmRef = useRef(0);
+  const lastBpmSeenAtRef = useRef(0);
+  const BPM_DISPLAY_HOLD_MS = 4500;
   const VITALS_PROCESS_EVERY_N_FRAMES = 3;
   // Throttling de UI: el DSP corre en cada frame, React solo refresca a ritmos sanos.
   const isMonitoringRef = useRef(false);
@@ -725,19 +729,32 @@ const Index = () => {
       nowT,
       heartBeatResult.isPeak,
     );
-    const lastPeakAt = heartBeatResult.rrData?.lastPeakTime ?? 0;
+    const latchPeakMs = measurementLatchRef.current.lastPeakMs;
     const peakRecent =
       fingerConfirmed &&
-      (heartBeatResult.isPeak ||
-        (lastPeakAt > 0 && nowT - lastPeakAt < SESSION_LATCH.MAX_PEAK_GAP_MS));
+      latchPeakMs > 0 &&
+      nowT - latchPeakMs < SESSION_LATCH.MAX_PEAK_GAP_MS;
 
-    const bpmOut =
+    const bpmLive =
       fingerConfirmed &&
-      peakRecent &&
       heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
       heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX
         ? heartBeatResult.bpm
         : 0;
+
+    if (bpmLive > 0) {
+      lastGoodBpmRef.current = bpmLive;
+      lastBpmSeenAtRef.current = nowT;
+    }
+
+    const bpmOut =
+      bpmLive > 0
+        ? bpmLive
+        : peakRecent &&
+            lastGoodBpmRef.current > 0 &&
+            nowT - lastBpmSeenAtRef.current < BPM_DISPLAY_HOLD_MS
+          ? lastGoodBpmRef.current
+          : 0;
 
     const piMin = Q.MIN_PI * Math.max(0.04, hints.minPiScale * 0.18);
     const readiness = evaluateMeasurementReadiness({
@@ -766,54 +783,58 @@ const Index = () => {
       setHeartbeatSignal(showWaveform ? signalValue : 0);
     }
 
-    if (hrReady) {
+    if (hrReady && bpmOut > 0) {
       unstableFrameCounter.current = 0;
-      const verdict = bpmSanityRef.current.push(bpmOut);
-      const blockHrUpdate = verdict.ok === false;
-      if (blockHrUpdate) {
-        const msg = `BPM stream ${verdict.reason} (${verdict.detail})`;
-        if (sanityErrorRef.current !== verdict.reason) {
-          sanityErrorRef.current = verdict.reason;
-          setSanityError(msg);
-          const now = performance.now();
-          if (now - sanityToastAtRef.current > 5000) {
-            sanityToastAtRef.current = now;
-            toast({
-              variant: "destructive",
-              title: "⚠ Señal sospechosa detectada",
-              description: msg,
-            });
+      if (bpmLive > 0) {
+        const verdict = bpmSanityRef.current.push(bpmLive);
+        if (verdict.ok === false) {
+          const msg = `BPM stream ${verdict.reason} (${verdict.detail})`;
+          if (sanityErrorRef.current !== verdict.reason) {
+            sanityErrorRef.current = verdict.reason;
+            setSanityError(msg);
+            const now = performance.now();
+            if (now - sanityToastAtRef.current > 5000) {
+              sanityToastAtRef.current = now;
+              toast({
+                variant: "destructive",
+                title: "⚠ Señal sospechosa detectada",
+                description: msg,
+              });
+            }
           }
-        }
-      } else {
-        if (sanityErrorRef.current) {
+        } else if (sanityErrorRef.current) {
           sanityErrorRef.current = null;
           setSanityError(null);
         }
-        if (nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {
-          lastHrPushRef.current = nowT;
-          const sqRounded = Math.round(rawSqi);
-          setVitalSigns(prev => {
-            const cached = vitalSignsRef.current;
-            return {
-              ...prev,
-              heartRate: {
-                ...prev.heartRate,
-                value: bpmOut,
-                status: contactState === 'STABLE_CONTACT' ? 'VALID' : 'WARMUP',
-              },
-              spo2:
-                cached.spo2.value != null && cached.spo2.value > 0
-                  ? cached.spo2
-                  : prev.spo2,
-              bloodPressure:
-                (cached.bloodPressure.value?.systolic ?? 0) > 0
-                  ? cached.bloodPressure
-                  : prev.bloodPressure,
-              signalQuality: sqRounded,
-            };
-          });
-        }
+      }
+      if (nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {
+        lastHrPushRef.current = nowT;
+        const sqRounded = Math.round(rawSqi);
+        setVitalSigns(prev => {
+          const cached = vitalSignsRef.current;
+          return {
+            ...prev,
+            heartRate: {
+              ...prev.heartRate,
+              value: bpmOut,
+              status:
+                contactState === 'STABLE_CONTACT' && bpmLive > 0
+                  ? 'VALID'
+                  : bpmOut > 0
+                    ? 'WARMUP'
+                    : prev.heartRate.status,
+            },
+            spo2:
+              cached.spo2.value != null && cached.spo2.value > 0
+                ? cached.spo2
+                : prev.spo2,
+            bloodPressure:
+              (cached.bloodPressure.value?.systolic ?? 0) > 0
+                ? cached.bloodPressure
+                : prev.bloodPressure,
+            signalQuality: sqRounded,
+          };
+        });
       }
     } else {
       if (!hasUsableContact) {
@@ -889,16 +910,12 @@ const Index = () => {
     const peakEmitReason =
       (heartBeatResult.ensembleDiagnostics as { emitReason?: string } | undefined)
         ?.emitReason;
-    const emittedPeak =
+    const fusedPeak =
       hasUsableContact &&
       heartBeatResult.isPeak &&
-      (peakEmitReason === 'DUAL_FUSED' || peakEmitReason === 'SOLO_ELGENDI');
+      peakEmitReason === 'DUAL_FUSED';
 
-    if (
-      hasUsableContact &&
-      heartBeatResult.isPeak &&
-      peakEmitReason === 'DUAL_FUSED'
-    ) {
+    if (fusedPeak) {
       setBeatMarker(1);
       if (beatMarkerTimerRef.current) window.clearTimeout(beatMarkerTimerRef.current);
       beatMarkerTimerRef.current = window.setTimeout(() => {
@@ -907,7 +924,7 @@ const Index = () => {
       }, 300);
     }
 
-    if (emittedPeak) {
+    if (fusedPeak) {
       totalBeatsRef.current++;
       const currentArrCount = vitalSignsRef.current.arrhythmia.value.count || 0;
       if (currentArrCount > lastArrhythmiaCountForBeatsRef.current) {
@@ -917,7 +934,7 @@ const Index = () => {
     }
 
     if (
-      emittedPeak &&
+      fusedPeak &&
       heartBeatResult.rrData?.intervals &&
       heartBeatResult.rrData.intervals.length > 0 &&
       nowT - lastRrPushRef.current >= RR_PUSH_THROTTLE_MS

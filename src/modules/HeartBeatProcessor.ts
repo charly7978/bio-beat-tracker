@@ -47,6 +47,8 @@ export class HeartBeatProcessor {
 
   private lastDiagnostics: HeartBeatProcessDiagnostics = {};
   private lastEmittedPeakTime = 0;
+  /** Mantener BPM publicado entre latidos (~3 s a 45 BPM). */
+  private readonly BPM_PUBLISH_HOLD_MS = 4200;
   private readonly GATE_RANGE_MIN = 0.032;
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
   private placementMode: FingerPlacementMode = 'hybrid';
@@ -190,10 +192,6 @@ export class HeartBeatProcessor {
       });
       ensembleConf = ens.confidence;
 
-      if (ens.rrIntervalsMs.length) {
-        this.rrIntervals = ens.rrIntervalsMs.slice(-this.MAX_RR_INTERVALS);
-      }
-
       const minPeakConf =
         VITAL_THRESHOLDS.QUALITY.MIN_ENSEMBLE_CONF_FOR_PEAK *
         (this.cameraHints.constrained ? 0.45 : 0.75);
@@ -213,30 +211,43 @@ export class HeartBeatProcessor {
       if (decision.emit) {
         isPeak = true;
         emitReason = decision.reason;
+        const prevEmitted = this.lastEmittedPeakTime;
         this.lastEmittedPeakTime = decision.peakTimeMs;
         this.lastPeakTime = decision.peakTimeMs;
 
-        if (ens.rrIntervalsMs.length >= 1) {
-          const instantBpm = bpmFromEmittedRr(ens.rrIntervalsMs);
-          if (instantBpm > 0) {
-            const acceptOutlier =
-              this.smoothBPM <= 0 ||
-              Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= 0.28;
-            if (acceptOutlier) {
-              if (this.smoothBPM === 0) {
-                this.smoothBPM = instantBpm;
-              } else {
-                const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
-                const alpha = rel > 0.2 ? 0.1 : rel > 0.12 ? 0.18 : 0.26;
-                this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
-              }
-              this.consecutivePeaks++;
+        if (prevEmitted > 0) {
+          const rrMs = decision.peakTimeMs - prevEmitted;
+          if (rrMs >= this.MIN_PEAK_INTERVAL_MS && rrMs <= this.MAX_PEAK_INTERVAL_MS) {
+            this.rrIntervals.push(rrMs);
+            if (this.rrIntervals.length > this.MAX_RR_INTERVALS) {
+              this.rrIntervals = this.rrIntervals.slice(-this.MAX_RR_INTERVALS);
             }
           }
         }
 
-        this.vibrate();
-        this.playBeep();
+        const instantBpm = bpmFromEmittedRr(this.rrIntervals);
+        if (instantBpm > 0) {
+          const maxJump =
+            decision.reason === 'SOLO_ELGENDI' ? 0.16 : 0.24;
+          const acceptOutlier =
+            this.smoothBPM <= 0 ||
+            Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= maxJump;
+          if (acceptOutlier) {
+            if (this.smoothBPM === 0) {
+              this.smoothBPM = instantBpm;
+            } else {
+              const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
+              const alpha = rel > 0.2 ? 0.1 : rel > 0.12 ? 0.18 : 0.26;
+              this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
+            }
+            this.consecutivePeaks++;
+          }
+        }
+
+        if (decision.reason === 'DUAL_FUSED') {
+          this.vibrate();
+          this.playBeep();
+        }
       }
 
       this.lastDiagnostics = {
@@ -260,15 +271,17 @@ export class HeartBeatProcessor {
     }
 
     const peakAgeMs = this.lastPeakTime > 0 ? now - this.lastPeakTime : Number.POSITIVE_INFINITY;
-    if (!isPeak && peakAgeMs > this.MAX_PEAK_INTERVAL_MS) {
-      this.consecutivePeaks = 0;
-      this.smoothBPM = 0;
+    if (!isPeak && peakAgeMs > this.BPM_PUBLISH_HOLD_MS) {
+      if (peakAgeMs > this.BPM_PUBLISH_HOLD_MS * 1.15) {
+        this.consecutivePeaks = 0;
+        this.smoothBPM = 0;
+      }
     }
 
     const publishBpm =
       this.smoothBPM > 0 &&
-      peakAgeMs < this.MAX_PEAK_INTERVAL_MS &&
-      this.consecutivePeaks >= 1 &&
+      peakAgeMs < this.BPM_PUBLISH_HOLD_MS &&
+      this.consecutivePeaks >= 2 &&
       this.fingerContactConfirmed
         ? Math.round(this.smoothBPM)
         : 0;
@@ -441,7 +454,7 @@ export class HeartBeatProcessor {
   private async playBeep(): Promise<void> {
     if (!this.audioContext || !this.audioUnlocked) return;
     const t0 = Date.now();
-    if (t0 - this.lastBeepTime < 220) return;
+    if (t0 - this.lastBeepTime < 280) return;
     try {
       if (this.audioContext.state === 'suspended') await this.audioContext.resume();
       const t = this.audioContext.currentTime;

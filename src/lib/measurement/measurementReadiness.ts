@@ -69,12 +69,14 @@ export function evaluateMeasurementReadiness(
     (latch.established || latch.goodStreak >= 2);
 
   const confScale = contactState === 'STABLE_CONTACT' ? 1 : 0.85;
+  const hrBpm =
+    bpm > 0 ? bpm : latch.lastBpm > 0 ? latch.lastBpm : 0;
   const hrDisplayReady =
     hasUsableContact &&
     contactState !== 'NO_CONTACT' &&
     peakRecent &&
-    bpm >= VITAL_THRESHOLDS.HR.MIN &&
-    bpm <= VITAL_THRESHOLDS.HR.MAX &&
+    hrBpm >= VITAL_THRESHOLDS.HR.MIN &&
+    hrBpm <= VITAL_THRESHOLDS.HR.MAX &&
     rawSqi >= Q.MIN_FOR_HR &&
     ensembleConfidence >= minEnsembleConf * confScale;
 

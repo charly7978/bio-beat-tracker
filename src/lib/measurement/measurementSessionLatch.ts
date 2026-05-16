@@ -15,8 +15,8 @@ export const SESSION_LATCH = {
   /** Picos reales acumulados (no frames consecutivos) antes de alimentar SpO2/BP */
   ESTABLISH_STREAK: 3,
   CONTACT_GRACE_MS: 3500,
-  /** Sin picos reales durante este tiempo se degrada sesión (≈3 latidos a 50 bpm) */
-  MAX_PEAK_GAP_MS: 4500,
+  /** Sin picos reales durante este tiempo se degrada sesión (≈4 latidos a 50 bpm) */
+  MAX_PEAK_GAP_MS: 5200,
   MIN_BPM: VITAL_THRESHOLDS.HR.MIN,
   /** Alineado con arranque de SQI en cámara (HR puede mostrarse antes que SpO2) */
   MIN_SQI: 4,
@@ -56,7 +56,7 @@ export function updateMeasurementSessionLatch(
 
   if (peakStale) {
     return {
-      established: false,
+      established: latch.established && latch.goodStreak >= SESSION_LATCH.ESTABLISH_STREAK,
       goodStreak: latch.goodStreak,
       lastBpm: latch.lastBpm,
       lastContactMs: nowMs,

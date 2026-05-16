@@ -83,6 +83,32 @@ describe('peakEmitPolicy', () => {
     ).toBe(false);
   });
 
+  it('no emite dos picos dentro del refractario fisiológico', () => {
+    const ens = mockEns([5000, 5120], ['dual', 'dual']);
+    const first = decidePeakEmit({
+      ens,
+      lastEmittedPeakMs: 0,
+      minPeakConf: 0.14,
+      consensusMin: 0.15,
+      allowSoloElgendi: true,
+      sampleRateHz: 30,
+      windowSamples: 90,
+      fingerContactConfirmed: true,
+    });
+    expect(first.emit).toBe(true);
+    const second = decidePeakEmit({
+      ens,
+      lastEmittedPeakMs: first.peakTimeMs,
+      minPeakConf: 0.14,
+      consensusMin: 0.15,
+      allowSoloElgendi: true,
+      sampleRateHz: 30,
+      windowSamples: 90,
+      fingerContactConfirmed: true,
+    });
+    expect(second.emit).toBe(false);
+  });
+
   it('no re-emite el mismo pico', () => {
     const ens = mockEns([5000], ['dual']);
     const d = decidePeakEmit({

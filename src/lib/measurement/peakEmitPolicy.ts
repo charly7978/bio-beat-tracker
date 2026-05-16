@@ -38,10 +38,11 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     fingerContactConfirmed = true,
   } = input;
 
+  /** Refractario completo (~221 ms @ factor 0.82) — evita ráfagas >250 BPM por solo_elgendi. */
   const minGap =
     VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS *
-    PEAK_DETECTION_DEFAULTS.peakEmitRefractoryFactor *
-    0.88;
+    PEAK_DETECTION_DEFAULTS.peakEmitRefractoryFactor;
+  const soloMinGap = minGap * 1.08;
 
   const diag = ens.diagnostics as {
     elgendiConfidence?: number;
@@ -58,7 +59,7 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
 
   for (let i = 0; i < ens.peakTimes.length; i++) {
     const t = ens.peakTimes[i] ?? 0;
-    if (t <= 0 || t <= lastEmittedPeakMs + minGap * 0.45) continue;
+    if (t <= 0 || t <= lastEmittedPeakMs) continue;
 
     const idx = ens.peaks[i] ?? -1;
     const samplesFromLive = idx >= 0 ? windowSamples - 1 - idx : 999;
@@ -67,20 +68,23 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     const src = ens.peakSources?.[i];
     const dual =
       src === 'dual' &&
+      t >= lastEmittedPeakMs + minGap &&
       detectorConsensus >= consensusMin * (fingerContactConfirmed ? 0.82 : 0.9) &&
       ens.confidence >= minPeakConf * (fingerContactConfirmed ? 0.9 : 0.96);
     const soloElMin =
-      placementMode === 'pad' ? 0.22 : placementMode === 'tip' ? 0.24 : 0.26;
+      placementMode === 'pad' ? 0.28 : placementMode === 'tip' ? 0.3 : 0.32;
     const solo =
       fingerContactConfirmed &&
       allowSoloElgendi &&
       src === 'solo_elgendi' &&
+      t >= lastEmittedPeakMs + soloMinGap &&
       elConf >= soloElMin &&
-      detectorConsensus >= consensusMin * (placementMode === 'hybrid' ? 0.78 : 0.75) &&
-      ens.confidence >= minPeakConf * (placementMode === 'hybrid' ? 0.92 : 0.88);
+      detectorConsensus >= consensusMin * (placementMode === 'hybrid' ? 0.82 : 0.8) &&
+      ens.confidence >= minPeakConf * (placementMode === 'hybrid' ? 0.96 : 0.92);
 
     if (dual || solo) {
-      if (t >= bestT) {
+      // Primer pico nuevo en orden temporal (no el más reciente del buffer).
+      if (bestT === 0 || t < bestT) {
         bestT = t;
         bestReason = dual ? 'DUAL_FUSED' : 'SOLO_ELGENDI';
       }
