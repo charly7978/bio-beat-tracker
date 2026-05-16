@@ -14,7 +14,7 @@ export const PEAK_DETECTION_DEFAULTS = {
   /** Ventana larga tipo Elgendi (~667 ms) */
   beatWindowMs: 667,
   /** Prominencia mínima (Elgendi): baja para latidos débiles en cámara móvil */
-  minProminence: 0.026,
+  minProminence: 0.023,
   /** Peso del offset adaptativo MA_beat (menor = bloques de interés más sensibles) */
   offsetWeight: 0.24,
   /** Factor mínimo del RR fisiológico entre emisiones de pico (anti-doble latido) */

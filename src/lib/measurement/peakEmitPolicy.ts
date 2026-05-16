@@ -108,14 +108,18 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     const soloEl =
       fingerContactConfirmed &&
       allowSoloElgendi &&
+      emittedPeakCount >= 1 &&
       src === 'solo_elgendi' &&
-      elConf >= (placementMode === 'hybrid' ? 0.22 : 0.24);
+      elConf >= (placementMode === 'hybrid' ? 0.22 : 0.24) &&
+      spectralAgreement >= 0.22;
     const soloPan =
       fingerContactConfirmed &&
       allowSoloElgendi &&
+      emittedPeakCount >= 2 &&
       src === 'solo_pan' &&
-      panConf >= 0.28 &&
-      elConf >= 0.1;
+      panConf >= 0.3 &&
+      elConf >= 0.12 &&
+      spectralAgreement >= 0.28;
 
     if (!dual && !soloEl && !soloPan) continue;
 
@@ -160,10 +164,10 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
   return { emit: false, peakTimeMs: 0, reason: 'NO_NEW_PEAK' };
 }
 
-/** BPM solo desde intervalos RR de picos ya emitidos. */
+/** BPM desde RR emitidos con mediana recortada (menos falsos por un outlier). */
 export function bpmFromEmittedRr(rrMs: number[]): number {
   if (rrMs.length < 1) return 0;
-  const tail = rrMs.slice(-4).filter(
+  const tail = rrMs.slice(-5).filter(
     (d) =>
       d >= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS &&
       d <= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS,
@@ -171,5 +175,12 @@ export function bpmFromEmittedRr(rrMs: number[]): number {
   if (!tail.length) return 0;
   const sorted = [...tail].sort((a, b) => a - b);
   const med = sorted[Math.floor(sorted.length / 2)] ?? sorted[0]!;
-  return 60000 / med;
+  const trimmed =
+    tail.length >= 3
+      ? tail.filter((d) => Math.abs(d - med) / med <= 0.22)
+      : tail;
+  const use = trimmed.length >= 2 ? trimmed : tail;
+  const sortedUse = [...use].sort((a, b) => a - b);
+  const finalMed = sortedUse[Math.floor(sortedUse.length / 2)] ?? sortedUse[0]!;
+  return 60000 / finalMed;
 }

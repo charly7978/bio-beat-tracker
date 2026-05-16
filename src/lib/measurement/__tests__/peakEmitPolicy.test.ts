@@ -13,7 +13,7 @@ function mockEns(
     peakSources: sources,
     peakScores:
       peakScores ??
-      sources.map((s) => (s === 'dual' ? 0.62 : 0.48)),
+      sources.map((s) => (s === 'dual' ? 0.65 : 0.64)),
     rrIntervalsMs: [],
     bpmInstant: 72,
     bpmStable: 72,

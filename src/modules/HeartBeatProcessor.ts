@@ -177,7 +177,9 @@ export class HeartBeatProcessor {
     const sampleRate = this.estimateSampleRate();
     let ensembleConf = 0;
 
-    const gateOk = this.cachedGateRange >= this.gateRangeMin();
+    const gateOk =
+      this.cachedGateRange >=
+      this.gateRangeMin() * (this.ppgPerfusionIndex > 0 && this.ppgPerfusionIndex < 0.004 ? 0.72 : 1);
 
     if (gateOk && this.signalBuffer.length >= PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
       const win = Math.min(this.BUFFER_SIZE, this.signalBuffer.length);
@@ -219,6 +221,7 @@ export class HeartBeatProcessor {
       if (decision.emit) {
         isPeak = true;
         emitReason = decision.reason;
+        const wScore = decision.weightedScore ?? 0;
         const prevEmitted = this.lastEmittedPeakTime;
         this.lastEmittedPeakTime = decision.peakTimeMs;
         this.lastPeakTime = decision.peakTimeMs;
@@ -237,7 +240,7 @@ export class HeartBeatProcessor {
         if (instantBpm > 0) {
           const soloEmit =
             decision.reason === 'SOLO_ELGENDI' || decision.reason === 'SOLO_PAN';
-          const maxJump = soloEmit ? 0.2 : 0.32;
+          const maxJump = soloEmit ? 0.17 : 0.28;
           const acceptOutlier =
             this.smoothBPM <= 0 ||
             Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= maxJump;
@@ -246,17 +249,17 @@ export class HeartBeatProcessor {
               this.smoothBPM = instantBpm;
             } else {
               const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
-              const alpha = rel > 0.2 ? 0.12 : rel > 0.12 ? 0.2 : 0.3;
+              const trust = clamp(0.12 + wScore * 0.22, 0.12, 0.32);
+              const alpha = rel > 0.18 ? trust * 0.65 : rel > 0.1 ? trust : trust * 1.15;
               this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
             }
             this.consecutivePeaks++;
           }
         }
 
-        const wScore = decision.weightedScore ?? 0;
         if (
           decision.reason === 'DUAL_FUSED' ||
-          (wScore >= 0.52 && this.rrIntervals.length >= 1)
+          (wScore >= 0.56 && this.rrIntervals.length >= 2)
         ) {
           this.vibrate();
           this.playBeep();

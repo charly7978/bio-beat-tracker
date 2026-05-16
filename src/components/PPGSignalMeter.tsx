@@ -188,7 +188,7 @@ const PPGSignalMeter = ({
       if (smoothedBpmRef.current === 0) {
         smoothedBpmRef.current = bpm;
       } else {
-        smoothedBpmRef.current = smoothedBpmRef.current * 0.72 + bpm * 0.28;
+        smoothedBpmRef.current = smoothedBpmRef.current * 0.78 + bpm * 0.22;
       }
     }
 
@@ -1445,10 +1445,10 @@ const PPGSignalMeter = ({
       const targetSys = fingerOn || preserve ? p.pressure?.systolic ?? 0 : 0;
       const targetDia = fingerOn || preserve ? p.pressure?.diastolic ?? 0 : 0;
       const lerp = (cur: number, tgt: number, a: number) => cur + (tgt - cur) * a;
-      displayBpmRef.current = lerp(displayBpmRef.current, targetBpm, 0.24);
-      displaySpo2Ref.current = lerp(displaySpo2Ref.current, targetSpo2, 0.2);
-      displaySysRef.current = lerp(displaySysRef.current, targetSys, 0.18);
-      displayDiaRef.current = lerp(displayDiaRef.current, targetDia, 0.18);
+      displayBpmRef.current = lerp(displayBpmRef.current, targetBpm, 0.14);
+      displaySpo2Ref.current = lerp(displaySpo2Ref.current, targetSpo2, 0.11);
+      displaySysRef.current = lerp(displaySysRef.current, targetSys, 0.1);
+      displayDiaRef.current = lerp(displayDiaRef.current, targetDia, 0.1);
 
       drawBackground(ctx);
       drawHeader(ctx, now);

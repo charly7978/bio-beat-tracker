@@ -18,6 +18,10 @@ import {
   updateMeasurementSessionLatch,
 } from "@/lib/measurement/measurementSessionLatch";
 import { evaluateMeasurementReadiness } from "@/lib/measurement/measurementReadiness";
+import {
+  smoothDisplayPair,
+  smoothDisplayValue,
+} from "@/lib/measurement/displaySmoothing";
 import { createDefaultVitalSignsResult } from "@/lib/vitals/defaultVitalSignsResult";
 import { VitalSignsResult } from "@/modules/vital-signs/VitalSignsProcessor";
 import type { ProcessedSignal, ContactState } from "@/types/signal";
@@ -622,6 +626,41 @@ const Index = () => {
   const prevHasUsableContactRef = useRef(false);
   const noContactSessionFramesRef = useRef(0);
   const BPM_DISPLAY_HOLD_MS = 2800;
+  const displayHrRef = useRef(0);
+  const displaySpo2Ref = useRef(0);
+  const displayBpRef = useRef({ systolic: 0, diastolic: 0 });
+
+  const applyLiveDisplaySmooth = useCallback((vitals: VitalSignsResult): VitalSignsResult => {
+    const hr = vitals.heartRate.value ?? 0;
+    const spo2 = typeof vitals.spo2.value === "number" ? vitals.spo2.value : 0;
+    const sys = vitals.bloodPressure.value?.systolic ?? 0;
+    const dia = vitals.bloodPressure.value?.diastolic ?? 0;
+
+    displayHrRef.current = Math.round(
+      smoothDisplayValue(displayHrRef.current, hr, 0.14),
+    );
+    displaySpo2Ref.current = Math.round(
+      smoothDisplayValue(displaySpo2Ref.current, spo2, 0.11),
+    );
+    displayBpRef.current = smoothDisplayPair(
+      displayBpRef.current,
+      { systolic: sys, diastolic: dia },
+      0.1,
+    );
+
+    return {
+      ...vitals,
+      heartRate: { ...vitals.heartRate, value: displayHrRef.current },
+      spo2: {
+        ...vitals.spo2,
+        value: displaySpo2Ref.current > 0 ? displaySpo2Ref.current : vitals.spo2.value,
+      },
+      bloodPressure: {
+        ...vitals.bloodPressure,
+        value: displayBpRef.current,
+      },
+    };
+  }, []);
   const VITALS_PROCESS_EVERY_N_FRAMES = 3;
   // Throttling de UI: el DSP corre en cada frame, React solo refresca a ritmos sanos.
   const isMonitoringRef = useRef(false);
@@ -688,6 +727,9 @@ const Index = () => {
     bpmSanityRef.current.reset();
     sanityErrorRef.current = null;
     setSanityError(null);
+    displayHrRef.current = 0;
+    displaySpo2Ref.current = 0;
+    displayBpRef.current = { systolic: 0, diastolic: 0 };
   }, [resetHeartBeat]);
 
   const handleSignalRealtime = useCallback((lastSignal: ProcessedSignal) => {
@@ -857,7 +899,7 @@ const Index = () => {
         const sqRounded = Math.round(rawSqi);
         setVitalSigns(prev => {
           const cached = vitalSignsRef.current;
-          return {
+          const merged = applyLiveDisplaySmooth({
             ...prev,
             heartRate: {
               ...prev.heartRate,
@@ -878,7 +920,9 @@ const Index = () => {
                 ? cached.bloodPressure
                 : prev.bloodPressure,
             signalQuality: sqRounded,
-          };
+          });
+          vitalSignsRef.current = merged;
+          return merged;
         });
       }
     } else {
@@ -1059,13 +1103,13 @@ const Index = () => {
       );
 
       // Mantener siempre la última computación en ref para finalize/save.
-      vitalSignsRef.current = vitals;
+      const vitalsForUi = applyLiveDisplaySmooth(vitals);
+      vitalSignsRef.current = vitalsForUi;
 
-      // Throttle SOLO del setState (UI). El cálculo ya corrió.
       const uiDue = nowT - lastVitalsPushRef.current >= VITALS_PUSH_THROTTLE_MS;
       if (uiDue) {
         lastVitalsPushRef.current = nowT;
-        setVitalSigns(vitals);
+        setVitalSigns(vitalsForUi);
       }
 
       if (
@@ -1107,6 +1151,7 @@ const Index = () => {
     setFingerPlacementMode,
     setVitalsPlacementMode,
     resetFingerContactSession,
+    applyLiveDisplaySmooth,
   ]);
 
   // Conectar el callback realtime al hook de señal una sola vez.

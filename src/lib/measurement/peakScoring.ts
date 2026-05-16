@@ -14,10 +14,10 @@ export const PEAK_SCORE_WEIGHTS = {
 } as const;
 
 export const PEAK_SCORE_THRESHOLDS = {
-  dualMin: 0.44,
-  soloMin: 0.58,
+  dualMin: 0.46,
+  soloMin: 0.62,
   /** Desviación máxima vs mediana RR previa para aceptar pico */
-  rrMedianMaxRelDev: 0.32,
+  rrMedianMaxRelDev: 0.26,
 } as const;
 
 export interface PeakScoreInput {
@@ -52,10 +52,13 @@ export function scorePeakCandidate(input: PeakScoreInput): number {
     score += w.rrStability * (input.source === 'dual' ? 0.55 : 0.25);
   }
 
-  const piGate =
+  let piGate =
     input.perfusionIndex > 0
-      ? clamp(input.perfusionIndex / 0.007, 0.45, 1)
+      ? clamp(input.perfusionIndex / 0.007, 0.42, 1)
       : 0.88;
+  if (input.source === 'dual' && input.perfusionIndex > 0 && input.perfusionIndex < 0.005) {
+    piGate = clamp(piGate + 0.12, 0.5, 1);
+  }
   const sqiGate =
     input.sqi > 0
       ? clamp(0.55 + (input.sqi / 100) * 0.45, 0.55, 1)
