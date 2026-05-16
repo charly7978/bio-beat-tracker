@@ -186,6 +186,7 @@ const Index = () => {
   const {
     processSignal: processHeartBeat,
     setRuntimeHints: setHeartBeatRuntimeHints,
+    setFingerPlacementMode,
     reset: resetHeartBeat,
   } = useHeartBeatProcessor();
 
@@ -199,7 +200,8 @@ const Index = () => {
   }, [setCameraRuntimeHints, setHeartBeatRuntimeHints]);
   
   const { 
-    processSignal: processVitalSigns, 
+    processSignal: processVitalSigns,
+    setPlacementMode: setVitalsPlacementMode,
     setRGBData,
     reset: resetVitalSigns,
     fullReset: fullResetVitalSigns,
@@ -674,6 +676,13 @@ const Index = () => {
       lastSignal.contactState ??
       (lastSignal.fingerDetected ? "UNSTABLE_CONTACT" : "NO_CONTACT");
     const diag = lastSignal.diagnostics;
+    const placementMode =
+      lastSignal.placementMode ??
+      (diag && typeof diag === 'object' && typeof diag.placementMode === 'string'
+        ? (diag.placementMode as import('@/types/signal').FingerPlacementMode)
+        : 'hybrid');
+    setFingerPlacementMode(placementMode);
+    setVitalsPlacementMode(placementMode);
     const nowT = performance.now();
 
     const heartBeatResult = processHeartBeat(
@@ -910,6 +919,7 @@ const Index = () => {
         rrForVitals,
         lastSignal.perfusionIndex,
         enrichedSqm,
+        lastSignal.morphologyValue ?? lastSignal.filteredValue,
       );
 
       // Mantener siempre la última computación en ref para finalize/save.
@@ -946,7 +956,15 @@ const Index = () => {
         }
       }
     }
-  }, [processHeartBeat, processVitalSigns, setRGBData, getRGBStats, syncCameraHints]);
+  }, [
+    processHeartBeat,
+    processVitalSigns,
+    setRGBData,
+    getRGBStats,
+    syncCameraHints,
+    setFingerPlacementMode,
+    setVitalsPlacementMode,
+  ]);
 
   // Conectar el callback realtime al hook de señal una sola vez.
   useEffect(() => {

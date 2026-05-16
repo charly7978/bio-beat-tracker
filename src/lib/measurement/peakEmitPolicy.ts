@@ -4,6 +4,7 @@
 import type { PeakDetectionResult } from '@/types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '@/config/signalProcessing';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
+import type { FingerPlacementMode } from '@/types/signal';
 
 export interface PeakEmitDecision {
   emit: boolean;
@@ -19,6 +20,7 @@ export interface PeakEmitPolicyInput {
   allowSoloElgendi: boolean;
   sampleRateHz: number;
   windowSamples: number;
+  placementMode?: FingerPlacementMode;
 }
 
 export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
@@ -30,8 +32,10 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     allowSoloElgendi,
     sampleRateHz,
     windowSamples,
+    placementMode = 'hybrid',
   } = input;
 
+  const padRelaxed = placementMode === 'pad';
   const minGap =
     VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS *
     PEAK_DETECTION_DEFAULTS.peakEmitRefractoryFactor *
@@ -66,8 +70,8 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     const solo =
       allowSoloElgendi &&
       src === 'solo_elgendi' &&
-      elConf >= 0.12 &&
-      ens.confidence >= minPeakConf * 0.65;
+      elConf >= (padRelaxed ? 0.09 : 0.12) &&
+      ens.confidence >= minPeakConf * (padRelaxed ? 0.58 : 0.65);
 
     if (dual || solo) {
       if (t >= bestT) {

@@ -10,6 +10,7 @@ import { RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
 import { RingF32 } from '../../utils/RingBuffer';
 import { clamp } from '../../utils/math';
 import { estimateRespiratoryModulationRpm } from '../signal-processing/shared/dsp';
+import type { FingerPlacementMode } from '../../types/signal';
 
 const log = createLogger('VitalSignsProcessor');
 
@@ -82,6 +83,8 @@ export class VitalSignsProcessor {
   // Historial de señal
   private readonly HISTORY_SIZE = VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES;
   private signalHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
+  private morphologyHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
+  private placementMode: FingerPlacementMode = 'hybrid';
   /** Buffer más largo para modulación respiratoria (~10 Hz efectivos desde Index). */
   private readonly RESPIRATION_BUFFER = 320;
   private respirationHistory: RingF32 = new RingF32(this.RESPIRATION_BUFFER);
@@ -133,6 +136,7 @@ export class VitalSignsProcessor {
       signalQuality: 0
     };
     this.signalHistory.reset();
+    this.morphologyHistory.reset();
     this.respirationHistory.reset();
     this.stableFramesCount = 0;
     this.lastCoherentSpO2 = 0;
@@ -148,6 +152,11 @@ export class VitalSignsProcessor {
     this.rgbData = data;
   }
 
+  setPlacementMode(mode: FingerPlacementMode): void {
+    this.placementMode = mode;
+    this.bloodPressureProcessor.setPlacementMode(mode);
+  }
+
   processSignal(
     signalValue: number,
     signalQuality: number,
@@ -155,6 +164,7 @@ export class VitalSignsProcessor {
     rrData?: RRData,
     perfusionIndexFromPpg?: number,
     sqmBundle?: Partial<SignalQualityMetrics>,
+    morphologyValue?: number,
   ): VitalSignsResult {
     this.frameCount++;
 
@@ -166,8 +176,12 @@ export class VitalSignsProcessor {
       this.lastPpgPerfusionIndex = perfusionIndexFromPpg;
     }
 
-    // Actualizar historial de señal para análisis morfológico (BP)
+    const morphSample =
+      typeof morphologyValue === 'number' && Number.isFinite(morphologyValue)
+        ? morphologyValue
+        : signalValue;
     this.signalHistory.push(signalValue);
+    this.morphologyHistory.push(morphSample);
     this.respirationHistory.push(signalValue);
     // Control de calibración
     if (this.isCalibrating) {
@@ -467,7 +481,9 @@ export class VitalSignsProcessor {
     // === BP ===
     if (validRR.length >= 2) {
       const bpEstimate = this.bloodPressureProcessor.estimate(
-        this.signalHistory.tail(this.HISTORY_SIZE), validRR, 30
+        this.morphologyHistory.tail(this.HISTORY_SIZE),
+        validRR,
+        30,
       );
 
       this.lastBPConfidence = bpEstimate.confidence;
@@ -637,6 +653,7 @@ export class VitalSignsProcessor {
   reset(): VitalSignsResult | null {
     const result = this.getFormattedResult();
     this.signalHistory.reset();
+    this.morphologyHistory.reset();
     this.respirationHistory.reset();
     this.validPulseCount = 0;
     this.arrhythmiaProcessor.reset();
@@ -650,6 +667,7 @@ export class VitalSignsProcessor {
 
   fullReset(): void {
     this.signalHistory.reset();
+    this.morphologyHistory.reset();
     this.respirationHistory.reset();
     this.validPulseCount = 0;
     this.rValueHistory = [];

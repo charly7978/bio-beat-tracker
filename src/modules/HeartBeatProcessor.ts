@@ -11,6 +11,7 @@ import {
   type CameraRuntimeHints,
 } from '../lib/device/cameraDeviceProfile';
 import { bpmFromEmittedRr, decidePeakEmit } from '../lib/measurement/peakEmitPolicy';
+import type { FingerPlacementMode } from '../types/signal';
 
 export interface HeartBeatProcessDiagnostics {
   ensemble?: Record<string, unknown>;
@@ -48,6 +49,7 @@ export class HeartBeatProcessor {
   private lastEmittedPeakTime = 0;
   private readonly GATE_RANGE_MIN = 0.032;
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
+  private placementMode: FingerPlacementMode = 'hybrid';
 
   constructor() {
     this.setupAudio();
@@ -77,11 +79,21 @@ export class HeartBeatProcessor {
     this.cameraHints = hints;
   }
 
+  setFingerPlacementMode(mode: FingerPlacementMode): void {
+    this.placementMode = mode;
+  }
+
   private gateRangeMin(): number {
-    return this.GATE_RANGE_MIN * this.cameraHints.gateRangeScale;
+    const base = this.GATE_RANGE_MIN * this.cameraHints.gateRangeScale;
+    if (this.placementMode === 'pad') return base * 0.82;
+    if (this.placementMode === 'tip') return base;
+    return base * 0.92;
   }
 
   private minNormalizeRange(): number {
+    if (this.placementMode === 'pad') {
+      return this.cameraHints.constrained ? 0.055 : 0.026;
+    }
     return this.cameraHints.constrained ? 0.07 : 0.032;
   }
 
@@ -173,6 +185,7 @@ export class HeartBeatProcessor {
         allowSoloElgendi: this.cameraHints.allowSoloElgendiFusion,
         sampleRateHz: sampleRate,
         windowSamples: win,
+        placementMode: this.placementMode,
       });
 
       if (decision.emit) {

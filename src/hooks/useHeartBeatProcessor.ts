@@ -131,6 +131,10 @@ export const useHeartBeatProcessor = () => {
     processorRef.current?.setRuntimeHints(hints);
   }, []);
 
+  const setFingerPlacementMode = useCallback((mode: import('../types/signal').FingerPlacementMode) => {
+    processorRef.current?.setFingerPlacementMode(mode);
+  }, []);
+
   const reset = useCallback(() => {
     if (processingStateRef.current === 'RESETTING') return;
     processingStateRef.current = 'RESETTING';
@@ -149,6 +153,7 @@ export const useHeartBeatProcessor = () => {
 
   return {
     processSignal,
+    setFingerPlacementMode,
     setRuntimeHints,
     reset,
     debugInfo: {

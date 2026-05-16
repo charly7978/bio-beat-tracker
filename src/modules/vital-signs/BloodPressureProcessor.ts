@@ -32,6 +32,7 @@
 
 import { PPGFeatureExtractor, CycleFeatures } from './PPGFeatureExtractor';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import type { FingerPlacementMode } from '../../types/signal';
 
 export interface BPEstimate {
   systolic: number;
@@ -84,13 +85,24 @@ const DBP_COEFF = {
 
 export class BloodPressureProcessor {
   private readonly MIN_CYCLES = VITAL_THRESHOLDS.BP.MIN_CYCLES;
-  private readonly MIN_CYCLE_QUALITY = VITAL_THRESHOLDS.BP.MIN_CYCLE_QUALITY;
+  private placementMode: FingerPlacementMode = 'hybrid';
   private readonly MAX_CYCLES = 25;
   
   // EMA smoothing (más conservador para evitar saltos bruscos)
   private lastSBP: number = 0;
   private lastDBP: number = 0;
   private readonly EMA_ALPHA = 0.18;
+
+  setPlacementMode(mode: FingerPlacementMode): void {
+    this.placementMode = mode;
+  }
+
+  private minCycleQuality(): number {
+    const P = VITAL_THRESHOLDS.PLACEMENT;
+    if (this.placementMode === 'tip') return P.BP_CYCLE_QUALITY_TIP;
+    if (this.placementMode === 'pad') return P.BP_CYCLE_QUALITY_PAD;
+    return P.BP_CYCLE_QUALITY_HYBRID;
+  }
 
   /**
    * Estimar presión arterial desde buffer PPG e intervalos RR.
@@ -120,7 +132,7 @@ export class BloodPressureProcessor {
     const validCycles: CycleFeatures[] = [];
     for (const cycle of cycles) {
       const features = PPGFeatureExtractor.extractCycleFeatures(signalBuffer, cycle, sampleRate);
-      if (features && features.quality > this.MIN_CYCLE_QUALITY) {
+      if (features && features.quality > this.minCycleQuality()) {
         validCycles.push(features);
       }
     }

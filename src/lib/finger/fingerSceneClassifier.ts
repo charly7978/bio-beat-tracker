@@ -1,5 +1,6 @@
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import { hasFingerHemoglobinSignature, type FingerRgbSnapshot } from './fingerContactSignature';
+import { passesUnifiedFingerAcquire } from './fingerPlacementProfile';
 
 /**
  * Flash al aire / superficie roja: brillo alto, G y B aún altos, R/B bajo.
@@ -79,16 +80,29 @@ export function passesFingerMaintain(
   return true;
 }
 
-/** Primera adquisición: más estricta (R/B crudo + escena dedo en lente). */
+/** Primera adquisición: punta, almohadilla o escena en lente (postura unificada). */
 export function passesFingerAcquire(
   raw: FingerRgbSnapshot,
   smoothed: FingerRgbSnapshot,
   spatial: FingerRoiSpatial,
+  opts?: { roiRedCv?: number; perfusionIndex?: number },
 ): boolean {
   if (!passesLiveFingerContact(raw, smoothed, spatial)) return false;
   const F = VITAL_THRESHOLDS.FINGER;
   const rb = raw.red / Math.max(1, raw.blue);
   if (rb < F.ACQUIRE_RB_STRICT) return false;
+
+  if (
+    passesUnifiedFingerAcquire(
+      raw,
+      smoothed,
+      spatial,
+      opts?.roiRedCv ?? 0,
+      opts?.perfusionIndex ?? 0,
+    )
+  ) {
+    return true;
+  }
 
   const onLens = isFingerOnLensScene(smoothed, spatial.coverageRatio, spatial.fingerScore);
   const r = smoothed.red;

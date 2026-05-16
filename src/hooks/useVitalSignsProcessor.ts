@@ -39,6 +39,10 @@ export const useVitalSignsProcessor = () => {
   const setRGBData = useCallback((data: RGBData) => {
     processorRef.current?.setRGBData(data);
   }, []);
+
+  const setPlacementMode = useCallback((mode: import('../types/signal').FingerPlacementMode) => {
+    processorRef.current?.setPlacementMode(mode);
+  }, []);
   
   const processSignal = useCallback((
     value: number, 
@@ -48,6 +52,7 @@ export const useVitalSignsProcessor = () => {
     /** PI (AC/DC) del PPGSignalProcessor — alinea SpO2/“clínico” con la perfusión real del dedo */
     perfusionIndexFromPpg?: number,
     sqmBundle?: Partial<SignalQualityMetrics>,
+    morphologyValue?: number,
   ): VitalSignsResult => {
     const defaultResult: VitalSignsResult = {
       heartRate: { name: "HR", value: 0, unit: "bpm", timestamp: Date.now(), confidence: 0, status: "WARMUP", reason: "", signalQuality: {} as any, diagnostics: {} },
@@ -69,6 +74,7 @@ export const useVitalSignsProcessor = () => {
       rrData,
       perfusionIndexFromPpg,
       sqmBundle,
+      morphologyValue,
     );
     
     // Guardar la última ventana realmente válida para cierre/exportación
@@ -103,6 +109,7 @@ export const useVitalSignsProcessor = () => {
 
   return {
     processSignal,
+    setPlacementMode,
     setRGBData,
     reset,
     fullReset,

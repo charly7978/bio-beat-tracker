@@ -23,6 +23,18 @@ export const VITAL_THRESHOLDS = {
     R_VALUE_MAX: 2.5,
   },
   
+  /** Geometría dedo: unificar punta (HR/SpO2) y almohadilla (PA) */
+  PLACEMENT: {
+    PAD_COVERAGE_MIN: 0.17,
+    PAD_CV_MAX: 0.048,
+    TIP_COVERAGE_MAX: 0.16,
+    TIP_CV_MIN: 0.034,
+    TIP_PI_MIN: 0.00045,
+    BP_CYCLE_QUALITY_TIP: 0.24,
+    BP_CYCLE_QUALITY_PAD: 0.28,
+    BP_CYCLE_QUALITY_HYBRID: 0.26,
+  },
+
   // BLOOD PRESSURE (mmHg + pipeline morfológico)
   BP: {
     SYSTOLIC_MIN: 75,

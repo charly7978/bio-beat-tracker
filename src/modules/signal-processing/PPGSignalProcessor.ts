@@ -25,6 +25,12 @@ import {
   passesLiveFingerContact,
 } from '../../lib/finger/fingerSceneClassifier';
 import {
+  classifyFingerPlacement,
+  placementHintText,
+  smoothPlacementMode,
+  type FingerPlacementMode,
+} from '../../lib/finger/fingerPlacementProfile';
+import {
   inferCameraRuntimeHints,
   type CameraRuntimeHints,
 } from '../../lib/device/cameraDeviceProfile';
@@ -63,6 +69,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   public isProcessing = false;
 
   private bandpassFilter: BandpassFilter;
+  private morphBandpassFilter: BandpassFilter;
+  private placementMode: FingerPlacementMode = 'hybrid';
+  private placementStreak = { mode: 'hybrid' as FingerPlacementMode, count: 0 };
   private readonly pulseAgcState = createPulseAgcState();
 
   private readonly BUFFER_SIZE = 300;
@@ -201,6 +210,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     public onError?: (error: ProcessingError) => void
   ) {
     this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate);
+    this.morphBandpassFilter = new BandpassFilter(this.estimatedSampleRate);
   }
 
   async initialize(): Promise<void> {
@@ -342,15 +352,42 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const acPi = this.calculatePerfusionIndex();
     const pulsePi = this.estimatePulsePiFromRoi();
     this.cachedPI = Math.max(acPi, pulsePi);
+
+    const placementInstant = classifyFingerPlacement({
+      coverageRatio: this.smoothedCoverage || roi.coverageRatio,
+      roiRedCv: this.lastRoiRedCv,
+      perfusionIndex: this.cachedPI,
+    });
+    const smoothedPlacement = smoothPlacementMode(
+      this.placementMode,
+      placementInstant,
+      this.placementStreak,
+    );
+    this.placementMode = smoothedPlacement.mode;
+    this.placementStreak = smoothedPlacement.streak;
+
     this.reconcileStableContact();
 
     // Multi-source extraction
-    const pulseSource = this.extractBestPulseSignal(roi.rawRed, roi.rawGreen, roi.rawBlue, motionArtifact);
+    const pulseSource = this.extractBestPulseSignal(
+      roi.rawRed,
+      roi.rawGreen,
+      roi.rawBlue,
+      motionArtifact,
+      this.placementMode,
+    );
+    const morphSource = this.extractMorphologySignal(
+      roi.rawRed,
+      roi.rawGreen,
+      roi.rawBlue,
+      this.placementMode,
+    );
 
     this.rawBuffer.push(pulseSource.value);
 
     const endFilt = ppgPerf.start('bandpass');
     const filtered = this.bandpassFilter.filter(pulseSource.value);
+    const morphFiltered = this.morphBandpassFilter.filter(morphSource);
     const enhanced = applyPulseAgc(
       this.pulseAgcState,
       filtered,
@@ -449,6 +486,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       timestamp,
       rawValue: signalPathActive ? pulseSource.value : 0,
       filteredValue: signalPathActive ? enhanced : 0,
+      morphologyValue: signalPathActive ? morphFiltered : 0,
+      placementMode: this.placementMode,
       quality: displayQuality,
       fingerDetected: signalPathActive && this.fingerDetected,
       contactState: this.contactState,
@@ -462,7 +501,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           message:
             `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
             `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
-            `C:${(roi.coverageRatio * 100).toFixed(0)}% ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
+            `C:${(roi.coverageRatio * 100).toFixed(0)}% ${this.placementMode} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
+          placementMode: this.placementMode,
+          placementHint: placementHintText(this.placementMode),
           hasPulsatility:
             fingerUi &&
             (SignalQualityIndex.isClinicallyValid(rawSqiOut, perfusionIndex) ||
@@ -571,16 +612,18 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const minPi = VITAL_THRESHOLDS.QUALITY.MIN_PI;
     const F = VITAL_THRESHOLDS.FINGER;
     const snap = this.rgbSnapshotFromSmoothed();
+    const padLike = this.placementMode === 'pad';
     const pulseOk =
       hasFingerHemoglobinSignature(snap) &&
       !isOpenFlashWithoutContact(snap) &&
-      this.lastRoiRedCv >= F.ROI_RED_CV_MIN * 0.88 &&
-      this.smoothedCoverage >= F.MIN_COVERAGE * 0.92;
+      this.smoothedCoverage >= F.MIN_COVERAGE * (padLike ? 0.82 : 0.92) &&
+      (padLike ||
+        this.lastRoiRedCv >= F.ROI_RED_CV_MIN * 0.88);
     const piOk = this.cachedPI >= minPi * 0.75;
     const stable =
       this.stableContactCount >= VITAL_THRESHOLDS.QUALITY.STABLE_FRAMES_REQ &&
       (piOk || pulseOk) &&
-      this.smoothedCoverage >= F.MIN_COVERAGE * 0.88;
+      this.smoothedCoverage >= F.MIN_COVERAGE * (padLike ? 0.82 : 0.88);
     this.contactState = stable ? 'STABLE_CONTACT' : 'UNSTABLE_CONTACT';
   }
 
@@ -706,9 +749,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (this.motionScore > F.ACQUIRE_MAX_MOTION_SOFT) return false;
     if (raw.red > 254 && raw.green > 254 && raw.blue > 254) return false;
 
+    const placementInstant = classifyFingerPlacement({
+      coverageRatio: spatial.coverageRatio,
+      roiRedCv: this.lastRoiRedCv,
+      perfusionIndex: this.cachedPI,
+    });
     if (
       !this.fingerDetected &&
       !this.cameraHints.constrained &&
+      placementInstant !== 'pad' &&
       isExposureFlickerNotFingerPulse(this.lastRoiRedCv, smoothed, F.ACQUIRE_RB_STRICT)
     ) {
       return false;
@@ -716,7 +765,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     if (!passesLiveFingerContact(raw, smoothed, spatial)) return false;
     if (this.fingerDetected) return true;
-    return passesFingerAcquire(raw, smoothed, spatial);
+    return passesFingerAcquire(raw, smoothed, spatial, {
+      roiRedCv: this.lastRoiRedCv,
+      perfusionIndex: this.cachedPI,
+    });
   }
 
   private computeRoiRect(width: number, height: number) {
@@ -739,6 +791,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       message?: string;
       hasPulsatility?: boolean;
       pulsatilityValue?: number;
+      placementMode?: FingerPlacementMode;
+      placementHint?: string;
     },
   ) {
     const coverageRatio = roi.coverageRatio;
@@ -749,6 +803,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       hasPulsatility: extras?.hasPulsatility ?? false,
       pulsatilityValue: extras?.pulsatilityValue ?? 0,
       coverageRatio,
+      placementMode: extras?.placementMode,
+      placementHint: extras?.placementHint,
       status,
     };
   }
@@ -779,6 +835,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (Math.abs(estimatedFps - this.estimatedSampleRate) > 2) {
       this.estimatedSampleRate = estimatedFps;
       this.bandpassFilter.setSampleRate(this.estimatedSampleRate);
+      this.morphBandpassFilter.setSampleRate(this.estimatedSampleRate);
     }
   }
 
@@ -942,14 +999,35 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   // === MULTI-SOURCE COMPETITIVE EXTRACTION ===
+  private extractMorphologySignal(
+    rawRed: number,
+    rawGreen: number,
+    rawBlue: number,
+    placement: FingerPlacementMode,
+  ): number {
+    const gNorm =
+      this.greenBaseline > 0 ? (this.greenBaseline - rawGreen) / this.greenBaseline : 0;
+    const rNorm = this.redBaseline > 0 ? (this.redBaseline - rawRed) / this.redBaseline : 0;
+    const clampMorph = (v: number) => clamp(v, -0.08, 0.08);
+    const gPulse = clampMorph(gNorm);
+    const rPulse = clampMorph(rNorm * 0.35);
+    const greenWeight = placement === 'pad' ? 0.88 : placement === 'tip' ? 0.62 : 0.78;
+    return (gPulse * greenWeight + rPulse * (1 - greenWeight)) * 4000;
+  }
+
   private extractBestPulseSignal(
-    rawRed: number, rawGreen: number, rawBlue: number, motionArtifact: boolean
+    rawRed: number,
+    rawGreen: number,
+    rawBlue: number,
+    motionArtifact: boolean,
+    placement: FingerPlacementMode,
   ): { value: number; label: string; strength: number } {
     const rNorm = this.redBaseline > 0 ? (this.redBaseline - rawRed) / this.redBaseline : 0;
     const gNorm = this.greenBaseline > 0 ? (this.greenBaseline - rawGreen) / this.greenBaseline : 0;
     const bNorm = this.blueBaseline > 0 ? (this.blueBaseline - rawBlue) / this.blueBaseline : 0;
 
-    const clampPulse = (v: number) => clamp(v, -0.055, 0.055);
+    const clampMax = placement === 'pad' ? 0.07 : placement === 'tip' ? 0.05 : 0.06;
+    const clampPulse = (v: number) => clamp(v, -clampMax, clampMax);
     const rPulse = clampPulse(rNorm);
     const gPulse = clampPulse(gNorm);
     const amp = 4400;
@@ -994,8 +1072,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (rawGreen > 248) { greenWeight = 0.1; redWeight = 0.9; }
     else if (rawRed > 248) { redWeight = 0.1; greenWeight = 0.9; }
     
-    if (this.contactState === 'STABLE_CONTACT' && !motionArtifact) {
-      // En estado estable, el canal verde es el estándar de oro para BPM
+    if (this.placementMode === 'pad') {
+      greenWeight = clamp(greenWeight + 0.12, 0.72, 0.95);
+      redWeight = 1 - greenWeight;
+    } else if (this.placementMode === 'tip') {
+      greenWeight = clamp(greenWeight - 0.08, 0.38, 0.72);
+      redWeight = 1 - greenWeight;
+    } else if (this.contactState === 'STABLE_CONTACT' && !motionArtifact) {
       greenWeight = clamp(greenWeight + 0.15, 0.6, 0.95);
       redWeight = 1 - greenWeight;
     }
@@ -1176,9 +1259,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.sourceBuffers.G.reset();
     this.sourceBuffers.RG.reset();
     this.bandpassFilter.reset();
+    this.morphBandpassFilter.reset();
     resetPulseAgc(this.pulseAgcState);
     this.roiRedPulseRing.reset();
     this.lastRoiRedCv = 0;
+    this.placementMode = 'hybrid';
+    this.placementStreak = { mode: 'hybrid', count: 0 };
   }
 
   reset(): void {
@@ -1230,8 +1316,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.roiRedPulseRing.reset();
     this.lastRoiRedCv = 0;
     this.bandpassFilter.setSampleRate(this.estimatedSampleRate);
+    this.morphBandpassFilter.setSampleRate(this.estimatedSampleRate);
     this.bandpassFilter.reset();
+    this.morphBandpassFilter.reset();
     resetPulseAgc(this.pulseAgcState);
+    this.placementMode = 'hybrid';
+    this.placementStreak = { mode: 'hybrid', count: 0 };
   }
 
   private handleMotionEvent = (event: DeviceMotionEvent) => {

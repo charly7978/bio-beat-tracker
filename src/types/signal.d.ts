@@ -1,9 +1,14 @@
 export type ContactState = 'NO_CONTACT' | 'UNSTABLE_CONTACT' | 'STABLE_CONTACT';
 
+export type FingerPlacementMode = 'tip' | 'pad' | 'hybrid';
+
 export interface ProcessedSignal {
   timestamp: number;
   rawValue: number;
   filteredValue: number;
+  /** Señal verde suavizada para morfología PA (menos AGC que HR) */
+  morphologyValue?: number;
+  placementMode?: FingerPlacementMode;
   quality: number;
   fingerDetected: boolean;
   contactState: ContactState;
@@ -23,6 +28,8 @@ export interface ProcessedSignal {
     pulsatilityValue: number;
     /** Cobertura del ROI por tiles “dedo” (0–1) */
     coverageRatio?: number;
+    placementMode?: FingerPlacementMode;
+    placementHint?: string;
     status?: import('./measurements').MeasurementStatus;
     sqm?: Partial<import('./measurements').SignalQualityMetrics>;
   };

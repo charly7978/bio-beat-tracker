@@ -29,6 +29,7 @@ interface PPGSignalMeterProps {
   diagnostics?: {
     status?: string;
     message?: string;
+    placementHint?: string;
     hasPulsatility?: boolean;
     sqm?: {
       fpsEffective?: number;
@@ -384,7 +385,14 @@ const PPGSignalMeter = ({
     const hideLowFlicker =
       diag?.status === 'LOW_SIGNAL_QUALITY' &&
       diag.hasPulsatility === true;
-    if (
+    const placementHint =
+      typeof diag?.placementHint === 'string' ? diag.placementHint : '';
+    if (placementHint && detected) {
+      ctx.fillStyle = COLORS.TEXT_INFO;
+      ctx.font = `9px ${FONT_MONO}`;
+      ctx.textAlign = 'center';
+      ctx.fillText(placementHint, header.w / 2, header.y + 12);
+    } else if (
       diag?.status &&
       diag.status !== 'VALID' &&
       diag.status !== 'WARMUP' &&
