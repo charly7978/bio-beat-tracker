@@ -104,7 +104,11 @@ export class ElgendiPeakDetector {
       };
     }
 
-    let x = bandpassOffline(detrendLinear(sig), fs);
+    // Supresión de artefactos impulsivos (movimiento, spikes de exposición) ANTES del pasabanda:
+    // Hampel con ventana ~250 ms y umbral 3σ MAD — preserva morfología del pulso sistólico.
+    const hampelWin = Math.max(5, Math.round(fs * 0.25) | 1);
+    const cleaned = hampel1D(sig, hampelWin, 3);
+    let x = bandpassOffline(detrendLinear(cleaned), fs);
     x = robustNormalizeZeroCenter(x);
 
     const w1 = Math.max(3, Math.round((peakMs / 1000) * fs));
