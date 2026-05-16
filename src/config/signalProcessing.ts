@@ -14,16 +14,17 @@ export const PEAK_DETECTION_DEFAULTS = {
   /** Ventana larga tipo Elgendi (~667 ms) */
   beatWindowMs: 667,
   /** Prominencia mínima (Elgendi): baja para latidos débiles en cámara móvil */
-  minProminence: 0.023,
+  minProminence: 0.019,
   /** Peso del offset adaptativo MA_beat (menor = bloques de interés más sensibles) */
   offsetWeight: 0.24,
   /** Factor mínimo del RR fisiológico entre emisiones de pico (anti-doble latido) */
-  peakEmitRefractoryFactor: 0.78,
+  peakEmitRefractoryFactor: 0.72,
   /** Ventana de coincidencia Elgendi ↔ Pan–Tompkins (ms) */
-  fusionToleranceMs: 235,
+  fusionToleranceMs: 280,
   minSQI: 10,
   /** Ventana para emitir pico respecto al frame actual (ms) */
-  peakEmitWindowMs: 380,
+  /** Debe cubrir ~½ RR a 45 BPM; 380 ms perdía latidos entre frames */
+  peakEmitWindowMs: 680,
   /** Acuerdo espectral mínimo antes de penalizar BPM instantáneo */
   spectralAgreementMin: 0.28,
   /** Mínimo de muestras en ventana para correr ensemble */

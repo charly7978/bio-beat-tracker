@@ -622,13 +622,14 @@ const Index = () => {
   const NO_CONTACT_SESSION_RESET_FRAMES = 18;
   /** Mínimo sin contacto antes de reset de sesión al volver el dedo (~0,7 s) */
   const CONTACT_REGAIN_RESET_MIN_FRAMES = 20;
-  const STALE_PEAK_REACQUIRE_FRAMES = 55;
+  const STALE_PEAK_REACQUIRE_FRAMES = 40;
   const measurementLatchRef = useRef(createMeasurementSessionLatch());
   const lastRrSnapshotRef = useRef<{ intervals: number[]; lastPeakTime: number | null } | null>(null);
   const lastGoodBpmRef = useRef(0);
   const lastBpmSeenAtRef = useRef(0);
   const prevHasUsableContactRef = useRef(false);
   const noContactSessionFramesRef = useRef(0);
+  const lastHbInputRef = useRef(0);
   const BPM_DISPLAY_HOLD_MS = 2800;
   const displayHrRef = useRef(0);
   const displaySpo2Ref = useRef(0);
@@ -734,6 +735,7 @@ const Index = () => {
     displayHrRef.current = 0;
     displaySpo2Ref.current = 0;
     displayBpRef.current = { systolic: 0, diastolic: 0 };
+    lastHbInputRef.current = 0;
   }, [resetHeartBeat]);
 
   const handleSignalRealtime = useCallback((lastSignal: ProcessedSignal) => {
@@ -787,8 +789,20 @@ const Index = () => {
         ? diag.sqm.sqi
         : lastSignal.quality) || 0;
 
+    let hbInput = 0;
+    if (fingerConfirmed) {
+      if (Math.abs(signalValue) > 1e-7) {
+        lastHbInputRef.current = signalValue;
+        hbInput = signalValue;
+      } else if (Math.abs(lastHbInputRef.current) > 1e-7) {
+        hbInput = lastHbInputRef.current;
+      }
+    } else {
+      lastHbInputRef.current = 0;
+    }
+
     const heartBeatResult = processHeartBeat(
-      fingerConfirmed ? signalValue : 0,
+      hbInput,
       contactState,
       nowT,
       fingerConfirmed,

@@ -13,7 +13,7 @@ export interface MeasurementSessionLatch {
 
 export const SESSION_LATCH = {
   /** Picos reales acumulados (no frames consecutivos) antes de alimentar SpO2/BP */
-  ESTABLISH_STREAK: 3,
+  ESTABLISH_STREAK: 2,
   CONTACT_GRACE_MS: 3500,
   /** Sin picos reales durante este tiempo se degrada sesión (≈4 latidos a 50 bpm) */
   MAX_PEAK_GAP_MS: 5200,

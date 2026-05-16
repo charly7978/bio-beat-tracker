@@ -13,7 +13,7 @@ function mockEns(
     peakSources: sources,
     peakScores:
       peakScores ??
-      sources.map((s) => (s === 'dual' ? 0.65 : 0.64)),
+      sources.map((s) => (s === 'dual' ? 0.5 : 0.48)),
     rrIntervalsMs: [],
     bpmInstant: 72,
     bpmStable: 72,
@@ -81,8 +81,8 @@ describe('peakEmitPolicy', () => {
     expect(d.emit).toBe(true);
   });
 
-  it('no emite solo como primer latido (exige dual inicial)', () => {
-    const ens = mockEns([5000], ['solo_elgendi'], [0.62]);
+  it('permite solo_elgendi como primer latido con score suficiente', () => {
+    const ens = mockEns([5000], ['solo_elgendi'], [0.5]);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,
@@ -94,8 +94,11 @@ describe('peakEmitPolicy', () => {
       fingerContactConfirmed: true,
       nowMs: 5200,
       emittedPeakCount: 0,
+      sqi: 50,
+      perfusionIndex: 0.005,
     });
-    expect(d.emit).toBe(false);
+    expect(d.emit).toBe(true);
+    expect(d.reason).toContain('SOLO_ELGENDI');
   });
 
   it('modo reacquire permite solo_elgendi tras stall sin dual', () => {

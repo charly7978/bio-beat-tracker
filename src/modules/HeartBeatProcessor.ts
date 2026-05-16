@@ -53,7 +53,7 @@ export class HeartBeatProcessor {
   private lastEmittedPeakTime = 0;
   /** Mantener BPM publicado entre latidos (~3 s a 45 BPM). */
   private readonly BPM_PUBLISH_HOLD_MS = 4200;
-  private readonly GATE_RANGE_MIN = 0.032;
+  private readonly GATE_RANGE_MIN = 0.022;
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
   private placementMode: FingerPlacementMode = 'hybrid';
   private fingerContactConfirmed = false;
@@ -146,6 +146,14 @@ export class HeartBeatProcessor {
         this.signalBuffer.shift();
         this.timestampBuffer.shift();
       }
+    } else if (
+      this.fingerContactConfirmed &&
+      this.signalBuffer.length > 0 &&
+      this.signalBuffer.length < this.BUFFER_SIZE
+    ) {
+      const hold = this.signalBuffer[this.signalBuffer.length - 1]! * 0.999;
+      this.signalBuffer.push(hold);
+      this.timestampBuffer.push(now);
     }
 
     const derivative = this.calculateDerivative();
@@ -184,17 +192,20 @@ export class HeartBeatProcessor {
     const peakStallMs =
       this.lastEmittedPeakTime > 0 ? now - this.lastEmittedPeakTime : 0;
     const autoGateRelax =
-      this.fingerContactConfirmed && peakStallMs > 2600
-        ? clamp(0.52, 1 - (peakStallMs - 2600) / 9000, 1)
+      this.fingerContactConfirmed && peakStallMs > 1600
+        ? clamp(0.45, 1 - (peakStallMs - 1600) / 7000, 1)
         : 1;
-    const manualRelax = now < this.gateRelaxUntilMs ? 0.58 : 1;
+    const manualRelax = now < this.gateRelaxUntilMs ? 0.5 : 1;
     const gateScale =
       Math.min(autoGateRelax, manualRelax) *
-      (this.ppgPerfusionIndex > 0 && this.ppgPerfusionIndex < 0.004 ? 0.72 : 1);
+      (this.ppgPerfusionIndex > 0 && this.ppgPerfusionIndex < 0.004 ? 0.68 : 1);
     const gateOk =
       this.cachedGateRange >= this.gateRangeMin() * gateScale;
+    const runEnsemble =
+      this.signalBuffer.length >= PEAK_DETECTION_DEFAULTS.minSamplesEnsemble &&
+      (gateOk || this.fingerContactConfirmed);
 
-    if (gateOk && this.signalBuffer.length >= PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
+    if (runEnsemble) {
       const win = Math.min(this.BUFFER_SIZE, this.signalBuffer.length);
       const sigRaw = this.signalBuffer.slice(-win);
       const ts = this.timestampBuffer.slice(-win);
@@ -227,7 +238,7 @@ export class HeartBeatProcessor {
         nowMs: now,
         emittedPeakCount: this.emittedPeakCount,
         peakStallMs,
-        reacquireMode: now < this.reacquireModeUntilMs || peakStallMs >= 2800,
+        reacquireMode: now < this.reacquireModeUntilMs || peakStallMs >= 1800,
         recentRrMs: this.rrIntervals,
         sqi: ensSqi,
         perfusionIndex: this.ppgPerfusionIndex,
@@ -255,10 +266,12 @@ export class HeartBeatProcessor {
         }
 
         const instantBpm = bpmFromEmittedRr(this.rrIntervals);
+        this.consecutivePeaks += 1;
+
         if (instantBpm > 0) {
           const soloEmit =
-            decision.reason === 'SOLO_ELGENDI' || decision.reason === 'SOLO_PAN';
-          const maxJump = soloEmit ? 0.17 : 0.28;
+            decision.reason.includes('SOLO');
+          const maxJump = soloEmit ? 0.28 : 0.4;
           const acceptOutlier =
             this.smoothBPM <= 0 ||
             Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= maxJump;
@@ -267,17 +280,16 @@ export class HeartBeatProcessor {
               this.smoothBPM = instantBpm;
             } else {
               const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
-              const trust = clamp(0.12 + wScore * 0.22, 0.12, 0.32);
-              const alpha = rel > 0.18 ? trust * 0.65 : rel > 0.1 ? trust : trust * 1.15;
+              const trust = clamp(0.14 + wScore * 0.24, 0.14, 0.36);
+              const alpha = rel > 0.22 ? trust * 0.7 : rel > 0.12 ? trust : trust * 1.2;
               this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
             }
-            this.consecutivePeaks++;
           }
         }
 
         if (
-          decision.reason === 'DUAL_FUSED' ||
-          (wScore >= 0.56 && this.rrIntervals.length >= 2)
+          decision.reason.includes('DUAL') ||
+          (wScore >= 0.42 && this.rrIntervals.length >= 1)
         ) {
           this.vibrate();
           this.playBeep();

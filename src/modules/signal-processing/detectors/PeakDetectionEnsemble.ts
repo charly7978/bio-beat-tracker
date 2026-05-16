@@ -127,7 +127,7 @@ export class PeakDetectionEnsemble {
         fusedIdx.push(clamp(ie, 0, signal.length - 1));
         fusedTimes.push(te);
         peakSources.push('dual');
-      } else if (allowSolo && el.confidence >= 0.2) {
+      } else if (allowSolo && el.confidence >= 0.14) {
         usedEl.add(j);
         fusedIdx.push(clamp(ie, 0, signal.length - 1));
         fusedTimes.push(te);
@@ -154,7 +154,7 @@ export class PeakDetectionEnsemble {
         rejected.push({ index: ip, reason: 'ELGENDI_ALREADY_USED', detector: 'PanTompkinsPPG' });
         continue;
       }
-      if (allowSolo && pt.confidence >= 0.26 && el.confidence >= 0.08) {
+      if (allowSolo && pt.confidence >= 0.2 && el.confidence >= 0.06) {
         usedPan.add(k);
         fusedIdx.push(clamp(ip, 0, signal.length - 1));
         fusedTimes.push(tp);
