@@ -180,9 +180,10 @@ export class HeartBeatProcessor {
     const gateOk = this.cachedGateRange >= this.gateRangeMin();
 
     if (gateOk && this.signalBuffer.length >= PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
-      const win = Math.min(240, this.signalBuffer.length);
-      const sig = this.signalBuffer.slice(-win);
+      const win = Math.min(this.BUFFER_SIZE, this.signalBuffer.length);
+      const sigRaw = this.signalBuffer.slice(-win);
       const ts = this.timestampBuffer.slice(-win);
+      const sig = this.normalizeWindow(sigRaw, Math.min(150, sigRaw.length));
       const ens = PeakDetectionEnsemble.analyze({
         signal: sig,
         timestampsMs: ts,
@@ -194,7 +195,7 @@ export class HeartBeatProcessor {
 
       const minPeakConf =
         VITAL_THRESHOLDS.QUALITY.MIN_ENSEMBLE_CONF_FOR_PEAK *
-        (this.cameraHints.constrained ? 0.45 : 0.75);
+        (this.cameraHints.constrained ? 0.42 : 0.52);
 
       const decision = decidePeakEmit({
         ens,
@@ -206,6 +207,7 @@ export class HeartBeatProcessor {
         windowSamples: win,
         placementMode: this.placementMode,
         fingerContactConfirmed: this.fingerContactConfirmed,
+        nowMs: now,
       });
 
       if (decision.emit) {
@@ -227,8 +229,9 @@ export class HeartBeatProcessor {
 
         const instantBpm = bpmFromEmittedRr(this.rrIntervals);
         if (instantBpm > 0) {
-          const maxJump =
-            decision.reason === 'SOLO_ELGENDI' ? 0.16 : 0.24;
+          const soloEmit =
+            decision.reason === 'SOLO_ELGENDI' || decision.reason === 'SOLO_PAN';
+          const maxJump = soloEmit ? 0.2 : 0.32;
           const acceptOutlier =
             this.smoothBPM <= 0 ||
             Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= maxJump;
@@ -237,14 +240,14 @@ export class HeartBeatProcessor {
               this.smoothBPM = instantBpm;
             } else {
               const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
-              const alpha = rel > 0.2 ? 0.1 : rel > 0.12 ? 0.18 : 0.26;
+              const alpha = rel > 0.2 ? 0.12 : rel > 0.12 ? 0.2 : 0.3;
               this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
             }
             this.consecutivePeaks++;
           }
         }
 
-        if (decision.reason === 'DUAL_FUSED') {
+        if (this.rrIntervals.length >= 1 || decision.reason === 'DUAL_FUSED') {
           this.vibrate();
           this.playBeep();
         }
@@ -281,7 +284,7 @@ export class HeartBeatProcessor {
     const publishBpm =
       this.smoothBPM > 0 &&
       peakAgeMs < this.BPM_PUBLISH_HOLD_MS &&
-      this.consecutivePeaks >= 2 &&
+      this.consecutivePeaks >= 1 &&
       this.fingerContactConfirmed
         ? Math.round(this.smoothBPM)
         : 0;

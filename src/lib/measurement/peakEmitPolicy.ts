@@ -21,8 +21,9 @@ export interface PeakEmitPolicyInput {
   sampleRateHz: number;
   windowSamples: number;
   placementMode?: FingerPlacementMode;
-  /** Si false, solo emite picos con fusión dual (anti–falso positivo sin dedo). */
   fingerContactConfirmed?: boolean;
+  /** Marco actual (performance.now) para ventana viva por tiempo */
+  nowMs?: number;
 }
 
 export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
@@ -36,58 +37,79 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     windowSamples,
     placementMode = 'hybrid',
     fingerContactConfirmed = true,
+    nowMs,
   } = input;
 
-  /** Refractario completo (~221 ms @ factor 0.82) — evita ráfagas >250 BPM por solo_elgendi. */
   const minGap =
     VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS *
     PEAK_DETECTION_DEFAULTS.peakEmitRefractoryFactor;
-  const soloMinGap = minGap * 1.08;
 
   const diag = ens.diagnostics as {
     elgendiConfidence?: number;
     panTompkinsConfidence?: number;
   };
   const elConf = diag.elgendiConfidence ?? 0;
+  const panConf = diag.panTompkinsConfidence ?? 0;
   const detectorConsensus =
     (ens.agreement.elgendi + ens.agreement.panTompkins) / 2;
 
   let bestT = 0;
   let bestReason = '';
+  let bestRank = 0;
 
-  const liveEdgeMax = Math.max(3, Math.round(sampleRateHz * 0.42));
+  const liveEdgeMs = PEAK_DETECTION_DEFAULTS.peakEmitWindowMs;
+  const liveEdgeSamples = Math.max(4, Math.round(sampleRateHz * (liveEdgeMs / 1000)));
+
+  const rankSource = (src: string | undefined): number => {
+    if (src === 'dual') return 3;
+    if (src === 'solo_elgendi') return 2;
+    if (src === 'solo_pan') return 1;
+    return 0;
+  };
 
   for (let i = 0; i < ens.peakTimes.length; i++) {
     const t = ens.peakTimes[i] ?? 0;
-    if (t <= 0 || t <= lastEmittedPeakMs) continue;
+    if (t <= 0 || t < lastEmittedPeakMs + minGap) continue;
+
+    if (nowMs != null && t < nowMs - liveEdgeMs) continue;
 
     const idx = ens.peaks[i] ?? -1;
-    const samplesFromLive = idx >= 0 ? windowSamples - 1 - idx : 999;
-    if (samplesFromLive > liveEdgeMax) continue;
+    if (nowMs == null) {
+      const samplesFromLive = idx >= 0 ? windowSamples - 1 - idx : 999;
+      if (samplesFromLive > liveEdgeSamples) continue;
+    }
 
     const src = ens.peakSources?.[i];
     const dual =
       src === 'dual' &&
-      t >= lastEmittedPeakMs + minGap &&
-      detectorConsensus >= consensusMin * (fingerContactConfirmed ? 0.82 : 0.9) &&
-      ens.confidence >= minPeakConf * (fingerContactConfirmed ? 0.9 : 0.96);
+      detectorConsensus >= consensusMin * (fingerContactConfirmed ? 0.68 : 0.78) &&
+      ens.confidence >= minPeakConf * (fingerContactConfirmed ? 0.72 : 0.88);
     const soloElMin =
-      placementMode === 'pad' ? 0.28 : placementMode === 'tip' ? 0.3 : 0.32;
-    const solo =
+      placementMode === 'pad' ? 0.14 : placementMode === 'tip' ? 0.16 : 0.18;
+    const soloEl =
       fingerContactConfirmed &&
       allowSoloElgendi &&
       src === 'solo_elgendi' &&
-      t >= lastEmittedPeakMs + soloMinGap &&
       elConf >= soloElMin &&
-      detectorConsensus >= consensusMin * (placementMode === 'hybrid' ? 0.82 : 0.8) &&
-      ens.confidence >= minPeakConf * (placementMode === 'hybrid' ? 0.96 : 0.92);
+      detectorConsensus >= consensusMin * 0.65 &&
+      ens.confidence >= minPeakConf * 0.78;
+    const soloPan =
+      fingerContactConfirmed &&
+      allowSoloElgendi &&
+      src === 'solo_pan' &&
+      panConf >= soloElMin &&
+      detectorConsensus >= consensusMin * 0.65 &&
+      ens.confidence >= minPeakConf * 0.78;
 
-    if (dual || solo) {
-      // Primer pico nuevo en orden temporal (no el más reciente del buffer).
-      if (bestT === 0 || t < bestT) {
-        bestT = t;
-        bestReason = dual ? 'DUAL_FUSED' : 'SOLO_ELGENDI';
-      }
+    if (!dual && !soloEl && !soloPan) continue;
+
+    const reason = dual ? 'DUAL_FUSED' : src === 'solo_pan' ? 'SOLO_PAN' : 'SOLO_ELGENDI';
+    const rank = rankSource(src);
+
+    if (bestT === 0 || t > bestT || (t === bestT && rank > bestRank)) {
+      bestT = t;
+      bestReason = reason;
+      bestRank = rank;
     }
   }
 

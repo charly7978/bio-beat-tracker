@@ -41,7 +41,7 @@ const TOLERANT_DEFAULT: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 't
   bufferResetAfterNoContact: 55,
   allowSoloElgendiFusion: true,
   gateRangeScale: 0.65,
-  peakConsensusMin: 0.18,
+  peakConsensusMin: 0.12,
 };
 
 const STRICT_TCL: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 'torchReliable' | 'constrained'> = {
@@ -54,7 +54,7 @@ const STRICT_TCL: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 'torchRe
   bufferResetAfterNoContact: 8,
   allowSoloElgendiFusion: true,
   gateRangeScale: 0.85,
-  peakConsensusMin: 0.2,
+  peakConsensusMin: 0.14,
 };
 
 export function inferCameraRuntimeHints(

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { decidePeakEmit, bpmFromEmittedRr } from '../peakEmitPolicy';
 import type { PeakDetectionResult } from '@/types/measurements';
 
-function mockEns(peakTimes: number[], sources: Array<'dual' | 'solo_elgendi'>): PeakDetectionResult {
+function mockEns(
+  peakTimes: number[],
+  sources: Array<'dual' | 'solo_elgendi' | 'solo_pan'>,
+): PeakDetectionResult {
   return {
     peaks: peakTimes.map((_, i) => 80 + i),
     peakTimes,
@@ -55,15 +58,33 @@ describe('peakEmitPolicy', () => {
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,
-      minPeakConf: 0.17,
-      consensusMin: 0.15,
+      minPeakConf: 0.1,
+      consensusMin: 0.12,
       allowSoloElgendi: true,
       sampleRateHz: 30,
       windowSamples: 90,
       placementMode: 'hybrid',
       fingerContactConfirmed: true,
+      nowMs: 5200,
     });
     expect(d.emit).toBe(true);
+  });
+
+  it('prefiere el pico más reciente en la ventana viva', () => {
+    const ens = mockEns([4900, 5050], ['dual', 'dual']);
+    const d = decidePeakEmit({
+      ens,
+      lastEmittedPeakMs: 0,
+      minPeakConf: 0.1,
+      consensusMin: 0.12,
+      allowSoloElgendi: true,
+      sampleRateHz: 30,
+      windowSamples: 90,
+      fingerContactConfirmed: true,
+      nowMs: 5100,
+    });
+    expect(d.emit).toBe(true);
+    expect(d.peakTimeMs).toBe(5050);
   });
 
   it('sin dedo confirmado solo acepta dual estricto', () => {

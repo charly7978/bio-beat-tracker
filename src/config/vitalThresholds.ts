@@ -61,7 +61,7 @@ export const VITAL_THRESHOLDS = {
     MIN_ENSEMBLE_CONF_UNSTABLE: 0.12,
     MIN_ENSEMBLE_CONF_STABLE: 0.09,
     /** Confianza mínima del ensemble para emitir pico audible/visual */
-    MIN_ENSEMBLE_CONF_FOR_PEAK: 0.17,
+    MIN_ENSEMBLE_CONF_FOR_PEAK: 0.12,
     /** Acuerdo Elgendi+Pan mínimo para alimentar arritmias */
     MIN_DETECTOR_AGREEMENT_ARRHYTHMIA: 0.42,
     MIN_FOR_CLINICAL: 55,

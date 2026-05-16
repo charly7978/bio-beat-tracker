@@ -1,6 +1,6 @@
 /**
  * Ensemble de picos PPG: Elgendi + Pan–Tompkins PPG + autocorrelación espectral.
- * `legacyPeaks` opcional permite alinear con un detector previo sin duplicar lógica.
+ * Fusión bidireccional con tolerancia temporal (no solo Elgendi → Pan).
  */
 import type { PeakDetectionResult } from '../../../types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
@@ -15,9 +15,7 @@ export interface PeakDetectionEnsembleInput {
   timestampsMs: number[];
   samplingRateHz: number;
   sqi?: number;
-  /** Picos índice heredados (p.ej. morfología local) — opcional */
   legacyPeakIndices?: number[];
-  /** Cámara no-TCL: aceptar picos Elgendi sin match Pan si no hay alternativa */
   allowSoloElgendiFusion?: boolean;
 }
 
@@ -26,6 +24,8 @@ function median(a: number[]): number {
   const s = [...a].sort((x, y) => x - y);
   return s[Math.floor(s.length / 2)] ?? 0;
 }
+
+type PeakSource = 'dual' | 'solo_elgendi' | 'solo_pan';
 
 export class PeakDetectionEnsemble {
   static analyze(input: PeakDetectionEnsembleInput): PeakDetectionResult {
@@ -60,38 +60,50 @@ export class PeakDetectionEnsemble {
     });
 
     const spec = bpmFromAutocorr(signal, samplingRateHz);
+    const tolMs = PEAK_DETECTION_DEFAULTS.fusionToleranceMs;
+    const allowSolo = allowSoloElgendiFusion !== false;
 
-    const tolMs = 135;
     const fusedIdx: number[] = [];
     const fusedTimes: number[] = [];
-    const peakSources: Array<'dual' | 'solo_elgendi'> = [];
+    const peakSources: PeakSource[] = [];
+    const usedPan = new Set<number>();
+    const usedEl = new Set<number>();
     let dualFused = 0;
 
-    const usedPan = new Set<number>();
-    for (const ie of el.peaks) {
-      const te = timestampsMs[ie] ?? 0;
-      let bestJ = -1;
+    const panTimeAt = (k: number): number => {
+      const ip = pt.peaks[k] ?? 0;
+      return pt.peakTimes[k] ?? timestampsMs[ip] ?? 0;
+    };
+
+    const elTimeAt = (j: number): number => {
+      const ie = el.peaks[j] ?? 0;
+      return el.peakTimes[j] ?? timestampsMs[ie] ?? 0;
+    };
+
+    // Paso 1: picos Elgendi (sistólicos) — emparejar Pan en ventana ±tolMs
+    for (let j = 0; j < el.peaks.length; j++) {
+      const ie = el.peaks[j]!;
+      const te = elTimeAt(j);
+      let bestK = -1;
       let bestD = tolMs + 1;
       for (let k = 0; k < pt.peaks.length; k++) {
         if (usedPan.has(k)) continue;
-        const ip = pt.peaks[k];
-        const tp = timestampsMs[ip] ?? 0;
-        const d = Math.abs(tp - te);
+        const d = Math.abs(panTimeAt(k) - te);
         if (d < bestD) {
           bestD = d;
-          bestJ = k;
+          bestK = k;
         }
       }
-      if (bestJ >= 0 && bestD <= tolMs) {
-        usedPan.add(bestJ);
+      if (bestK >= 0 && bestD <= tolMs) {
+        usedPan.add(bestK);
+        usedEl.add(j);
         dualFused++;
-        const ip = pt.peaks[bestJ];
-        const mid = Math.round((ie + ip) / 2);
-        fusedIdx.push(clamp(mid, 0, signal.length - 1));
-        fusedTimes.push((timestampsMs[ie]! + timestampsMs[ip]!) / 2);
+        fusedIdx.push(clamp(ie, 0, signal.length - 1));
+        fusedTimes.push(te);
         peakSources.push('dual');
-      } else if (allowSoloElgendiFusion && el.confidence >= 0.2) {
-        fusedIdx.push(ie);
+      } else if (allowSolo && el.confidence >= 0.1) {
+        usedEl.add(j);
+        fusedIdx.push(clamp(ie, 0, signal.length - 1));
         fusedTimes.push(te);
         peakSources.push('solo_elgendi');
         rejected.push({ index: ie, reason: 'SOLO_ELGENDI_RELAXED', detector: 'Elgendi' });
@@ -100,22 +112,51 @@ export class PeakDetectionEnsemble {
       }
     }
 
+    // Paso 2: picos Pan sin pareja Elgendi (derivada / pendiente)
     for (let k = 0; k < pt.peaks.length; k++) {
       if (usedPan.has(k)) continue;
-      const ip = pt.peaks[k];
-      rejected.push({ index: ip, reason: 'NO_ELGENDI_MATCH', detector: 'PanTompkinsPPG' });
+      const ip = pt.peaks[k]!;
+      const tp = panTimeAt(k);
+      let nearEl = false;
+      for (let j = 0; j < el.peaks.length; j++) {
+        if (Math.abs(elTimeAt(j) - tp) <= tolMs) {
+          nearEl = true;
+          break;
+        }
+      }
+      if (nearEl) {
+        rejected.push({ index: ip, reason: 'ELGENDI_ALREADY_USED', detector: 'PanTompkinsPPG' });
+        continue;
+      }
+      if (allowSolo && pt.confidence >= 0.12) {
+        usedPan.add(k);
+        fusedIdx.push(clamp(ip, 0, signal.length - 1));
+        fusedTimes.push(tp);
+        peakSources.push('solo_pan');
+        rejected.push({ index: ip, reason: 'SOLO_PAN_RELAXED', detector: 'PanTompkinsPPG' });
+      } else {
+        rejected.push({ index: ip, reason: 'NO_ELGENDI_MATCH', detector: 'PanTompkinsPPG' });
+      }
     }
 
+    // Orden temporal para RR
+    const order = fusedTimes
+      .map((t, i) => ({ t, i }))
+      .sort((a, b) => a.t - b.t)
+      .map((o) => o.i);
+    const sortedIdx = order.map((i) => fusedIdx[i]!);
+    const sortedTimes = order.map((i) => fusedTimes[i]!);
+    const sortedSources = order.map((i) => peakSources[i]!);
+
     const rr: number[] = [];
-    for (let i = 1; i < fusedTimes.length; i++) {
-      const d = fusedTimes[i] - fusedTimes[i - 1];
+    for (let i = 1; i < sortedTimes.length; i++) {
+      const d = sortedTimes[i] - sortedTimes[i - 1];
       if (isPhysiologicalRR(d)) rr.push(d);
     }
 
     let bpmInstant: number | null = rr.length ? 60000 / median(rr.slice(-4)) : null;
     const specBpm = spec.bpm > 0 ? spec.bpm : null;
 
-    // Guarda anti-alias (½× o 2×) cuando la fusión estricta pierde latidos alternos
     if (bpmInstant && specBpm) {
       const half = bpmInstant * 2;
       const dbl = bpmInstant / 2;
@@ -131,40 +172,45 @@ export class PeakDetectionEnsemble {
     let spectralAgreement = 0;
     if (bpmInstant && specBpm) {
       spectralAgreement = clamp(1 - Math.abs(bpmInstant - specBpm) / Math.max(bpmInstant, specBpm), 0, 1);
-      if (spectralAgreement < PEAK_DETECTION_DEFAULTS.spectralAgreementMin) {
-        if (bpmInstant) rejected.push({ index: fusedIdx[fusedIdx.length - 1] ?? 0, reason: 'SPECTRAL_MISMATCH', detector: 'ensemble' });
-        bpmInstant = spectralAgreement > 0.18 ? bpmInstant : null;
+      if (spectralAgreement < 0.12) {
+        rejected.push({
+          index: sortedIdx[sortedIdx.length - 1] ?? 0,
+          reason: 'SPECTRAL_MISMATCH',
+          detector: 'ensemble',
+        });
+        bpmInstant = null;
       }
     }
 
     const nE = el.peaks.length || 1;
     const nP = pt.peaks.length || 1;
-    const nF = fusedIdx.length || 1;
-    const soloFused = Math.max(0, fusedIdx.length - dualFused);
-    const agreeEl = clamp((dualFused * 2 + soloFused) / (nE + nP), 0, 1);
-    const agreePan = clamp((dualFused * 2) / (nE + nP), 0, 1);
+    const soloEl = sortedSources.filter((s) => s === 'solo_elgendi').length;
+    const soloPan = sortedSources.filter((s) => s === 'solo_pan').length;
+    const agreeEl = clamp((dualFused * 2 + soloEl) / (nE + nP), 0, 1);
+    const agreePan = clamp((dualFused * 2 + soloPan) / (nE + nP), 0, 1);
     const agreeAuto = spec.score;
 
     let confidence =
-      agreeEl * 0.28 +
-      agreePan * 0.28 +
-      clamp(el.confidence, 0, 1) * 0.18 +
-      clamp(pt.confidence, 0, 1) * 0.16 +
+      agreeEl * 0.26 +
+      agreePan * 0.26 +
+      clamp(el.confidence, 0, 1) * 0.2 +
+      clamp(pt.confidence, 0, 1) * 0.18 +
       spectralAgreement * 0.1;
 
     if (typeof sqi === 'number' && sqi < PEAK_DETECTION_DEFAULTS.minSQI) {
-      confidence *= 0.72;
+      confidence *= 0.8;
+    }
+    if (dualFused > 0) {
+      confidence = clamp(confidence + 0.08, 0, 1);
     }
 
-    const bpmStable = bpmInstant;
-
     return {
-      peaks: fusedIdx,
-      peakTimes: fusedTimes,
-      peakSources,
+      peaks: sortedIdx,
+      peakTimes: sortedTimes,
+      peakSources: sortedSources,
       rrIntervalsMs: rr,
       bpmInstant,
-      bpmStable,
+      bpmStable: bpmInstant,
       confidence: clamp(confidence, 0, 1),
       agreement: {
         elgendi: agreeEl,
@@ -178,13 +224,14 @@ export class PeakDetectionEnsemble {
         panTompkins: pt.diagnostics,
         elgendiReason: el.reason,
         spectralBpm: specBpm,
-        fusedCount: fusedIdx.length,
+        fusedCount: sortedIdx.length,
         dualFused,
-        soloFused,
+        soloEl,
+        soloPan,
+        fusionToleranceMs: tolMs,
         elgendiConfidence: el.confidence,
         panTompkinsConfidence: pt.confidence,
-        /** Tiempos (performance.now) para overlay en PPGSignalMeter */
-        fusedPeakTimes: fusedTimes,
+        fusedPeakTimes: sortedTimes,
         elgendiPeakTimes: el.peakTimes,
         panTompkinsPeakTimes: pt.peakTimes,
       },

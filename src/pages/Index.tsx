@@ -907,15 +907,9 @@ const Index = () => {
       lastRrSnapshotRef.current = heartBeatResult.rrData;
     }
 
-    const peakEmitReason =
-      (heartBeatResult.ensembleDiagnostics as { emitReason?: string } | undefined)
-        ?.emitReason;
-    const fusedPeak =
-      hasUsableContact &&
-      heartBeatResult.isPeak &&
-      peakEmitReason === 'DUAL_FUSED';
+    const emittedPeak = hasUsableContact && heartBeatResult.isPeak;
 
-    if (fusedPeak) {
+    if (emittedPeak) {
       setBeatMarker(1);
       if (beatMarkerTimerRef.current) window.clearTimeout(beatMarkerTimerRef.current);
       beatMarkerTimerRef.current = window.setTimeout(() => {
@@ -924,7 +918,7 @@ const Index = () => {
       }, 300);
     }
 
-    if (fusedPeak) {
+    if (emittedPeak) {
       totalBeatsRef.current++;
       const currentArrCount = vitalSignsRef.current.arrhythmia.value.count || 0;
       if (currentArrCount > lastArrhythmiaCountForBeatsRef.current) {
@@ -934,7 +928,7 @@ const Index = () => {
     }
 
     if (
-      fusedPeak &&
+      emittedPeak &&
       heartBeatResult.rrData?.intervals &&
       heartBeatResult.rrData.intervals.length > 0 &&
       nowT - lastRrPushRef.current >= RR_PUSH_THROTTLE_MS

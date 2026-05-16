@@ -95,10 +95,10 @@ export class PanTompkinsPPGDetector {
     for (let i = 2; i < n - 2; i++) {
       const v = integrated[i];
       signalPeak = Math.max(signalPeak * decay, v);
-      if (v < signalPeak * 0.45) {
+      if (v < signalPeak * 0.4) {
         noisePeak = Math.max(noisePeak * decay, v);
       }
-      const thr1 = noisePeak + 0.55 * Math.max(1e-6, signalPeak - noisePeak);
+      const thr1 = noisePeak + 0.48 * Math.max(1e-6, signalPeak - noisePeak);
       thr[i] = thr1;
 
       const localMax = v >= integrated[i - 1] && v > integrated[i + 1] && v >= integrated[i - 2] && v >= integrated[i + 2];
@@ -111,7 +111,7 @@ export class PanTompkinsPPGDetector {
 
       // Searchback conservador: solo tras pausa larga y con umbral menos agresivo
       if (i - lastPeakIdx > expectedRR * 2.15 && lastPeakIdx >= 0) {
-        const relaxed = noisePeak + 0.42 * Math.max(1e-6, signalPeak - noisePeak);
+        const relaxed = noisePeak + 0.36 * Math.max(1e-6, signalPeak - noisePeak);
         if (v < relaxed) continue;
         searchbackEvents.push(i);
       }

@@ -16,7 +16,7 @@ const ImageDataCtor: typeof ImageData =
 
 function makePulseFrame(w: number, h: number, t: number, bpm: number, fs: number): ImageData {
   const phase = 2 * Math.PI * (bpm / 60) * (t / fs);
-  const pulse = Math.round(180 + 10 * Math.sin(phase));
+  const pulse = Math.round(180 + 10 * Math.max(0, Math.sin(phase)));
   const data = new Uint8ClampedArray(w * h * 4);
   for (let i = 0; i < w * h; i++) {
     data[i * 4 + 0] = pulse;
@@ -72,7 +72,7 @@ describe('Backpressure dynamic transition guardrail', () => {
       }
       proc.processFrame(makePulseFrame(64, 64, i, targetBpm, fs));
       const phase = (2 * Math.PI * targetBpm * i) / (60 * fs);
-      const syntheticPulse = 72 * Math.sin(phase);
+      const syntheticPulse = 72 * Math.max(0, Math.sin(phase));
       const r = hb.processSignal(syntheticPulse, i * (1000 / fs));
 
       // Pre-switch: ventana estabilizada antes de cambiar.
