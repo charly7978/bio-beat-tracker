@@ -70,7 +70,7 @@ export const useHeartBeatProcessor = () => {
 
     const currentTime = timestamp ?? performance.now();
 
-    // NO_CONTACT: limpiar valores cacheados y eventualmente resetear
+    // Sin dedo: no alimentar el ensemble (la onda PPG puede seguir en otro canal)
     if (contactState === 'NO_CONTACT') {
       noContactFramesRef.current += 1;
       if (noContactFramesRef.current >= NO_CONTACT_RESET_THRESHOLD) {

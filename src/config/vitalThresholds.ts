@@ -35,7 +35,11 @@ export const VITAL_THRESHOLDS = {
   
   // SIGNAL QUALITY (SQI)
   QUALITY: {
-    MIN_FOR_HR: 15,
+    /** SQI mínimo para publicar BPM en UI (la onda puede verse antes) */
+    MIN_FOR_HR: 10,
+    /** Confianza mínima del ensemble para mostrar BPM en contacto inestable */
+    MIN_ENSEMBLE_CONF_UNSTABLE: 0.1,
+    MIN_ENSEMBLE_CONF_STABLE: 0.08,
     MIN_FOR_CLINICAL: 55,
     /** PI (AC/DC) mínimo para marcar contacto STABLE — cámara suele dar 0.001–0.008 al inicio */
     MIN_PI: 0.0012,

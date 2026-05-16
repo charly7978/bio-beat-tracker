@@ -621,12 +621,9 @@ const Index = () => {
     const diag = lastSignal.diagnostics;
     const nowT = performance.now();
 
-    const hrContact: ContactState =
-      contactState === 'STABLE_CONTACT' ? 'STABLE_CONTACT' : 'NO_CONTACT';
-
     const heartBeatResult = processHeartBeat(
       signalValue,
-      hrContact,
+      contactState,
       lastSignal.timestamp
     );
 
@@ -638,22 +635,67 @@ const Index = () => {
 
     const hasUsableContact =
       lastSignal.fingerDetected && contactState !== 'NO_CONTACT';
-    const stableHumanSignal =
+
+    const Q = VITAL_THRESHOLDS.QUALITY;
+    const minConf =
+      contactState === 'STABLE_CONTACT'
+        ? Q.MIN_ENSEMBLE_CONF_STABLE
+        : Q.MIN_ENSEMBLE_CONF_UNSTABLE;
+    const hrReady =
+      hasUsableContact &&
+      heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
+      heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX &&
+      heartBeatResult.confidence >= minConf;
+
+    const vitalsReady =
+      hrReady &&
       contactState === 'STABLE_CONTACT' &&
-      lastSignal.fingerDetected &&
-      (lastSignal.quality || 0) >= VITAL_THRESHOLDS.QUALITY.MIN_FOR_HR &&
-      (lastSignal.perfusionIndex || 0) >= VITAL_THRESHOLDS.QUALITY.MIN_PI * 0.55;
+      (lastSignal.quality || 0) >= Q.MIN_FOR_HR &&
+      (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * 0.45;
+
     if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {
       lastSignalPushRef.current = nowT;
-      // Siempre dibujar la onda si hay contacto, incluso si la calidad es baja
-      // para que el usuario pueda ver si el dedo está bien puesto.
-      setHeartbeatSignal(hasUsableContact ? heartBeatResult.filteredValue : 0);
+      setHeartbeatSignal(hasUsableContact ? signalValue : 0);
     }
 
-    if (!stableHumanSignal) {
+    if (hrReady) {
+      unstableFrameCounter.current = 0;
+      const verdict = bpmSanityRef.current.push(heartBeatResult.bpm);
+      if (verdict.ok === false) {
+        const msg = `BPM stream ${verdict.reason} (${verdict.detail})`;
+        if (sanityErrorRef.current !== verdict.reason) {
+          sanityErrorRef.current = verdict.reason;
+          setSanityError(msg);
+          const now = performance.now();
+          if (now - sanityToastAtRef.current > 5000) {
+            sanityToastAtRef.current = now;
+            toast({
+              variant: "destructive",
+              title: "⚠ Señal sospechosa detectada",
+              description: msg,
+            });
+          }
+        }
+      } else {
+        if (sanityErrorRef.current) {
+          sanityErrorRef.current = null;
+          setSanityError(null);
+        }
+        if (nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {
+          lastHrPushRef.current = nowT;
+          setVitalSigns(prev => ({
+            ...prev,
+            heartRate: {
+              ...prev.heartRate,
+              value: heartBeatResult.bpm,
+              status: contactState === 'STABLE_CONTACT' ? 'VALID' : 'WARMUP',
+            },
+            signalQuality: Math.round(lastSignal.quality || 0),
+          }));
+        }
+      }
+    } else {
       unstableFrameCounter.current++;
-      
-      // Solo borrar vitales después de señal mala SOSTENIDA
       if (unstableFrameCounter.current >= UNSTABLE_ZERO_THRESHOLD) {
         vitalSignsFrameCounter.current = 0;
         setBeatMarker(0);
@@ -674,47 +716,9 @@ const Index = () => {
               }
         ));
       }
-      // Durante los primeros frames inestables, mantener último valor válido (no borrar)
-      return;
     }
 
-    // Señal estable — resetear contador de inestabilidad
-    unstableFrameCounter.current = 0;
-    // Guardrail anti-simulación: si el stream de BPM se vuelve constante /
-    // repetitivo / fuera de rango fisiológico, congelamos la actualización
-    // y exponemos un estado de error en lugar de pintar datos sospechosos.
-    const verdict = bpmSanityRef.current.push(heartBeatResult.bpm);
-    if (verdict.ok === false) {
-      const msg = `BPM stream ${verdict.reason} (${verdict.detail})`;
-      if (sanityErrorRef.current !== verdict.reason) {
-        sanityErrorRef.current = verdict.reason;
-        setSanityError(msg);
-        const now = performance.now();
-        if (now - sanityToastAtRef.current > 5000) {
-          sanityToastAtRef.current = now;
-          toast({
-            variant: "destructive",
-            title: "⚠ Señal sospechosa detectada",
-            description: msg,
-          });
-        }
-      }
-      // No actualizamos heartRate ni vitales mientras el verdict sea inválido.
-      return;
-    }
-    if (sanityErrorRef.current) {
-      sanityErrorRef.current = null;
-      setSanityError(null);
-    }
-    if (nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {
-      lastHrPushRef.current = nowT;
-      setVitalSigns(prev => ({
-        ...prev,
-        heartRate: { ...prev.heartRate, value: heartBeatResult.bpm, status: "VALID" }
-      }));
-    }
-
-    if (heartBeatResult.isPeak) {
+    if (hrReady && heartBeatResult.isPeak) {
       setBeatMarker(1);
       if (beatMarkerTimerRef.current) window.clearTimeout(beatMarkerTimerRef.current);
       beatMarkerTimerRef.current = window.setTimeout(() => {
@@ -729,9 +733,13 @@ const Index = () => {
       }
     }
 
-      if (heartBeatResult.isPeak && heartBeatResult.rrData?.intervals && nowT - lastRrPushRef.current >= RR_PUSH_THROTTLE_MS) {
+    if (hrReady && heartBeatResult.isPeak && heartBeatResult.rrData?.intervals && nowT - lastRrPushRef.current >= RR_PUSH_THROTTLE_MS) {
       lastRrPushRef.current = nowT;
       setRRIntervals(heartBeatResult.rrData.intervals.slice(-5));
+    }
+
+    if (!vitalsReady) {
+      return;
     }
 
     vitalSignsFrameCounter.current++;
