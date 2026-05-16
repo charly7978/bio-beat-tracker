@@ -127,7 +127,12 @@ export class HeartBeatProcessor {
       this.cachedGateRange = (gSorted[Math.floor(gSorted.length * 0.9)] ?? 0) - (gSorted[Math.floor(gSorted.length * 0.1)] ?? 0);
     }
     if (this.cachedGateRange < this.gateRangeMin()) {
-      if (this.heldBpm > 0 && now - this.lastGoodBpmTime < this.BPM_HOLD_MS) {
+      const peakAgeMs = this.lastPeakTime > 0 ? now - this.lastPeakTime : Number.POSITIVE_INFINITY;
+      if (
+        this.heldBpm > 0 &&
+        peakAgeMs < this.MAX_PEAK_INTERVAL_MS &&
+        now - this.lastGoodBpmTime < this.BPM_HOLD_MS
+      ) {
         return {
           bpm: Math.round(this.heldBpm),
           confidence: clamp(this.calculateConfidence(0) * 0.88, 0.1, 0.65),
@@ -199,11 +204,11 @@ export class HeartBeatProcessor {
       }
 
       const lastT = ens.peakTimes.length ? ens.peakTimes[ens.peakTimes.length - 1] : 0;
-      const bufferNow = this.timestampBuffer[this.timestampBuffer.length - 1] ?? now;
-      const peakDelta = lastT > 0
-        ? Math.min(Math.abs(lastT - now), Math.abs(lastT - bufferNow))
-        : Number.POSITIVE_INFINITY;
-      const peakFresh = peakDelta < PEAK_DETECTION_DEFAULTS.peakEmitWindowMs;
+      const lastPeakIdx = ens.peaks.length ? ens.peaks[ens.peaks.length - 1]! : -1;
+      const samplesFromLive =
+        lastPeakIdx >= 0 ? win - 1 - lastPeakIdx : Number.POSITIVE_INFINITY;
+      const peakAtLiveEdge =
+        samplesFromLive <= Math.max(2, Math.round(sampleRate * 0.28));
       const minEmitGap =
         this.MIN_PEAK_INTERVAL_MS * PEAK_DETECTION_DEFAULTS.peakEmitRefractoryFactor;
       const agreement = ens.agreement;
@@ -213,12 +218,30 @@ export class HeartBeatProcessor {
         VITAL_THRESHOLDS.QUALITY.MIN_ENSEMBLE_CONF_FOR_PEAK *
         (this.cameraHints.constrained ? 0.5 : 1);
       const consensusMin = this.cameraHints.peakConsensusMin;
+      const lastSource = ens.peakSources?.[ens.peakSources.length - 1];
+      const ensDiag = ens.diagnostics as {
+        elgendiConfidence?: number;
+        panTompkinsConfidence?: number;
+      };
+      const elConf = ensDiag.elgendiConfidence ?? 0;
+      const refractoryOk =
+        this.lastEmittedPeakTime === 0 ||
+        Math.abs(lastT - this.lastEmittedPeakTime) > minEmitGap;
+      const dualEmit =
+        lastSource === 'dual' &&
+        detectorConsensus >= consensusMin &&
+        ensembleConf >= minPeakConf;
+      const soloEmit =
+        lastSource === 'solo_elgendi' &&
+        elConf >= 0.18 &&
+        ensembleConf >= minPeakConf * 0.75;
+
       if (
         lastT > 0 &&
-        peakFresh &&
-        ensembleConf >= minPeakConf &&
-        detectorConsensus >= consensusMin &&
-        Math.abs(lastT - this.lastEmittedPeakTime) > minEmitGap
+        peakAtLiveEdge &&
+        refractoryOk &&
+        lastT !== this.lastEmittedPeakTime &&
+        (dualEmit || soloEmit)
       ) {
         isPeak = true;
         this.lastEmittedPeakTime = lastT;
@@ -244,25 +267,6 @@ export class HeartBeatProcessor {
 
         this.vibrate();
         this.playBeep();
-      } else if (
-        !isPeak &&
-        ensembleBpm != null &&
-        ensembleBpm >= PEAK_DETECTION_DEFAULTS.minBpm &&
-        ensembleBpm <= PEAK_DETECTION_DEFAULTS.maxBpm &&
-        ensembleConf >= (this.cameraHints.constrained ? 0.12 : 0.24) &&
-        detectorConsensus >= (this.cameraHints.constrained ? 0.18 : 0.32) &&
-        ens.rrIntervalsMs.length >= 2
-      ) {
-        const tail = ens.rrIntervalsMs.slice(-4);
-        const medRr = tail.sort((a, b) => a - b)[Math.floor(tail.length / 2)] ?? 0;
-        if (medRr >= this.MIN_PEAK_INTERVAL_MS && medRr <= this.MAX_PEAK_INTERVAL_MS) {
-          const bpmFromEns = 60000 / medRr;
-          if (this.smoothBPM === 0) {
-            this.smoothBPM = bpmFromEns;
-          } else {
-            this.smoothBPM = this.smoothBPM * 0.94 + bpmFromEns * 0.06;
-          }
-        }
       }
     }
 
@@ -271,10 +275,8 @@ export class HeartBeatProcessor {
     }
 
     let displayBPM = this.smoothBPM;
-    if (displayBPM <= 0 && ensembleBpm != null && ensembleBpm > 0) {
+    if (isPeak && displayBPM <= 0 && ensembleBpm != null && ensembleBpm > 0) {
       displayBPM = ensembleBpm;
-    } else if (displayBPM <= 0 && this.frequencyBPM > 0 && this.periodicityScore > 0.35) {
-      displayBPM = this.frequencyBPM;
     }
     let consensusCoherent = false;
     let consensusReason = 'PEAKS_ONLY';
@@ -310,13 +312,17 @@ export class HeartBeatProcessor {
     const confidence = this.calculateConfidence(ensembleConf);
     const finalConfidence = consensusCoherent ? Math.min(1.0, confidence * 1.12) : confidence * 0.88;
 
-    if (displayBPM > 0 && finalConfidence >= 0.1) {
+    if (isPeak && displayBPM > 0) {
       this.heldBpm = displayBPM;
       this.lastGoodBpmTime = now;
     }
 
+    const peakAgeMs = this.lastPeakTime > 0 ? now - this.lastPeakTime : Number.POSITIVE_INFINITY;
+    const publishBpm =
+      displayBPM > 0 && peakAgeMs < this.MAX_PEAK_INTERVAL_MS ? displayBPM : 0;
+
     return {
-      bpm: displayBPM,
+      bpm: publishBpm,
       confidence: finalConfidence,
       isPeak,
       filteredValue: normalizedValue,

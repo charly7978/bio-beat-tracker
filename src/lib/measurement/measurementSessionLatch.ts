@@ -1,27 +1,32 @@
 /**
- * Mantiene la medición viva aunque BPM/confianza fluctúen unos frames.
- * Evita que SpO2/BP dejen de acumularse por parpadeos de gates.
+ * Enganche de sesión solo con latidos reales (picos del ensemble).
+ * Evita SpO2/BP cortados por parpadeos de contacto sin inventar BPM.
  */
 export interface MeasurementSessionLatch {
   established: boolean;
   goodStreak: number;
   lastBpm: number;
   lastContactMs: number;
+  lastPeakMs: number;
 }
 
 export const SESSION_LATCH = {
-  /** Frames con buena señal para “enganchar” sesión (~0,3 s a 30 Hz efectivos) */
-  ESTABLISH_STREAK: 8,
-  /** Tras perder contacto, seguir pipeline este tiempo (ms) */
+  ESTABLISH_STREAK: 6,
   CONTACT_GRACE_MS: 4000,
-  /** BPM mínimo para considerar latido presente */
+  /** Sin picos reales durante este tiempo, la sesión no alimenta vitales */
+  MAX_PEAK_GAP_MS: 2800,
   MIN_BPM: 32,
-  /** SQI mínimo para avanzar streak */
   MIN_SQI: 3,
 } as const;
 
 export function createMeasurementSessionLatch(): MeasurementSessionLatch {
-  return { established: false, goodStreak: 0, lastBpm: 0, lastContactMs: 0 };
+  return {
+    established: false,
+    goodStreak: 0,
+    lastBpm: 0,
+    lastContactMs: 0,
+    lastPeakMs: 0,
+  };
 }
 
 export function updateMeasurementSessionLatch(
@@ -30,6 +35,7 @@ export function updateMeasurementSessionLatch(
   bpm: number,
   rawSqi: number,
   nowMs: number,
+  isPeak: boolean,
 ): MeasurementSessionLatch {
   if (!hasUsableContact) {
     return {
@@ -40,16 +46,17 @@ export function updateMeasurementSessionLatch(
     };
   }
 
-  const bpmOk = bpm >= SESSION_LATCH.MIN_BPM || latch.lastBpm >= SESSION_LATCH.MIN_BPM;
   const nextBpm = bpm > 0 ? bpm : latch.lastBpm;
+  const lastPeakMs = isPeak ? nowMs : latch.lastPeakMs;
 
-  if (bpmOk && rawSqi >= SESSION_LATCH.MIN_SQI) {
+  if (isPeak && bpm >= SESSION_LATCH.MIN_BPM && rawSqi >= SESSION_LATCH.MIN_SQI) {
     const goodStreak = latch.goodStreak + 1;
     return {
       established: latch.established || goodStreak >= SESSION_LATCH.ESTABLISH_STREAK,
       goodStreak,
       lastBpm: nextBpm,
       lastContactMs: nowMs,
+      lastPeakMs,
     };
   }
 
@@ -57,6 +64,8 @@ export function updateMeasurementSessionLatch(
     ...latch,
     lastBpm: nextBpm,
     lastContactMs: nowMs,
+    lastPeakMs,
+    goodStreak: isPeak ? latch.goodStreak : Math.max(0, latch.goodStreak - 1),
   };
 }
 
@@ -66,7 +75,17 @@ export function isMeasurementPipelineLive(
   rawSqi: number,
   nowMs: number,
 ): boolean {
-  if (hasUsableContact) return latch.established || latch.lastBpm >= SESSION_LATCH.MIN_BPM;
+  const peakRecent =
+    latch.lastPeakMs > 0 &&
+    nowMs - latch.lastPeakMs < SESSION_LATCH.MAX_PEAK_GAP_MS;
+
+  if (hasUsableContact) {
+    return latch.established && peakRecent && rawSqi >= 2;
+  }
   if (!latch.established) return false;
-  return nowMs - latch.lastContactMs < SESSION_LATCH.CONTACT_GRACE_MS && rawSqi >= 2;
+  return (
+    nowMs - latch.lastContactMs < SESSION_LATCH.CONTACT_GRACE_MS &&
+    peakRecent &&
+    rawSqi >= 2
+  );
 }

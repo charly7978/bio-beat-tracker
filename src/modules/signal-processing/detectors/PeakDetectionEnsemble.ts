@@ -63,6 +63,8 @@ export class PeakDetectionEnsemble {
     const tolMs = 135;
     const fusedIdx: number[] = [];
     const fusedTimes: number[] = [];
+    const peakSources: Array<'dual' | 'solo_elgendi'> = [];
+    let dualFused = 0;
 
     const usedPan = new Set<number>();
     for (const ie of el.peaks) {
@@ -81,13 +83,16 @@ export class PeakDetectionEnsemble {
       }
       if (bestJ >= 0 && bestD <= tolMs) {
         usedPan.add(bestJ);
+        dualFused++;
         const ip = pt.peaks[bestJ];
         const mid = Math.round((ie + ip) / 2);
         fusedIdx.push(clamp(mid, 0, signal.length - 1));
         fusedTimes.push((timestampsMs[ie]! + timestampsMs[ip]!) / 2);
+        peakSources.push('dual');
       } else if (allowSoloElgendiFusion && el.confidence >= 0.2) {
         fusedIdx.push(ie);
         fusedTimes.push(te);
+        peakSources.push('solo_elgendi');
         rejected.push({ index: ie, reason: 'SOLO_ELGENDI_RELAXED', detector: 'Elgendi' });
       } else {
         rejected.push({ index: ie, reason: 'NO_PAN_MATCH', detector: 'Elgendi' });
@@ -134,8 +139,9 @@ export class PeakDetectionEnsemble {
     const nE = el.peaks.length || 1;
     const nP = pt.peaks.length || 1;
     const nF = fusedIdx.length || 1;
-    const agreeEl = clamp((usedPan.size * 2) / (nE + nP), 0, 1);
-    const agreePan = agreeEl;
+    const soloFused = Math.max(0, fusedIdx.length - dualFused);
+    const agreeEl = clamp((dualFused * 2 + soloFused) / (nE + nP), 0, 1);
+    const agreePan = clamp((dualFused * 2) / (nE + nP), 0, 1);
     const agreeAuto = spec.score;
 
     let confidence =
@@ -154,6 +160,7 @@ export class PeakDetectionEnsemble {
     return {
       peaks: fusedIdx,
       peakTimes: fusedTimes,
+      peakSources,
       rrIntervalsMs: rr,
       bpmInstant,
       bpmStable,
@@ -171,6 +178,10 @@ export class PeakDetectionEnsemble {
         elgendiReason: el.reason,
         spectralBpm: specBpm,
         fusedCount: fusedIdx.length,
+        dualFused,
+        soloFused,
+        elgendiConfidence: el.confidence,
+        panTompkinsConfidence: pt.confidence,
         /** Tiempos (performance.now) para overlay en PPGSignalMeter */
         fusedPeakTimes: fusedTimes,
         elgendiPeakTimes: el.peakTimes,

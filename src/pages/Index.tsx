@@ -712,25 +712,36 @@ const Index = () => {
       heartBeatResult.bpm,
       rawSqi,
       nowT,
+      heartBeatResult.isPeak,
     );
     const sessionLive = measurementLatchRef.current.established;
+    const lastPeakAt = heartBeatResult.rrData?.lastPeakTime ?? 0;
+    const peakRecent =
+      lastPeakAt > 0 && nowT - lastPeakAt < SESSION_LATCH.MAX_PEAK_GAP_MS;
+
+    if (
+      heartBeatResult.isPeak &&
+      heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
+      heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX
+    ) {
+      lastGoodBpmRef.current = heartBeatResult.bpm;
+    }
+
     const bpmOut =
       heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
       heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX
         ? heartBeatResult.bpm
-        : Math.max(measurementLatchRef.current.lastBpm, lastGoodBpmRef.current);
-
-    if (bpmOut >= VITAL_THRESHOLDS.HR.MIN && bpmOut <= VITAL_THRESHOLDS.HR.MAX) {
-      lastGoodBpmRef.current = bpmOut;
-    }
+        : peakRecent
+          ? lastGoodBpmRef.current
+          : 0;
 
     const hrReady =
       hasUsableContact &&
+      peakRecent &&
       bpmOut >= VITAL_THRESHOLDS.HR.MIN &&
       bpmOut <= VITAL_THRESHOLDS.HR.MAX &&
       (heartBeatResult.confidence >= minConf ||
-        (hints.constrained && bpmOut >= 38 && rawSqi >= 5) ||
-        (sessionLive && rawSqi >= SESSION_LATCH.MIN_SQI));
+        (hints.constrained && bpmOut >= 38 && rawSqi >= 5));
 
     const vitalsGate =
       hasUsableContact &&
@@ -762,10 +773,7 @@ const Index = () => {
       setHeartbeatSignal(showWaveform ? signalValue : 0);
     }
 
-    const hrPublish =
-      bpmOut >= VITAL_THRESHOLDS.HR.MIN &&
-      bpmOut <= VITAL_THRESHOLDS.HR.MAX &&
-      (hrReady || sessionLive);
+    const hrPublish = hrReady && peakRecent;
 
     if (hrPublish) {
       unstableFrameCounter.current = 0;
@@ -852,7 +860,7 @@ const Index = () => {
       lastRrSnapshotRef.current = heartBeatResult.rrData;
     }
 
-    if ((hrPublish || sessionLive) && heartBeatResult.isPeak) {
+    if (hasUsableContact && heartBeatResult.isPeak) {
       setBeatMarker(1);
       if (beatMarkerTimerRef.current) window.clearTimeout(beatMarkerTimerRef.current);
       beatMarkerTimerRef.current = window.setTimeout(() => {
@@ -868,9 +876,10 @@ const Index = () => {
     }
 
     if (
-      (hrPublish || sessionLive) &&
+      hasUsableContact &&
       heartBeatResult.isPeak &&
       heartBeatResult.rrData?.intervals &&
+      heartBeatResult.rrData.intervals.length > 0 &&
       nowT - lastRrPushRef.current >= RR_PUSH_THROTTLE_MS
     ) {
       lastRrPushRef.current = nowT;
@@ -917,12 +926,13 @@ const Index = () => {
       );
 
       const rrForVitals =
+        peakRecent &&
         heartBeatResult.rrData &&
         heartBeatResult.rrData.intervals.length >= 2 &&
-        (heartBeatResult.confidence > VITAL_THRESHOLDS.BP.MIN_RR_CONFIDENCE ||
-          sessionLive)
+        heartBeatResult.confidence > VITAL_THRESHOLDS.BP.MIN_RR_CONFIDENCE
           ? heartBeatResult.rrData
-          : lastRrSnapshotRef.current &&
+          : peakRecent &&
+              lastRrSnapshotRef.current &&
               lastRrSnapshotRef.current.intervals.length >= 2
             ? lastRrSnapshotRef.current
             : undefined;

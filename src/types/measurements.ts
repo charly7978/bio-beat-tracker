@@ -87,6 +87,8 @@ export interface DeviceCapabilityReport {
 export interface PeakDetectionResult {
   peaks: number[];
   peakTimes: number[];
+  /** Origen de cada pico fusionado (alineado con peakTimes). */
+  peakSources?: Array<'dual' | 'solo_elgendi'>;
   rrIntervalsMs: number[];
   bpmInstant: number | null;
   bpmStable: number | null;
