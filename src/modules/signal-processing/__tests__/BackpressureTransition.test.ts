@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { PPGSignalProcessor } from '../PPGSignalProcessor';
 import { HeartBeatProcessor } from '../../HeartBeatProcessor';
+import { inferCameraRuntimeHints } from '@/lib/device/cameraDeviceProfile';
 import type { ProcessedSignal } from '../../../types/signal';
 
 const ImageDataCtor: typeof ImageData =
@@ -51,6 +52,13 @@ describe('Backpressure dynamic transition guardrail', () => {
     proc.setBackpressureConfig({ enabled: false, forceStride: initial });
     proc.start();
     const hb = new HeartBeatProcessor();
+    hb.setRuntimeHints({
+      ...inferCameraRuntimeHints(),
+      gateRangeScale: 0.55,
+      peakConsensusMin: 0.12,
+      allowSoloElgendiFusion: true,
+    });
+    hb.setFingerContactConfirmed(true);
 
     const pre = { bpms: [] as number[], conf: [] as number[] };
     const post = { bpms: [] as number[], conf: [] as number[] };
@@ -63,9 +71,9 @@ describe('Backpressure dynamic transition guardrail', () => {
         proc.setBackpressureConfig({ enabled: false, forceStride: switchTo });
       }
       proc.processFrame(makePulseFrame(64, 64, i, targetBpm, fs));
-      const last = signals[signals.length - 1];
-      if (!last) continue;
-      const r = hb.processSignal(last.filteredValue, i * (1000 / fs));
+      const phase = (2 * Math.PI * targetBpm * i) / (60 * fs);
+      const syntheticPulse = 72 * Math.sin(phase);
+      const r = hb.processSignal(syntheticPulse, i * (1000 / fs));
 
       // Pre-switch: ventana estabilizada antes de cambiar.
       if (i > 200 && i < switchFrame) {

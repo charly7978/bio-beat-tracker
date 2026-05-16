@@ -683,12 +683,14 @@ const Index = () => {
         : 'hybrid');
     setFingerPlacementMode(placementMode);
     setVitalsPlacementMode(placementMode);
+    const fingerConfirmed = !!lastSignal.fingerDetected;
     const nowT = performance.now();
 
     const heartBeatResult = processHeartBeat(
-      signalValue,
+      fingerConfirmed ? signalValue : 0,
       contactState,
       nowT,
+      fingerConfirmed,
     );
 
     const mergedDiag =
@@ -697,7 +699,8 @@ const Index = () => {
         : { peakDetection: heartBeatResult.ensembleDiagnostics };
     setCurrentDiagnostics(mergedDiag);
 
-    const hasUsableContact = contactState !== 'NO_CONTACT';
+    const hasUsableContact =
+      fingerConfirmed && contactState !== 'NO_CONTACT';
 
     if (vitalSignsFrameCounter.current % 45 === 0) {
       syncCameraHints();
@@ -723,10 +726,12 @@ const Index = () => {
     );
     const lastPeakAt = heartBeatResult.rrData?.lastPeakTime ?? 0;
     const peakRecent =
-      heartBeatResult.isPeak ||
-      (lastPeakAt > 0 && nowT - lastPeakAt < SESSION_LATCH.MAX_PEAK_GAP_MS);
+      fingerConfirmed &&
+      (heartBeatResult.isPeak ||
+        (lastPeakAt > 0 && nowT - lastPeakAt < SESSION_LATCH.MAX_PEAK_GAP_MS));
 
     const bpmOut =
+      fingerConfirmed &&
       peakRecent &&
       heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
       heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX
@@ -735,14 +740,16 @@ const Index = () => {
 
     const hrReady =
       hasUsableContact &&
+      contactState === 'STABLE_CONTACT' &&
       peakRecent &&
       bpmOut > 0 &&
-      (heartBeatResult.confidence >= minConf || rawSqi >= Q.MIN_FOR_HR);
+      heartBeatResult.confidence >= minConf &&
+      rawSqi >= Q.MIN_FOR_HR;
 
     const pipelineLive =
       hrReady &&
-      rawSqi >= Q.MIN_FOR_HR &&
-      (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * hints.minPiScale * 0.85;
+      measurementLatchRef.current.established &&
+      (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * hints.minPiScale;
 
     const showWaveform = hasUsableContact;
 

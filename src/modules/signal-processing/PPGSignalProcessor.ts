@@ -441,14 +441,19 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     endSqi();
 
     const perfusionIndex = this.cachedPI;
+    const snapHb = this.rgbSnapshotFromSmoothed();
+    const hemoglobinScene =
+      hasFingerHemoglobinSignature(snapHb) && !isOpenFlashWithoutContact(snapHb);
     const fingerUi =
       this.fingerDetected &&
-      (liveFinger ||
-        this.lastInstantFinger ||
-        (this.cameraHints.constrained &&
-          (this.cachedPI >= VITAL_THRESHOLDS.FINGER.PULSE_HOLD_MIN_PI * 0.85 ||
-            this.signalQuality >= 6)));
-    const signalPathActive = true;
+      liveFinger &&
+      hemoglobinScene &&
+      (this.lastInstantFinger || this.contactState === 'STABLE_CONTACT');
+    const signalPathActive =
+      fingerUi ||
+      (this.lastInstantFinger &&
+        hemoglobinScene &&
+        this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.85);
     const displayQuality = signalPathActive
       ? fingerUi
         ? this.displaySqiEma
@@ -489,7 +494,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       morphologyValue: signalPathActive ? morphFiltered : 0,
       placementMode: this.placementMode,
       quality: displayQuality,
-      fingerDetected: signalPathActive && this.fingerDetected,
+      fingerDetected: fingerUi,
       contactState: this.contactState,
       motionArtifact,
       roi: this.signalRoiFromMetrics(roi),

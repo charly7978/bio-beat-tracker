@@ -34,8 +34,10 @@ export function hasFingerHemoglobinSignature(s: FingerRgbSnapshot): boolean {
   if (rg < 1.14 && rb < 1.28) return false;
   if (g > 95 && b > 80 && redDominance < 30) return false;
   if (total > 200 && rb < 1.38) return false;
+  if (total > 120 && rb < 1.42 && rg < 1.2) return false;
 
-  const hasSpatial =
-    s.coverage >= F.MIN_COVERAGE || s.fingerScore >= F.ACQUIRE_SOFT_FINGER_SCORE_ROI;
-  return hasSpatial;
+  return (
+    s.coverage >= F.MIN_COVERAGE * 0.95 &&
+    s.fingerScore >= F.ACQUIRE_SOFT_FINGER_SCORE_ROI * 0.9
+  );
 }

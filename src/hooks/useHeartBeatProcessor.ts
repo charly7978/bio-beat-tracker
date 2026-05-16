@@ -60,7 +60,8 @@ export const useHeartBeatProcessor = () => {
   const processSignal = useCallback((
     value: number,
     contactState: ContactState = 'STABLE_CONTACT',
-    timestamp?: number
+    timestamp?: number,
+    fingerConfirmed = true,
   ): HeartBeatResult => {
     if (!processorRef.current || processingStateRef.current !== 'ACTIVE') {
       return {
@@ -72,8 +73,10 @@ export const useHeartBeatProcessor = () => {
 
     const currentTime = timestamp ?? performance.now();
 
+    processorRef.current.setFingerContactConfirmed(fingerConfirmed);
+
     // Sin dedo: no alimentar el ensemble (la onda PPG puede seguir en otro canal)
-    if (contactState === 'NO_CONTACT') {
+    if (contactState === 'NO_CONTACT' || !fingerConfirmed) {
       noContactFramesRef.current += 1;
       if (noContactFramesRef.current <= NO_CONTACT_HOLD_FRAMES) {
         return {

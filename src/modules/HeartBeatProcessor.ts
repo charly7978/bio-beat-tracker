@@ -50,6 +50,7 @@ export class HeartBeatProcessor {
   private readonly GATE_RANGE_MIN = 0.032;
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
   private placementMode: FingerPlacementMode = 'hybrid';
+  private fingerContactConfirmed = false;
 
   constructor() {
     this.setupAudio();
@@ -83,17 +84,17 @@ export class HeartBeatProcessor {
     this.placementMode = mode;
   }
 
+  setFingerContactConfirmed(confirmed: boolean): void {
+    this.fingerContactConfirmed = confirmed;
+  }
+
   private gateRangeMin(): number {
     const base = this.GATE_RANGE_MIN * this.cameraHints.gateRangeScale;
-    if (this.placementMode === 'pad') return base * 0.82;
-    if (this.placementMode === 'tip') return base;
-    return base * 0.92;
+    if (this.placementMode === 'pad') return base * 0.9;
+    return base;
   }
 
   private minNormalizeRange(): number {
-    if (this.placementMode === 'pad') {
-      return this.cameraHints.constrained ? 0.055 : 0.026;
-    }
     return this.cameraHints.constrained ? 0.07 : 0.032;
   }
 
@@ -186,6 +187,7 @@ export class HeartBeatProcessor {
         sampleRateHz: sampleRate,
         windowSamples: win,
         placementMode: this.placementMode,
+        fingerContactConfirmed: this.fingerContactConfirmed,
       });
 
       if (decision.emit) {
@@ -197,14 +199,19 @@ export class HeartBeatProcessor {
         if (ens.rrIntervalsMs.length >= 1) {
           const instantBpm = bpmFromEmittedRr(ens.rrIntervalsMs);
           if (instantBpm > 0) {
-            if (this.smoothBPM === 0) {
-              this.smoothBPM = instantBpm;
-            } else {
-              const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
-              const alpha = rel > 0.25 ? 0.12 : rel > 0.15 ? 0.2 : 0.28;
-              this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
+            const acceptOutlier =
+              this.smoothBPM <= 0 ||
+              Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= 0.28;
+            if (acceptOutlier) {
+              if (this.smoothBPM === 0) {
+                this.smoothBPM = instantBpm;
+              } else {
+                const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
+                const alpha = rel > 0.2 ? 0.1 : rel > 0.12 ? 0.18 : 0.26;
+                this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
+              }
+              this.consecutivePeaks++;
             }
-            this.consecutivePeaks++;
           }
         }
 
@@ -241,7 +248,8 @@ export class HeartBeatProcessor {
     const publishBpm =
       this.smoothBPM > 0 &&
       peakAgeMs < this.MAX_PEAK_INTERVAL_MS &&
-      this.consecutivePeaks >= 1
+      this.consecutivePeaks >= 1 &&
+      this.fingerContactConfirmed
         ? Math.round(this.smoothBPM)
         : 0;
 
@@ -449,6 +457,7 @@ export class HeartBeatProcessor {
     this.cachedPeriodicity = { bpm: 0, score: 0 };
     this.lastDiagnostics = {};
     this.lastEmittedPeakTime = 0;
+    this.fingerContactConfirmed = false;
   }
 
   dispose(): void {

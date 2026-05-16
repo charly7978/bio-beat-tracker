@@ -21,6 +21,8 @@ export interface PeakEmitPolicyInput {
   sampleRateHz: number;
   windowSamples: number;
   placementMode?: FingerPlacementMode;
+  /** Si false, solo emite picos con fusión dual (anti–falso positivo sin dedo). */
+  fingerContactConfirmed?: boolean;
 }
 
 export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
@@ -33,9 +35,9 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     sampleRateHz,
     windowSamples,
     placementMode = 'hybrid',
+    fingerContactConfirmed = true,
   } = input;
 
-  const padRelaxed = placementMode === 'pad';
   const minGap =
     VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS *
     PEAK_DETECTION_DEFAULTS.peakEmitRefractoryFactor *
@@ -65,13 +67,17 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     const src = ens.peakSources?.[i];
     const dual =
       src === 'dual' &&
-      detectorConsensus >= consensusMin * 0.75 &&
-      ens.confidence >= minPeakConf * 0.85;
+      detectorConsensus >= consensusMin * (fingerContactConfirmed ? 0.78 : 0.88) &&
+      ens.confidence >= minPeakConf * (fingerContactConfirmed ? 0.88 : 0.95);
+    const soloElMin =
+      placementMode === 'pad' ? 0.14 : placementMode === 'tip' ? 0.16 : 0.18;
     const solo =
+      fingerContactConfirmed &&
       allowSoloElgendi &&
       src === 'solo_elgendi' &&
-      elConf >= (padRelaxed ? 0.09 : 0.12) &&
-      ens.confidence >= minPeakConf * (padRelaxed ? 0.58 : 0.65);
+      elConf >= soloElMin &&
+      detectorConsensus >= consensusMin * (placementMode === 'hybrid' ? 0.65 : 0.62) &&
+      ens.confidence >= minPeakConf * (placementMode === 'hybrid' ? 0.75 : 0.72);
 
     if (dual || solo) {
       if (t >= bestT) {

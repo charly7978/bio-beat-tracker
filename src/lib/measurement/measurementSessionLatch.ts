@@ -11,12 +11,12 @@ export interface MeasurementSessionLatch {
 }
 
 export const SESSION_LATCH = {
-  ESTABLISH_STREAK: 6,
-  CONTACT_GRACE_MS: 4000,
+  ESTABLISH_STREAK: 8,
+  CONTACT_GRACE_MS: 3500,
   /** Sin picos reales durante este tiempo, la sesión no alimenta vitales */
-  MAX_PEAK_GAP_MS: 2800,
-  MIN_BPM: 32,
-  MIN_SQI: 3,
+  MAX_PEAK_GAP_MS: 2600,
+  MIN_BPM: 35,
+  MIN_SQI: 6,
 } as const;
 
 export function createMeasurementSessionLatch(): MeasurementSessionLatch {

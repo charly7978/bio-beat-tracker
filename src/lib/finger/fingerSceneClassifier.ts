@@ -19,6 +19,7 @@ export function isOpenFlashWithoutContact(s: FingerRgbSnapshot): boolean {
 
   if (total > 175 && rb < 1.45 && rg < 1.25) return true;
   if (total > 140 && rb < 1.32 && rg < 1.18) return true;
+  if (total > 105 && rb < 1.48 && rg < 1.2 && dom < 44) return true;
   if (g > 88 && b > 72 && dom < 36) return true;
   if (r > 0 && g > 0.68 * r && b > 0.6 * r && total > 115) return true;
 
@@ -47,14 +48,8 @@ export function passesLiveFingerContact(
   const b = Math.max(1, raw.blue);
   if (raw.red / b < F.HEMOGLOBIN_MIN_RB) return false;
 
-  const rawHb = hasFingerHemoglobinSignature(raw);
-  const smoothHb = hasFingerHemoglobinSignature(smoothed);
-  if (!rawHb) return false;
-  // Dedo cubriendo lente: el crudo es fiable aunque el EMA RGB aún converge
-  if (spatial.coverageRatio >= 0.15 && spatial.fingerTileCount >= 4) {
-    return true;
-  }
-  return smoothHb;
+  if (!hasFingerHemoglobinSignature(raw)) return false;
+  return hasFingerHemoglobinSignature(smoothed);
 }
 
 /** Mantener contacto ya adquirido (umbrales más tolerantes — AE/torch variables en Motorola, etc.). */
@@ -76,6 +71,7 @@ export function passesFingerMaintain(
   if (r / b < F.MAINTAIN_RB) return false;
   if (dom < F.MAINTAIN_DOMINANCE) return false;
   if (spatial.coverageRatio < F.MAINTAIN_COVERAGE) return false;
+  if (!hasFingerHemoglobinSignature(raw)) return false;
 
   return true;
 }

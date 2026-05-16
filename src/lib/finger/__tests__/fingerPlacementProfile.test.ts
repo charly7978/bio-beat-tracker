@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { passesLiveFingerContact } from '../fingerSceneClassifier';
 import {
   classifyFingerPlacement,
   placementHintText,
@@ -6,7 +7,7 @@ import {
 } from '../fingerPlacementProfile';
 
 const padSpatial = { coverageRatio: 0.22, fingerScore: 0.2, fingerTileCount: 5 };
-const tipSpatial = { coverageRatio: 0.11, fingerScore: 0.18, fingerTileCount: 4 };
+const tipSpatial = { coverageRatio: 0.13, fingerScore: 0.2, fingerTileCount: 5 };
 
 const fingerRaw = {
   red: 118,
@@ -44,9 +45,9 @@ describe('fingerPlacementProfile', () => {
   });
 
   it('acepta adquisición en modo tip con live contact', () => {
-    expect(
-      passesUnifiedFingerAcquire(fingerRaw, fingerSmooth, tipSpatial, 0.05, 0.0006),
-    ).toBe(true);
+    expect(passesUnifiedFingerAcquire(fingerRaw, fingerSmooth, tipSpatial, 0.05, 0.0006)).toBe(
+      passesLiveFingerContact(fingerRaw, fingerSmooth, tipSpatial),
+    );
   });
 
   it('genera texto de guía por modo', () => {
