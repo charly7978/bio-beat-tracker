@@ -191,19 +191,23 @@ export class VitalSignsProcessor {
       }
     }
 
-    this.measurements.signalQuality = signalQuality;
+    const effectiveSqi = Math.max(
+      signalQuality,
+      sqmBundle?.sqi ?? 0,
+      this.lastSqmBundle?.sqi ?? 0,
+    );
+    this.measurements.signalQuality = effectiveSqi;
     if (sqmBundle) {
       this.lastSqmBundle = SignalQualityIndex.enrichMetrics(
-        { ...sqmBundle, sqi: signalQuality || sqmBundle.sqi },
+        { ...sqmBundle, sqi: effectiveSqi },
         undefined,
       );
     }
 
-    // Validar pulso real (solo afecta a BP y arritmias)
+    // Validar pulso real (BP y arritmias; SpO2 usa ratio RGB y no depende de RR)
     this.validateRealPulse(rrData);
-    
-    // Calcular signos vitales (SpO2 siempre, BP/Arr solo con rrData)
-    this.calculateVitalSigns(signalValue, signalQuality, currentBPM, rrData);
+
+    this.calculateVitalSigns(signalValue, effectiveSqi, currentBPM, rrData);
 
 
     return this.getFormattedResult();
@@ -249,6 +253,23 @@ export class VitalSignsProcessor {
     return 'INVALID';
   }
 
+  /** SpO2 ratio-of-ratios: no requiere ventana RR, solo RGB + perfusión mínima */
+  private getSpo2Confidence(): 'LOW' | 'INVALID' {
+    const sq = this.measurements.signalQuality;
+    const piRgb = this.rgbData.greenDC > 0 ? this.rgbData.greenAC / this.rgbData.greenDC : 0;
+    const pi = Math.max(piRgb, this.lastPpgPerfusionIndex);
+    if (SignalQualityIndex.isAdequateForLiveVitals(sq, pi)) return 'LOW';
+    if (sq >= 8 && pi >= 0.00015 && this.rgbData.redDC >= 10 && this.rgbData.greenDC >= 5) {
+      return 'LOW';
+    }
+    return 'INVALID';
+  }
+
+  private currentPerfusionIndex(): number {
+    const piRgb = this.rgbData.greenDC > 0 ? this.rgbData.greenAC / this.rgbData.greenDC : 0;
+    return Math.max(piRgb, this.lastPpgPerfusionIndex);
+  }
+
   /**
    * FORMATEO DE RESULTADOS - REDONDEO APROPIADO
    * Cada signo vital tiene su formato específico:
@@ -262,11 +283,11 @@ export class VitalSignsProcessor {
     const calib = CalibrationManager.getInstance();
     const now = Date.now();
     const sqi = this.measurements.signalQuality;
-    const piRgb = this.rgbData.greenDC > 0 ? this.rgbData.greenAC / this.rgbData.greenDC : 0;
-    const pi = Math.max(piRgb, this.lastPpgPerfusionIndex);
+    const pi = this.currentPerfusionIndex();
     const isClinicallyValid = SignalQualityIndex.isClinicallyValid(sqi, pi);
     const vitalUiGate =
       isClinicallyValid || SignalQualityIndex.isAdequateForLiveVitals(sqi, pi);
+    const spo2UiReady = this.getSpo2Confidence() !== 'INVALID';
     const spo2Calib = calib.getCalibrationInfo('SPO2');
     const bpCalib = calib.getCalibrationInfo('BP');
 
@@ -289,15 +310,15 @@ export class VitalSignsProcessor {
     };
 
     const hrMinSqi = VITAL_THRESHOLDS.QUALITY.MIN_FOR_HR;
-    const hrOk = this.lastBPM > 0 && vitalUiGate && sqi >= 12;
+    const hrOk = this.lastBPM > 0 && sqi >= hrMinSqi;
 
     const spo2HasDisplay =
-      vitalUiGate &&
+      spo2UiReady &&
       this.measurements.spo2 > 0 &&
       this.measurements.spo2 >= 70 &&
       this.measurements.spo2 <= 100;
 
-    const spo2Status: MeasurementStatus = !vitalUiGate
+    const spo2Status: MeasurementStatus = !spo2UiReady
       ? "LOW_SIGNAL_QUALITY"
       : !spo2HasDisplay
         ? "NO_VALID_SIGNAL"
@@ -307,13 +328,15 @@ export class VitalSignsProcessor {
             ? "VALID"
             : "REQUIRES_CALIBRATION";
 
+    const bpUiReady =
+      vitalUiGate || (this.validPulseCount >= 2 && sqi >= 12);
     const bpHasMorph =
-      vitalUiGate &&
+      bpUiReady &&
       this.lastBPConfidence !== 'INSUFFICIENT' &&
       this.measurements.systolicPressure > 0 &&
       this.measurements.diastolicPressure > 0;
 
-    const bpStatus: MeasurementStatus = !vitalUiGate
+    const bpStatus: MeasurementStatus = !bpUiReady
       ? "LOW_SIGNAL_QUALITY"
       : !bpHasMorph
         ? "NO_VALID_SIGNAL"
@@ -464,7 +487,8 @@ export class VitalSignsProcessor {
     // SpO2 usa ratios ópticos AC/DC directamente de la cámara.
     // Solo necesita datos RGB válidos y confidence no-INVALID.
     const spo2 = this.calculateSpO2Raw();
-    if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && confidence !== 'INVALID') {
+    const spo2Conf = this.getSpo2Confidence();
+    if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && spo2Conf !== 'INVALID') {
       const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 5;
       if (isCoherent || this.frameCount > 300) {
         this.lastCoherentSpO2 = spo2;

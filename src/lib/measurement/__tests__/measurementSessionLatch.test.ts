@@ -16,6 +16,21 @@ describe('measurementSessionLatch', () => {
     expect(latch.lastPeakMs).toBeGreaterThan(0);
   });
 
+  it('no pierde racha entre frames sin pico (30 fps entre latidos)', () => {
+    let latch = createMeasurementSessionLatch();
+    let t = 1000;
+    for (let p = 0; p < SESSION_LATCH.ESTABLISH_STREAK; p++) {
+      latch = updateMeasurementSessionLatch(latch, true, 72, 10, t, true);
+      for (let f = 0; f < 24; f++) {
+        t += 33;
+        latch = updateMeasurementSessionLatch(latch, true, 72, 10, t, false);
+      }
+      t += 800;
+    }
+    expect(latch.established).toBe(true);
+    expect(latch.goodStreak).toBeGreaterThanOrEqual(SESSION_LATCH.ESTABLISH_STREAK);
+  });
+
   it('no mantiene pipeline sin picos recientes', () => {
     let latch = createMeasurementSessionLatch();
     for (let i = 0; i < SESSION_LATCH.ESTABLISH_STREAK; i++) {

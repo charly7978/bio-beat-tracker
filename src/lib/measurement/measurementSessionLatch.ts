@@ -11,8 +11,8 @@ export interface MeasurementSessionLatch {
 }
 
 export const SESSION_LATCH = {
-  /** Picos reales consecutivos antes de alimentar SpO2/BP (≈4–5 s a 70 bpm) */
-  ESTABLISH_STREAK: 5,
+  /** Picos reales acumulados (no frames consecutivos) antes de alimentar SpO2/BP */
+  ESTABLISH_STREAK: 3,
   CONTACT_GRACE_MS: 3500,
   /** Sin picos reales durante este tiempo, la sesión no alimenta vitales */
   MAX_PEAK_GAP_MS: 3200,
@@ -78,12 +78,14 @@ export function updateMeasurementSessionLatch(
     };
   }
 
+  // No decrementar goodStreak entre picos: a ~30 fps hay decenas de frames sin isPeak
+  // entre latidos y el contador nunca llegaba a ESTABLISH_STREAK.
   return {
     ...latch,
     lastBpm: nextBpm,
     lastContactMs: nowMs,
     lastPeakMs,
-    goodStreak: isPeak ? latch.goodStreak : Math.max(0, latch.goodStreak - 1),
+    goodStreak: latch.goodStreak,
   };
 }
 

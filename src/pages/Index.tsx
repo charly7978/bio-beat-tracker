@@ -750,15 +750,17 @@ const Index = () => {
       heartBeatResult.confidence >= minConf &&
       rawSqi >= Q.MIN_FOR_HR;
 
-    const piMin = Q.MIN_PI * Math.max(0.06, hints.minPiScale * 0.22);
-    const pipelineLive =
-      isMeasurementPipelineLive(
-        measurementLatchRef.current,
-        hasUsableContact,
-        rawSqi,
-        nowT,
-      ) &&
-      (lastSignal.perfusionIndex || 0) >= piMin;
+    const piMin = Q.MIN_PI * Math.max(0.04, hints.minPiScale * 0.18);
+    const pipelineLive = isMeasurementPipelineLive(
+      measurementLatchRef.current,
+      hasUsableContact,
+      rawSqi,
+      nowT,
+    );
+    const vitalsDspReady =
+      hasUsableContact &&
+      rawSqi >= 3 &&
+      (lastSignal.perfusionIndex ?? 0) >= piMin;
 
     const showWaveform = hasUsableContact;
 
@@ -793,19 +795,27 @@ const Index = () => {
         }
         if (nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {
           lastHrPushRef.current = nowT;
-          setVitalSigns(prev => ({
-            ...prev,
-            heartRate: {
-              ...prev.heartRate,
-              value: bpmOut,
-              status: contactState === 'STABLE_CONTACT' ? 'VALID' : 'WARMUP',
-            },
-            signalQuality: Math.round(
-              (diag && typeof diag === 'object' && diag.sqm?.sqi != null
-                ? diag.sqm.sqi
-                : lastSignal.quality) || 0,
-            ),
-          }));
+          const sqRounded = Math.round(rawSqi);
+          setVitalSigns(prev => {
+            const cached = vitalSignsRef.current;
+            return {
+              ...prev,
+              heartRate: {
+                ...prev.heartRate,
+                value: bpmOut,
+                status: contactState === 'STABLE_CONTACT' ? 'VALID' : 'WARMUP',
+              },
+              spo2:
+                cached.spo2.value != null && cached.spo2.value > 0
+                  ? cached.spo2
+                  : prev.spo2,
+              bloodPressure:
+                (cached.bloodPressure.value?.systolic ?? 0) > 0
+                  ? cached.bloodPressure
+                  : prev.bloodPressure,
+              signalQuality: sqRounded,
+            };
+          });
         }
       }
     } else {
@@ -877,7 +887,7 @@ const Index = () => {
       setRRIntervals(heartBeatResult.rrData.intervals.slice(-5));
     }
 
-    if (!pipelineLive) {
+    if (!vitalsDspReady) {
       return;
     }
 
@@ -895,7 +905,7 @@ const Index = () => {
           redAC: rgbStats.redAC,
           redDC: rgbStats.redDC,
           greenAC: rgbStats.greenAC,
-          greenDC: rgbStats.greenDC
+          greenDC: rgbStats.greenDC,
         });
       }
 
@@ -917,20 +927,18 @@ const Index = () => {
       );
 
       const rrForVitals =
-        peakRecent &&
         heartBeatResult.rrData &&
         heartBeatResult.rrData.intervals.length >= 2 &&
-        heartBeatResult.confidence > VITAL_THRESHOLDS.BP.MIN_RR_CONFIDENCE
-          ? heartBeatResult.rrData
-          : peakRecent &&
-              lastRrSnapshotRef.current &&
+        (heartBeatResult.confidence > VITAL_THRESHOLDS.BP.MIN_RR_CONFIDENCE || pipelineLive)
+          ? { ...heartBeatResult.rrData, timestampNow: nowT }
+          : lastRrSnapshotRef.current &&
               lastRrSnapshotRef.current.intervals.length >= 2
-            ? lastRrSnapshotRef.current
+            ? { ...lastRrSnapshotRef.current, timestampNow: nowT }
             : undefined;
 
       const vitals = processVitalSigns(
         lastSignal.filteredValue,
-        lastSignal.quality || 0,
+        rawSqi || lastSignal.quality || 0,
         bpmOut || lastGoodBpmRef.current,
         rrForVitals,
         lastSignal.perfusionIndex,
