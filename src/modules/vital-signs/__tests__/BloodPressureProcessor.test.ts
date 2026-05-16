@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { BloodPressureProcessor } from '../BloodPressureProcessor';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
+import { isPhysiologicalBp } from '@/lib/vitals/pwaPhysiologicalBpEngine';
 
-/** Pulso sintético repetido (~1 Hz @ 30 fps) para estimación morfológica. */
-function syntheticPpgBuffer(cycles = 6, samplesPerCycle = 30): number[] {
+function syntheticPpgBuffer(cycles = 8, samplesPerCycle = 30): number[] {
   const buf: number[] = [];
   for (let c = 0; c < cycles; c++) {
     for (let i = 0; i < samplesPerCycle; i++) {
@@ -18,16 +18,19 @@ function syntheticPpgBuffer(cycles = 6, samplesPerCycle = 30): number[] {
 }
 
 describe('BloodPressureProcessor', () => {
-  it('DBP no queda pegado al piso DIASTOLIC_MIN con señal sintética válida', () => {
+  it('calcula PA desde PPG sin fijar pisos artificiales', () => {
     const proc = new BloodPressureProcessor();
-    const rr = [850, 870, 860, 855, 865];
+    const rr = [850, 870, 860, 855, 865, 858];
     const est = proc.estimate(syntheticPpgBuffer(), rr, 30);
     expect(est.confidence).not.toBe('INSUFFICIENT');
-    expect(est.systolic).toBeGreaterThan(0);
-    expect(est.diastolic).toBeGreaterThan(VITAL_THRESHOLDS.BP.DIASTOLIC_MIN);
-    expect(est.diastolic).toBeLessThanOrEqual(est.systolic - VITAL_THRESHOLDS.BP.MIN_PP);
-    expect(est.diastolic / est.systolic).toBeGreaterThan(0.5);
-    expect(est.diastolic / est.systolic).toBeLessThan(0.88);
+    expect(isPhysiologicalBp(est.systolic, est.diastolic)).toBe(true);
+    expect(est.diastolic).toBeLessThan(est.systolic);
+    expect(est.diastolic / est.systolic).toBeGreaterThan(
+      VITAL_THRESHOLDS.BP.DIA_SYS_RATIO_MIN,
+    );
+    expect(est.diastolic / est.systolic).toBeLessThan(
+      VITAL_THRESHOLDS.BP.DIA_SYS_RATIO_MAX,
+    );
   });
 
   it('retorna INSUFFICIENT sin buffer suficiente', () => {

@@ -35,15 +35,22 @@ export const VITAL_THRESHOLDS = {
     BP_CYCLE_QUALITY_HYBRID: 0.26,
   },
 
-  // BLOOD PRESSURE (mmHg + pipeline morfológico)
+  // BLOOD PRESSURE — rangos fisiológicos (AHA / supervivencia) + normalización morfológica PPG
   BP: {
-    /** Límites PPG cámara — evitar pisos que fijan DBP en un valor constante */
-    SYSTOLIC_MIN: 75,
-    SYSTOLIC_MAX: 250,
-    DIASTOLIC_MIN: 50,
+    SYSTOLIC_MIN: 70,
+    SYSTOLIC_MAX: 220,
+    DIASTOLIC_MIN: 40,
     DIASTOLIC_MAX: 130,
+    MAP_MIN: 50,
+    MAP_MAX: 150,
+    PP_MIN: 20,
+    PP_MAX: 100,
     MIN_PP: 20,
-    MAX_PP: 110,
+    MAX_PP: 100,
+    DIA_SYS_RATIO_MIN: 0.35,
+    DIA_SYS_RATIO_MAX: 0.85,
+    /** Fracción de PP atribuible a reflexión de onda (índice 0–1) */
+    REFLECTION_PP_FRAC: 0.22,
     MIN_CYCLES: 3,
     MIN_CYCLE_QUALITY: 0.28,
     MIN_BUFFER_SAMPLES: 120,
@@ -52,6 +59,33 @@ export const VITAL_THRESHOLDS = {
     FEATURE_QUALITY_HIGH: 72,
     FEATURE_QUALITY_MEDIUM: 48,
     MIN_RR_CONFIDENCE: 0.08,
+    /** Límites de forma de pulso (adimensional / ms) — no mmHg */
+    FEATURE_NORM: {
+      K_VALUE: [0.22, 0.58] as const,
+      AREA_RATIO: [0.65, 2.5] as const,
+      DECAY_LAMBDA: [0.0004, 0.006] as const,
+      B_DIV_A: [-1.2, 1.4] as const,
+      D_DIV_A: [-1.0, 0.85] as const,
+      AGI: [-0.9, 2.2] as const,
+      STIFFNESS_INDEX: [0.5, 24] as const,
+      AUGMENTATION_INDEX: [3, 42] as const,
+      V_MAX: [15, 120] as const,
+      SUT_CYCLE_RATIO: [0.05, 0.42] as const,
+      DIA_PHASE_RATIO: [0.15, 0.82] as const,
+      PW50_CYCLE_RATIO: [0.1, 0.58] as const,
+      DICROTIC_DEPTH: [0.05, 0.55] as const,
+      RMSSD: [8, 120] as const,
+    },
+    WEIGHTS: {
+      RESISTANCE: { k: 0.32, ipa: 0.33, decay: 0.35 },
+      COMPLIANCE: { stiff: 0.28, si: 0.26, aix: 0.24, vMax: 0.12, sutRatio: 0.1 },
+      REFLECTION: { dDivA: 0.55, agi: 0.45 },
+      FUSION: { hemodynamic: 0.52, morphology: 0.48 },
+      MORPHOLOGY: {
+        sbp: { sut: 0.28, stiff: 0.26, reflection: 0.22, aix: 0.14, hr: 0.1 },
+        dbp: { pw50: 0.24, diaPhase: 0.22, decay: 0.2, dicrotic: 0.14, hrv: 0.1, ipa: 0.1 },
+      },
+    },
   },
   
   // SIGNAL QUALITY (SQI)
