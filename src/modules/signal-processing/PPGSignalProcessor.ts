@@ -117,7 +117,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private fingerConfidenceCount = 0;
   private fingerLostCount = 0;
   private stableContactCount = 0;
-  private readonly FINGER_CONFIRM_FRAMES = 5;   // ~170ms @ 30fps — balance velocidad/estabilidad
+  private readonly FINGER_CONFIRM_FRAMES = 4;
   private readonly FINGER_LOST_FRAMES = 90;     // ~3s tolerancia antes de degradar
   private readonly UNSTABLE_GRACE = 120;        // ~4s antes de NO_CONTACT total
 
@@ -127,8 +127,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private smoothedBlue = 0;
   private smoothedCoverage = 0;
   private smoothedFingerScore = 0;
-  private readonly RGB_SMOOTH_ALPHA = 0.05;       // era 0.10 — más suave
-  private readonly COVERAGE_SMOOTH_ALPHA = 0.06;  // era 0.12 — más suave
+  private readonly RGB_SMOOTH_ALPHA = 0.07;
+  private readonly COVERAGE_SMOOTH_ALPHA = 0.09;
 
   // IMU / Motion
   private motionScore = 0;
@@ -380,9 +380,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       if (this.fingerConfidenceCount >= this.FINGER_CONFIRM_FRAMES) {
         this.fingerDetected = true;
         // Require real perfusion for STABLE — not just visual contact
-        this.contactState = (this.stableContactCount >= VITAL_THRESHOLDS.QUALITY.STABLE_FRAMES_REQ && this.cachedPI > VITAL_THRESHOLDS.QUALITY.MIN_PI)
-          ? 'STABLE_CONTACT'
-          : 'UNSTABLE_CONTACT';
+        this.contactState =
+          this.stableContactCount >= VITAL_THRESHOLDS.QUALITY.STABLE_FRAMES_REQ &&
+          this.cachedPI > VITAL_THRESHOLDS.QUALITY.MIN_PI * 0.78
+            ? 'STABLE_CONTACT'
+            : 'UNSTABLE_CONTACT';
       }
     } else {
       // Decremento lento — no perder confianza por un solo frame malo
@@ -394,10 +396,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       if (this.fingerDetected) {
         // Soft hold: mantener contacto con gracia — stricter thresholds
         const softHold =
-          this.smoothedCoverage > 0.15 &&
-          (this.smoothedRed - (this.smoothedGreen + this.smoothedBlue) / 2) > 8 &&
-          this.smoothedFingerScore > 0.20 &&
-          (this.smoothedRed / Math.max(1, this.smoothedGreen)) > 1.05;
+          this.smoothedCoverage > 0.12 &&
+          (this.smoothedRed - (this.smoothedGreen + this.smoothedBlue) / 2) > 6 &&
+          this.smoothedFingerScore > 0.14 &&
+          (this.smoothedRed / Math.max(1, this.smoothedGreen)) > 1.04;
 
         if (softHold || this.fingerLostCount < this.FINGER_LOST_FRAMES) {
           this.contactState = 'UNSTABLE_CONTACT';
@@ -453,32 +455,52 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     // === HEMOGLOBIN SIGNATURE: red MUST dominate and blue MUST be very low ===
     if (this.fingerDetected) {
-      // MAINTAIN contact — slightly relaxed thresholds
       const maintainContact =
-        r > 45 &&
-        rgRatio > 1.05 &&
-        rbRatio > 1.25 &&
-        redDominance > 10 &&
-        this.smoothedCoverage > 0.15 &&
+        r > 38 &&
+        rgRatio > 1.04 &&
+        rbRatio > 1.16 &&
+        redDominance > 7.5 &&
+        this.smoothedCoverage > 0.11 &&
         notBlownOut;
-      return maintainContact;
+      const pulsatilityHold =
+        this.cachedPI > 0.00038 &&
+        r > 34 &&
+        rgRatio > 1.03 &&
+        rbRatio > 1.1 &&
+        this.smoothedCoverage > 0.095 &&
+        notBlownOut &&
+        this.motionScore < 1.85;
+      return maintainContact || pulsatilityHold;
     } else {
-      // ACQUIRE contact — strict hemoglobin thresholds (literature validated)
+      // ACQUIRE: vía estricta (hemoglobina) + vía suave (dedo parcial / flash desigual)
       const acquireContact =
         r > VITAL_THRESHOLDS.FINGER.MIN_RED_INTENSITY &&
         rgRatio > VITAL_THRESHOLDS.FINGER.MIN_RG_RATIO &&
-        rbRatio > 1.22 &&
+        rbRatio > 1.2 &&
         redDominance > VITAL_THRESHOLDS.FINGER.MIN_RED_DOMINANCE &&
-        totalIntensity > 70 && totalIntensity < 760 &&
+        totalIntensity > 68 && totalIntensity < 780 &&
         this.smoothedCoverage > VITAL_THRESHOLDS.FINGER.MIN_COVERAGE &&
-        this.smoothedFingerScore > 0.18 &&
-        this.motionScore < 1.5 &&
+        this.smoothedFingerScore > 0.17 &&
+        this.motionScore < 1.75 &&
         notBlownOut;
-      
+
+      const acquireSoft =
+        r > 31 &&
+        rgRatio > 1.03 &&
+        rbRatio > 1.12 &&
+        redDominance > 5.2 &&
+        totalIntensity > 58 &&
+        totalIntensity < 830 &&
+        this.smoothedCoverage > VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.88 &&
+        this.smoothedFingerScore > 0.125 &&
+        this.motionScore < 1.9 &&
+        notBlownOut &&
+        roi.fingerScore > 0.18;
+
       if (acquireContact && this.frameCount % 30 === 0) {
         log.info(`[Finger Acquisition] R:${r.toFixed(1)} G:${g.toFixed(1)} B:${b.toFixed(1)} R/G:${rgRatio.toFixed(2)} R/B:${rbRatio.toFixed(2)}`);
       }
-      return acquireContact;
+      return acquireContact || acquireSoft;
     }
   }
 
@@ -516,7 +538,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const width = imageData.width;
     const height = imageData.height;
 
-    const roiSize = Math.min(width, height) * 0.78;
+    const roiSize = Math.min(width, height) * 0.84;
     const startX = Math.floor((width - roiSize) / 2);
     const startY = Math.floor((height - roiSize) / 2);
     const endX = startX + Math.floor(roiSize);
@@ -578,9 +600,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const distanceFromCenter = Math.sqrt(dx * dx + dy * dy);
       const centerBias = clamp(1 - distanceFromCenter * 1.2, 0.3, 1);
 
-      const brightnessScore = clamp((total - 120) / 220, 0, 1);
-      const redRatioScore = clamp((rednessRatio - 1.02) / 0.85, 0, 1);
-      const dominanceScore = clamp((redDominance - 10) / 35, 0, 1);
+      const brightnessScore = clamp((total - 95) / 250, 0, 1);
+      const redRatioScore = clamp((rednessRatio - 1.01) / 0.88, 0, 1);
+      const dominanceScore = clamp((redDominance - 7) / 32, 0, 1);
       const frameScore = redRatioScore * 0.45 + dominanceScore * 0.4 + brightnessScore * 0.15;
 
       this.tileConfidence[i] = this.tileConfidence[i] * 0.75 + frameScore * centerBias * 0.25;
@@ -591,11 +613,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       m.centerBias = centerBias; m.frameScore = frameScore; m.combinedScore = combinedScore;
       m.valid = true;
       m.isFinger =
-        red > 40 &&
-        total > 70 &&
-        redDominance > 8 &&
-        rednessRatio > 1.05 &&
-        combinedScore > 0.32;
+        red > 32 &&
+        total > 62 &&
+        redDominance > 5 &&
+        rednessRatio > 1.03 &&
+        combinedScore > 0.26;
       validCount++;
       if (m.isFinger) {
         fingerCount++;
@@ -607,7 +629,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       return { rawRed: 0, rawGreen: 0, rawBlue: 0, coverageRatio: 0, fingerScore: 0 };
     }
 
-    const useFingerOnly = fingerCount >= 5;
+    const useFingerOnly = fingerCount >= 4;
     let rWs = 0, gWs = 0, bWs = 0, tw = 0;
     
     // MEJORA: Ponderación adaptativa por SNR individual de celda

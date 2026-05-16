@@ -50,8 +50,8 @@ export const VITAL_THRESHOLDS = {
     MIN_RED_INTENSITY: 40,
     MIN_RED_DOMINANCE: 8,
     MIN_RG_RATIO: 1.05,
-    /** ROI central: dedo pequeño o mal centrado suele dar cobertura bajo 20 % aun con señal usable */
-    MIN_COVERAGE: 0.16,
+    /** ROI central: cobertura mínima de tiles “dedo” para adquisición (relajado para dedo parcial) */
+    MIN_COVERAGE: 0.14,
   }
 };
 
