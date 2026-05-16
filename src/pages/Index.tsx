@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, Brain, Loader2, Settings as SettingsIcon } from "lucide-react";
 import { playCompletionSound } from "@/utils/soundUtils";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
-import FingerPlacementOverlay from "@/components/FingerPlacementOverlay";
 import { useSignalProcessor } from "@/hooks/useSignalProcessor";
 import { useHeartBeatProcessor } from "@/hooks/useHeartBeatProcessor";
 import { useVitalSignsProcessor } from "@/hooks/useVitalSignsProcessor";
@@ -193,16 +192,6 @@ const Index = () => {
   const { saveMeasurement } = useSaveMeasurement();
   const { analysis, isAnalyzing, analyzeVitals, clearAnalysis } = useHealthAnalysis();
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
-  /** Guía de colocación del dedo; se resetea al iniciar medición */
-  const [fingerGuideDismissed, setFingerGuideDismissed] = useState(false);
-  const placementUiRef = useRef({
-    fingerDetected: false,
-    contactState: 'NO_CONTACT' as ContactState,
-    coverageRatio: 0,
-    hint: '',
-  });
-  const placementBumpAtRef = useRef(0);
-  const [, bumpPlacementUi] = useState(0);
 
   // ---- Telemetría de rendimiento (opt-in) ----
   const telemetryOn = false;
@@ -451,7 +440,6 @@ const Index = () => {
     setAuditNegativeCount(0);
 
     startCalibration();
-    setFingerGuideDismissed(false);
   }, [isMonitoring, startProcessing, startCalibration, enterFullScreen, sanityProfileId, requestWakeLock]);
 
   // === CUANDO LA CÁMARA ESTÁ LISTA ===
@@ -641,17 +629,6 @@ const Index = () => {
       hrContact,
       lastSignal.timestamp
     );
-
-    placementUiRef.current = {
-      fingerDetected: lastSignal.fingerDetected,
-      contactState,
-      coverageRatio: diag?.coverageRatio ?? 0,
-      hint: diag?.placementHint ?? placementUiRef.current.hint,
-    };
-    if (nowT - placementBumpAtRef.current >= 66) {
-      placementBumpAtRef.current = nowT;
-      bumpPlacementUi((n) => n + 1);
-    }
 
     const mergedDiag =
       diag && typeof diag === 'object'
@@ -939,45 +916,8 @@ const Index = () => {
             onStreamReady={handleStreamReady}
             isMonitoring={isCameraOn}
           />
-          <FingerPlacementOverlay
-            visible={isMonitoring && !showResults}
-            fingerDetected={placementUiRef.current.fingerDetected}
-            contactState={placementUiRef.current.contactState}
-            coverageRatio={placementUiRef.current.coverageRatio}
-            hint={
-              placementUiRef.current.hint ||
-              "Cubre el recuadro con la yema del índice sobre flash y lente"
-            }
-          />
         </div>
 
-        {isMonitoring && !showResults && !fingerGuideDismissed && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-28 z-20 flex justify-center px-3 sm:px-4">
-            <div className="pointer-events-auto max-w-md w-full rounded-xl border border-emerald-500/35 bg-slate-950/90 px-3 py-2.5 shadow-2xl backdrop-blur-md sm:px-4 sm:py-3">
-              <p className="text-emerald-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">
-                Alinea el dedo con el recuadro del visor
-              </p>
-              <ul className="text-white/90 text-[11px] sm:text-xs leading-snug space-y-1 list-disc pl-3.5 marker:text-emerald-500">
-                <li>
-                  <span className="font-semibold text-white">Yema del índice</span> dentro del cuadrado: el punto “flash + lente” debe quedar bajo el centro del dedo.
-                </li>
-                <li>
-                  Cuando el recuadro pase a <span className="font-semibold text-amber-300">amarillo</span> o <span className="font-semibold text-emerald-300">verde</span>, no muevas el dedo 5–15 s.
-                </li>
-                <li>
-                  Sigue el texto bajo el recuadro (cobertura %): si dice “centra más”, desplaza el dedo sin apretar fuerte.
-                </li>
-              </ul>
-              <button
-                type="button"
-                onClick={() => setFingerGuideDismissed(true)}
-                className="mt-2 w-full rounded-lg bg-emerald-600/25 py-1.5 text-[11px] font-bold text-emerald-300 hover:bg-emerald-600/40 transition-colors"
-              >
-                Entendido, ocultar guía
-              </button>
-            </div>
-          </div>
-        )}
 
         {/* AJUSTES — Removido para simplificar la interfaz según preferencia del usuario */}
         {/* <button

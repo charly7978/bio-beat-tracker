@@ -16,7 +16,6 @@ import {
 } from '../signal-quality/SignalQualityIndex';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
-import { getFingerPlacementHint } from '../../lib/finger/fingerPlacementHint';
 import { hasFingerHemoglobinSignature } from '../../lib/finger/fingerContactSignature';
 
 const log = createLogger('PPGSignalProcessor');
@@ -614,12 +613,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       hasPulsatility: extras?.hasPulsatility ?? false,
       pulsatilityValue: extras?.pulsatilityValue ?? 0,
       coverageRatio,
-      placementHint: getFingerPlacementHint({
-        fingerDetected: this.fingerDetected,
-        contactState: this.contactState,
-        coverageRatio,
-        motionArtifact,
-      }),
       status,
     };
   }
