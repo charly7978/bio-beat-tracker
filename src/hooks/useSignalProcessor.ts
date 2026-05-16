@@ -153,6 +153,10 @@ export const useSignalProcessor = () => {
     return processorRef.current.getBackpressureConfig();
   }, []);
 
+  const setCameraRuntimeHints = useCallback((diag: Record<string, unknown> | null | undefined) => {
+    processorRef.current?.setCameraRuntimeHints(diag);
+  }, []);
+
   const setBackpressureConfig = useCallback((partial: Partial<BackpressureConfig>): BackpressureConfig => {
     const cfg = processorRef.current
       ? processorRef.current.setBackpressureConfig(partial)
@@ -199,6 +203,7 @@ export const useSignalProcessor = () => {
     getBackpressureState,
     getBackpressureConfig,
     setBackpressureConfig,
+    setCameraRuntimeHints,
     setSignalCallback,
   };
 };

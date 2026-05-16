@@ -127,23 +127,32 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
         log.warn("Esta cámara no soporta torch");
         return false;
       }
-      try {
-        await track.applyConstraints({
-          advanced: [{ torch: true } as TorchCapableConstraint],
-        });
-        const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
-        return settings.torch === true;
-      } catch (e) {
-        log.warn("Fallo al activar torch", e);
-        return false;
+      const attempts = [
+        { advanced: [{ torch: true } as TorchCapableConstraint] },
+        { torch: true } as TorchCapableConstraint,
+      ] as MediaTrackConstraints[];
+      for (const constraints of attempts) {
+        try {
+          await track.applyConstraints(constraints);
+          const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
+          if (settings.torch === true) return true;
+        } catch {
+          /* siguiente método */
+        }
       }
+      log.warn("Torch solicitado pero no confirmado en settings");
+      return false;
     };
 
     const stabilizeTrack = async (track: MediaStreamTrack) => {
       const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
       const constraints: AdvancedConstraint[] = [];
 
-      if (caps.frameRate) constraints.push({ frameRate: 30 });
+      if (caps.frameRate) {
+        const maxFps = caps.frameRate.max ?? 30;
+        const targetFps = Math.min(30, maxFps);
+        constraints.push({ frameRate: targetFps });
+      }
 
       if (caps.exposureMode?.includes("manual")) {
         constraints.push({ exposureMode: "manual" });
@@ -221,7 +230,8 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
             facingMode: { ideal: "environment" },
             width: { ideal: 640, max: 960 },
             height: { ideal: 480, max: 720 },
-            frameRate: { ideal: 60, min: 24, max: 60 },
+            // 30 fps estable: varios Motorola fallan con ideal 60 + min 24 (overconstraint / AE inestable).
+            frameRate: { ideal: 30, min: 15, max: 30 },
           },
         });
 
@@ -240,9 +250,14 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
 
         const track = stream.getVideoTracks()[0];
         if (track) {
-          const torchOn = await activateTorch(track);
-          if (torchOn) log.info("Flash activado");
           await stabilizeTrack(track);
+          let torchOn = await activateTorch(track);
+          if (!torchOn) {
+            await new Promise((r) => setTimeout(r, 400));
+            torchOn = await activateTorch(track);
+          }
+          if (torchOn) log.info("Flash activado");
+          else log.warn("Flash no confirmado — se usará perfil de cámara tolerante");
         }
 
         log.info(

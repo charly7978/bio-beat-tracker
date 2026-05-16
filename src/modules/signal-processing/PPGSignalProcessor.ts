@@ -21,8 +21,13 @@ import {
   isExposureFlickerNotFingerPulse,
   isOpenFlashWithoutContact,
   passesFingerAcquire,
+  passesFingerMaintain,
   passesLiveFingerContact,
 } from '../../lib/finger/fingerSceneClassifier';
+import {
+  inferCameraRuntimeHints,
+  type CameraRuntimeHints,
+} from '../../lib/device/cameraDeviceProfile';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -135,6 +140,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private fingerLostCount = 0;
   private stableContactCount = 0;
   private instantLostStreak = 0;
+  private liveFingerMissStreak = 0;
+  private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
   private lastInstantFinger = false;
   private readonly FINGER_CONFIRM_FRAMES = VITAL_THRESHOLDS.FINGER.FINGER_CONFIRM_FRAMES;
 
@@ -209,6 +216,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return true;
   }
 
+  /** Actualizar perfil según diagnóstico de CameraView (torch/FPS/jitter). */
+  setCameraRuntimeHints(diag: Record<string, unknown> | null | undefined): void {
+    this.cameraHints = inferCameraRuntimeHints(diag);
+  }
+
   processFrame(imageData: ImageData, frameTimestampMs?: number): void {
     if (!this.isProcessing || !this.onSignalReady) return;
 
@@ -237,7 +249,16 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const liveFinger = this.isLiveFingerFrame(roi);
 
     if (this.contactState !== 'NO_CONTACT' && !liveFinger) {
-      this.forceNoContact();
+      this.liveFingerMissStreak++;
+      const grace = this.cameraHints.liveFingerMissGrace;
+      if (this.liveFingerMissStreak >= grace) {
+        this.forceNoContact();
+      } else {
+        this.contactState = 'UNSTABLE_CONTACT';
+        this.fingerDetected = this.fingerConfidenceCount >= this.FINGER_CONFIRM_FRAMES;
+      }
+    } else {
+      this.liveFingerMissStreak = 0;
     }
 
     if (this.contactState === 'NO_CONTACT') {
@@ -272,7 +293,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.underexposureEma = this.underexposureEma * 0.92 + underInstant * 0.08;
     
     if (r > 253 && g > 252) rejectionStatus = "SATURATED";
-    else if (r < 15 && g < 10) rejectionStatus = "UNDEREXPOSED";
+    else if (
+      r < (this.cameraHints.constrained ? 8 : 15) &&
+      g < (this.cameraHints.constrained ? 6 : 10)
+    ) {
+      rejectionStatus = "UNDEREXPOSED";
+    }
     else if (motionArtifact) rejectionStatus = "MOTION_ARTIFACT";
     else if (this.pixelStride > 6) rejectionStatus = "LOW_FPS";
     else if (this.frameCount < 28) rejectionStatus = "WARMUP";
@@ -520,6 +546,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.stableContactCount = 0;
     this.instantLostStreak = 0;
     this.lastInstantFinger = false;
+    this.liveFingerMissStreak = 0;
     this.decaySmoothedRgbFast();
     this.resetSignalTrackingBuffers();
     this.resetBaselines();
@@ -567,11 +594,26 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private isLiveFingerFrame(roi: ROIMetrics): boolean {
-    return passesLiveFingerContact(
-      this.rawRgbSnapshotFromRoi(roi),
-      this.rgbSnapshotFromSmoothed(),
-      this.fingerSpatial(roi),
-    );
+    const raw = this.rawRgbSnapshotFromRoi(roi);
+    const smoothed = this.rgbSnapshotFromSmoothed();
+    const spatial = this.fingerSpatial(roi);
+    const F = VITAL_THRESHOLDS.FINGER;
+
+    if (this.fingerDetected) {
+      if (passesFingerMaintain(raw, smoothed, spatial)) return true;
+      if (
+        this.cachedPI >= F.PULSE_HOLD_MIN_PI &&
+        raw.red >= F.PULSE_HOLD_MIN_RED &&
+        raw.red / Math.max(1, raw.green) >= F.PULSE_HOLD_RG &&
+        raw.red / Math.max(1, raw.blue) >= F.PULSE_HOLD_RB &&
+        spatial.coverageRatio >= F.PULSE_HOLD_COVERAGE &&
+        this.motionScore <= F.PULSE_HOLD_MAX_MOTION
+      ) {
+        return true;
+      }
+    }
+
+    return passesLiveFingerContact(raw, smoothed, spatial);
   }
 
   private rgbSnapshotFromSmoothed() {
@@ -613,6 +655,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     if (
       !this.fingerDetected &&
+      !this.cameraHints.constrained &&
       isExposureFlickerNotFingerPulse(this.lastRoiRedCv, smoothed, F.ACQUIRE_RB_STRICT)
     ) {
       return false;

@@ -11,6 +11,7 @@ import PPGSignalMeter from "@/components/PPGSignalMeter";
 import { DebugTelemetryPanel } from "@/components/DebugTelemetryPanel";
 import { SignalQualityIndex } from "@/modules/signal-quality/SignalQualityIndex";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
+import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
 import { VitalSignsResult } from "@/modules/vital-signs/VitalSignsProcessor";
 import type { ProcessedSignal, ContactState } from "@/types/signal";
 import { toast } from "@/components/ui/use-toast";
@@ -174,7 +175,16 @@ const Index = () => {
     setBackpressureConfig,
     currentStride,
     setSignalCallback,
+    setCameraRuntimeHints,
   } = useSignalProcessor();
+
+  const cameraHintsRef = useRef(inferCameraRuntimeHints());
+  const syncCameraHints = useCallback(() => {
+    const d = cameraRef.current?.getDiagnostics?.() as Record<string, unknown> | undefined;
+    if (!d?.active) return;
+    cameraHintsRef.current = inferCameraRuntimeHints(d);
+    setCameraRuntimeHints(d);
+  }, [setCameraRuntimeHints]);
   
   const { 
     processSignal: processHeartBeat, 
@@ -450,6 +460,7 @@ const Index = () => {
   // así que el video está listo: iniciamos captura directamente.
   const handleStreamReady = useCallback((stream: MediaStream) => {
     setCameraStream(stream);
+    syncCameraHints();
     const video = cameraRef.current?.getVideoElement();
     if (video && video.readyState >= 2 && video.videoWidth > 0) {
       startFrameLoop();
@@ -464,7 +475,7 @@ const Index = () => {
       };
       video.addEventListener('canplay', onCanPlay, { once: true });
     }
-  }, [startFrameLoop]);
+  }, [startFrameLoop, syncCameraHints]);
 
   // === FINALIZAR MEDICIÓN ===
   const finalizeMeasurement = useCallback(async () => {
@@ -663,11 +674,15 @@ const Index = () => {
     const hasUsableContact =
       lastSignal.fingerDetected && contactState !== 'NO_CONTACT';
 
+    if (vitalSignsFrameCounter.current % 45 === 0) {
+      syncCameraHints();
+    }
+    const hints = cameraHintsRef.current;
     const Q = VITAL_THRESHOLDS.QUALITY;
     const minConf =
-      contactState === 'STABLE_CONTACT'
+      (contactState === 'STABLE_CONTACT'
         ? Q.MIN_ENSEMBLE_CONF_STABLE
-        : Q.MIN_ENSEMBLE_CONF_UNSTABLE;
+        : Q.MIN_ENSEMBLE_CONF_UNSTABLE) * hints.ensembleConfScale;
     const hrReady =
       hasUsableContact &&
       heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
@@ -681,7 +696,7 @@ const Index = () => {
     const vitalsReady =
       hrReady &&
       (rawSqi >= Q.MIN_FOR_HR || (lastSignal.quality || 0) >= Q.MIN_FOR_HR) &&
-      (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * 0.28;
+      (lastSignal.perfusionIndex || 0) >= Q.MIN_PI * hints.minPiScale;
 
     if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {
       lastSignalPushRef.current = nowT;
@@ -729,7 +744,16 @@ const Index = () => {
         }
       }
     } else {
-      unstableFrameCounter.current++;
+      if (!hasUsableContact) {
+        unstableFrameCounter.current++;
+      } else if (heartBeatResult.bpm <= 0) {
+        unstableFrameCounter.current = Math.min(
+          unstableFrameCounter.current + 1,
+          UNSTABLE_ZERO_THRESHOLD,
+        );
+      } else {
+        unstableFrameCounter.current = Math.max(0, unstableFrameCounter.current - 2);
+      }
       if (unstableFrameCounter.current >= UNSTABLE_ZERO_THRESHOLD) {
         vitalSignsFrameCounter.current = 0;
         setBeatMarker(0);
@@ -858,7 +882,7 @@ const Index = () => {
         }
       }
     }
-  }, [processHeartBeat, processVitalSigns, setRGBData, getRGBStats]);
+  }, [processHeartBeat, processVitalSigns, setRGBData, getRGBStats, syncCameraHints]);
 
   // Conectar el callback realtime al hook de señal una sola vez.
   useEffect(() => {
@@ -996,7 +1020,12 @@ const Index = () => {
         <div className="relative z-10 h-full">
           {isMonitoring && (
             <DebugTelemetryPanel
-              camera={cameraRef.current?.getDiagnostics?.() as Record<string, unknown>}
+              camera={{
+                ...(cameraRef.current?.getDiagnostics?.() as Record<string, unknown>),
+                constrained: cameraHintsRef.current.constrained,
+                motorolaLike: cameraHintsRef.current.motorolaLike,
+                torchReliable: cameraHintsRef.current.torchReliable,
+              }}
               sqm={
                 (lastSignal?.diagnostics as { sqm?: Record<string, unknown> })?.sqm as {
                   sqi?: number;

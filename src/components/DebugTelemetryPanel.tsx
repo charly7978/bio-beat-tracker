@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 
 interface DebugTelemetryPanelProps {
   camera?: Record<string, unknown>;
+  contactState?: string;
   sqm?: {
     sqi?: number;
     perfusionIndex?: number;
@@ -13,7 +14,6 @@ interface DebugTelemetryPanelProps {
   };
   acquisitionStatus?: string;
   peakDetection?: Record<string, unknown>;
-  contactState?: string;
 }
 
 export const DebugTelemetryPanel: React.FC<DebugTelemetryPanelProps> = ({
@@ -21,7 +21,7 @@ export const DebugTelemetryPanel: React.FC<DebugTelemetryPanelProps> = ({
   sqm,
   acquisitionStatus,
   peakDetection,
-  contactState,
+  contactState: contactStateProp,
 }) => {
   const [open, setOpen] = useState(false);
 
@@ -49,7 +49,17 @@ export const DebugTelemetryPanel: React.FC<DebugTelemetryPanelProps> = ({
         </button>
       </div>
       <div className="space-y-0.5 max-h-40 overflow-y-auto">
-        <Row k="contact" v={contactState ?? '—'} />
+        <Row k="contact" v={contactStateProp ?? '—'} />
+        <Row
+          k="perfil"
+          v={
+            camera?.motorolaLike === true
+              ? 'Moto/tolerante'
+              : camera?.constrained === true
+                ? 'tolerante'
+                : 'normal'
+          }
+        />
         <Row k="acquire" v={acquisitionStatus ?? '—'} />
         <Row k="SQI" v={sqm?.sqi != null ? `${Math.round(sqm.sqi)}` : '—'} />
         <Row k="PI" v={sqm?.perfusionIndex != null ? sqm.perfusionIndex.toFixed(4) : '—'} />

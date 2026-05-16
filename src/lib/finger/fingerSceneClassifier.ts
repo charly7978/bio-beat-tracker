@@ -56,6 +56,29 @@ export function passesLiveFingerContact(
   return smoothHb;
 }
 
+/** Mantener contacto ya adquirido (umbrales más tolerantes — AE/torch variables en Motorola, etc.). */
+export function passesFingerMaintain(
+  raw: FingerRgbSnapshot,
+  smoothed: FingerRgbSnapshot,
+  spatial: FingerRoiSpatial,
+): boolean {
+  const F = VITAL_THRESHOLDS.FINGER;
+  if (isOpenFlashWithoutContact(raw) || isOpenFlashWithoutContact(smoothed)) return false;
+
+  const r = Math.max(raw.red, smoothed.red);
+  const g = Math.max(1, raw.green, smoothed.green);
+  const b = Math.max(1, raw.blue, smoothed.blue);
+  const dom = r - (g + b) / 2;
+
+  if (r < F.MAINTAIN_MIN_RED) return false;
+  if (r / g < F.MAINTAIN_RG) return false;
+  if (r / b < F.MAINTAIN_RB) return false;
+  if (dom < F.MAINTAIN_DOMINANCE) return false;
+  if (spatial.coverageRatio < F.MAINTAIN_COVERAGE) return false;
+
+  return true;
+}
+
 /** Primera adquisición: más estricta (R/B crudo + escena dedo en lente). */
 export function passesFingerAcquire(
   raw: FingerRgbSnapshot,
