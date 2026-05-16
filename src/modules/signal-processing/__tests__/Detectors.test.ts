@@ -99,11 +99,15 @@ describe('PeakDetectionEnsemble', () => {
       timestampsMs: t,
       samplingRateHz: fs,
       sqi: 42,
+      perfusionIndex: 0.005,
     });
     if (r.bpmInstant) {
       expect(r.bpmInstant).toBeGreaterThan(55);
       expect(r.bpmInstant).toBeLessThan(110);
     }
     expect(r.confidence).toBeGreaterThanOrEqual(0);
+    const cal = (r.diagnostics as { detectorCalibration?: { fusionToleranceMs: number } })
+      .detectorCalibration;
+    expect(cal?.fusionToleranceMs).toBeGreaterThan(150);
   });
 });

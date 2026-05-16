@@ -7,6 +7,7 @@ import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { clamp } from '../../../utils/math';
 import { isPhysiologicalRR } from '../../../utils/physio';
 import { bpmFromAutocorr } from '../shared/dsp';
+import { computeDetectorCalibration } from '../../../lib/measurement/detectorCalibration';
 import { scorePeakCandidate } from '../../../lib/measurement/peakScoring';
 import { ElgendiPeakDetector } from './ElgendiPeakDetector';
 import { PanTompkinsPPGDetector } from './PanTompkinsPPGDetector';
@@ -72,22 +73,35 @@ export class PeakDetectionEnsemble {
       }
     }
 
+    const calibration = computeDetectorCalibration(
+      signal,
+      fsEffective,
+      sqi,
+      perfusionIndex,
+    );
+
     const el = ElgendiPeakDetector.detect({
       signal,
       timestampsMs,
       samplingRateHz: fsEffective,
       sqi,
+      minProminence: calibration.elgendiMinProminence,
+      offsetWeight: calibration.elgendiOffsetWeight,
     });
     const pt = PanTompkinsPPGDetector.detect({
       signal,
       timestampsMs,
       samplingRateHz: fsEffective,
       sqi,
+      thresholdFactor: calibration.panThresholdFactor,
+      searchbackFactor: calibration.panSearchbackFactor,
     });
 
     const spec = bpmFromAutocorr(signal, fsEffective);
-    const tolMs = PEAK_DETECTION_DEFAULTS.fusionToleranceMs;
+    const tolMs = calibration.fusionToleranceMs;
     const allowSolo = allowSoloElgendiFusion !== false;
+    const soloElMin = calibration.soloElgendiMinConf;
+    const soloPanMin = calibration.soloPanMinConf;
 
     const fusedIdx: number[] = [];
     const fusedTimes: number[] = [];
@@ -127,7 +141,7 @@ export class PeakDetectionEnsemble {
         fusedIdx.push(clamp(ie, 0, signal.length - 1));
         fusedTimes.push(te);
         peakSources.push('dual');
-      } else if (allowSolo && el.confidence >= 0.14) {
+      } else if (allowSolo && el.confidence >= soloElMin) {
         usedEl.add(j);
         fusedIdx.push(clamp(ie, 0, signal.length - 1));
         fusedTimes.push(te);
@@ -154,7 +168,7 @@ export class PeakDetectionEnsemble {
         rejected.push({ index: ip, reason: 'ELGENDI_ALREADY_USED', detector: 'PanTompkinsPPG' });
         continue;
       }
-      if (allowSolo && pt.confidence >= 0.2 && el.confidence >= 0.06) {
+      if (allowSolo && pt.confidence >= soloPanMin && el.confidence >= soloElMin * 0.55) {
         usedPan.add(k);
         fusedIdx.push(clamp(ip, 0, signal.length - 1));
         fusedTimes.push(tp);
@@ -284,6 +298,7 @@ export class PeakDetectionEnsemble {
         soloEl,
         soloPan,
         fusionToleranceMs: tolMs,
+        detectorCalibration: calibration,
         elgendiConfidence: el.confidence,
         panTompkinsConfidence: pt.confidence,
         fusedPeakTimes: sortedTimes,

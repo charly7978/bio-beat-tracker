@@ -20,6 +20,9 @@ export interface PanTompkinsPPGInput {
   samplingRateHz: number;
   sqi?: number;
   integrationWindowMs?: number;
+  /** Umbral adaptativo (0.32–0.58); menor = más sensible a latidos débiles */
+  thresholdFactor?: number;
+  searchbackFactor?: number;
 }
 
 export interface PanTompkinsPPGOutput {
@@ -42,6 +45,10 @@ export class PanTompkinsPPGDetector {
     let ts = [...input.timestampsMs];
     let fs = input.samplingRateHz;
     const integMs = input.integrationWindowMs ?? PEAK_DETECTION_DEFAULTS.integrationWindowMs;
+    const thrFactor = input.thresholdFactor ?? PEAK_DETECTION_DEFAULTS.CALIBRATION.PAN_THRESHOLD_BASE;
+    const sbFactor =
+      input.searchbackFactor ??
+      thrFactor * PEAK_DETECTION_DEFAULTS.CALIBRATION.PAN_SEARCHBACK_RELAXED_FRAC;
 
     if (sig.length !== ts.length || sig.length < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
       return {
@@ -98,7 +105,8 @@ export class PanTompkinsPPGDetector {
       if (v < signalPeak * 0.4) {
         noisePeak = Math.max(noisePeak * decay, v);
       }
-      const thr1 = noisePeak + 0.48 * Math.max(1e-6, signalPeak - noisePeak);
+      const span = Math.max(1e-6, signalPeak - noisePeak);
+      const thr1 = noisePeak + thrFactor * span;
       thr[i] = thr1;
 
       const localMax = v >= integrated[i - 1] && v > integrated[i + 1] && v >= integrated[i - 2] && v >= integrated[i + 2];
@@ -109,9 +117,9 @@ export class PanTompkinsPPGDetector {
         continue;
       }
 
-      // Searchback conservador: solo tras pausa larga y con umbral menos agresivo
+      // Searchback: tras pausa larga, umbral relajado calibrado
       if (i - lastPeakIdx > expectedRR * 2.15 && lastPeakIdx >= 0) {
-        const relaxed = noisePeak + 0.36 * Math.max(1e-6, signalPeak - noisePeak);
+        const relaxed = noisePeak + sbFactor * span;
         if (v < relaxed) continue;
         searchbackEvents.push(i);
       }

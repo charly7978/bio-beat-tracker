@@ -10,6 +10,7 @@ import {
   rrMedianMs,
   scorePeakCandidate,
 } from './peakScoring';
+import type { DetectorCalibration } from './detectorCalibration';
 
 export interface PeakEmitDecision {
   emit: boolean;
@@ -70,9 +71,15 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
   const diag = ens.diagnostics as {
     elgendiConfidence?: number;
     panTompkinsConfidence?: number;
+    detectorCalibration?: DetectorCalibration;
   };
+  const cal = diag.detectorCalibration;
   const elConf = diag.elgendiConfidence ?? 0;
   const panConf = diag.panTompkinsConfidence ?? 0;
+  const soloElMin =
+    cal?.soloElgendiMinConf ??
+    (placementMode === 'hybrid' ? 0.15 : 0.17);
+  const soloPanMin = cal?.soloPanMinConf ?? 0.19;
   const spectralAgreement = ens.agreement.spectral ?? 0;
   const prevRrMed = rrMedianMs(recentRrMs);
 
@@ -127,16 +134,16 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
       fingerContactConfirmed &&
       allowSoloElgendi &&
       src === 'solo_elgendi' &&
-      elConf >= (placementMode === 'hybrid' ? 0.16 : 0.18) &&
-      spectralAgreement >= (stallReacquire ? 0.1 : 0.14);
+      elConf >= soloElMin &&
+      spectralAgreement >= (stallReacquire ? 0.08 : 0.12);
     const soloPan =
       fingerContactConfirmed &&
       allowSoloElgendi &&
       (emittedPeakCount >= 1 || stallReacquire) &&
       src === 'solo_pan' &&
-      panConf >= (stallReacquire ? 0.2 : 0.24) &&
-      elConf >= 0.08 &&
-      spectralAgreement >= (stallReacquire ? 0.12 : 0.18);
+      panConf >= soloPanMin &&
+      elConf >= soloElMin * 0.5 &&
+      spectralAgreement >= (stallReacquire ? 0.1 : 0.15);
 
     if (!dual && !soloEl && !soloPan) continue;
 
