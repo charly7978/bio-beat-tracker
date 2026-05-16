@@ -1,15 +1,22 @@
 /**
- * Política única de emisión de picos PPG — sin metrónomo ni BPM sin latido.
+ * Política única de emisión de picos PPG — ponderación + anti falsos positivos.
  */
 import type { PeakDetectionResult } from '@/types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '@/config/signalProcessing';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import type { FingerPlacementMode } from '@/types/signal';
+import {
+  PEAK_SCORE_THRESHOLDS,
+  passesRrPlausibility,
+  rrMedianMs,
+  scorePeakCandidate,
+} from './peakScoring';
 
 export interface PeakEmitDecision {
   emit: boolean;
   peakTimeMs: number;
   reason: string;
+  weightedScore?: number;
 }
 
 export interface PeakEmitPolicyInput {
@@ -22,8 +29,11 @@ export interface PeakEmitPolicyInput {
   windowSamples: number;
   placementMode?: FingerPlacementMode;
   fingerContactConfirmed?: boolean;
-  /** Marco actual (performance.now) para ventana viva por tiempo */
   nowMs?: number;
+  emittedPeakCount?: number;
+  recentRrMs?: number[];
+  sqi?: number;
+  perfusionIndex?: number;
 }
 
 export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
@@ -38,6 +48,10 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     placementMode = 'hybrid',
     fingerContactConfirmed = true,
     nowMs,
+    emittedPeakCount = 0,
+    recentRrMs = [],
+    sqi = 0,
+    perfusionIndex = 0,
   } = input;
 
   const minGap =
@@ -50,12 +64,13 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
   };
   const elConf = diag.elgendiConfidence ?? 0;
   const panConf = diag.panTompkinsConfidence ?? 0;
-  const detectorConsensus =
-    (ens.agreement.elgendi + ens.agreement.panTompkins) / 2;
+  const spectralAgreement = ens.agreement.spectral ?? 0;
+  const prevRrMed = rrMedianMs(recentRrMs);
 
   let bestT = 0;
   let bestReason = '';
   let bestRank = 0;
+  let bestScore = 0;
 
   const liveEdgeMs = PEAK_DETECTION_DEFAULTS.peakEmitWindowMs;
   const liveEdgeSamples = Math.max(4, Math.round(sampleRateHz * (liveEdgeMs / 1000)));
@@ -80,41 +95,66 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     }
 
     const src = ens.peakSources?.[i];
+    if (emittedPeakCount < 1 && src !== 'dual') continue;
+
+    const rrMs = lastEmittedPeakMs > 0 ? t - lastEmittedPeakMs : undefined;
+    if (rrMs != null && prevRrMed > 0 && !passesRrPlausibility(rrMs, prevRrMed)) {
+      continue;
+    }
+
     const dual =
       src === 'dual' &&
-      detectorConsensus >= consensusMin * (fingerContactConfirmed ? 0.68 : 0.78) &&
-      ens.confidence >= minPeakConf * (fingerContactConfirmed ? 0.72 : 0.88);
-    const soloElMin =
-      placementMode === 'pad' ? 0.14 : placementMode === 'tip' ? 0.16 : 0.18;
+      ens.confidence >= minPeakConf * 0.8;
     const soloEl =
       fingerContactConfirmed &&
       allowSoloElgendi &&
       src === 'solo_elgendi' &&
-      elConf >= soloElMin &&
-      detectorConsensus >= consensusMin * 0.65 &&
-      ens.confidence >= minPeakConf * 0.78;
+      elConf >= (placementMode === 'hybrid' ? 0.22 : 0.24);
     const soloPan =
       fingerContactConfirmed &&
       allowSoloElgendi &&
       src === 'solo_pan' &&
-      panConf >= soloElMin &&
-      detectorConsensus >= consensusMin * 0.65 &&
-      ens.confidence >= minPeakConf * 0.78;
+      panConf >= 0.28 &&
+      elConf >= 0.1;
 
     if (!dual && !soloEl && !soloPan) continue;
+
+    const weightedScore =
+      ens.peakScores?.[i] ??
+      scorePeakCandidate({
+        source: src ?? 'solo_elgendi',
+        elConf,
+        panConf,
+        ensConf: ens.confidence,
+        spectralAgreement,
+        sqi,
+        perfusionIndex,
+        rrMs,
+        prevRrMedianMs: prevRrMed > 0 ? prevRrMed : undefined,
+      });
+
+    const minScore = dual
+      ? PEAK_SCORE_THRESHOLDS.dualMin
+      : PEAK_SCORE_THRESHOLDS.soloMin;
+    if (weightedScore < minScore) continue;
 
     const reason = dual ? 'DUAL_FUSED' : src === 'solo_pan' ? 'SOLO_PAN' : 'SOLO_ELGENDI';
     const rank = rankSource(src);
 
-    if (bestT === 0 || t > bestT || (t === bestT && rank > bestRank)) {
+    if (
+      bestT === 0 ||
+      t > bestT ||
+      (t === bestT && (rank > bestRank || weightedScore > bestScore))
+    ) {
       bestT = t;
       bestReason = reason;
       bestRank = rank;
+      bestScore = weightedScore;
     }
   }
 
   if (bestT > 0) {
-    return { emit: true, peakTimeMs: bestT, reason: bestReason };
+    return { emit: true, peakTimeMs: bestT, reason: bestReason, weightedScore: bestScore };
   }
 
   return { emit: false, peakTimeMs: 0, reason: 'NO_NEW_PEAK' };

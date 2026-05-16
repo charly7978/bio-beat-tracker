@@ -141,6 +141,11 @@ const PPGSignalMeter = ({
   const lastBpmSampleRef = useRef<number>(0);
   const pendingTrendArrRef = useRef(false);
   const smoothedBpmRef = useRef<number>(0);
+  const displayBpmRef = useRef(0);
+  const displaySpo2Ref = useRef(0);
+  const displaySysRef = useRef(0);
+  const displayDiaRef = useRef(0);
+  const waveGainRef = useRef(4.2);
 
   // Layout — recomputed on resize, DPR-aware
   const layoutRef = useRef({
@@ -179,15 +184,21 @@ const PPGSignalMeter = ({
 
     const nowMs = Date.now();
 
-    // Ponderación sutil (BPM Smoothing) para evitar saltos bruscos en pantalla
     if (bpm > 0) {
       if (smoothedBpmRef.current === 0) {
         smoothedBpmRef.current = bpm;
       } else {
-        // Alpha de 0.2: mantiene la reacción rápida pero filtra el ruido/jitter
-        smoothedBpmRef.current = (smoothedBpmRef.current * 0.8) + (bpm * 0.2);
+        smoothedBpmRef.current = smoothedBpmRef.current * 0.72 + bpm * 0.28;
       }
     }
+
+    const pi = perfusionIndex ?? 0;
+    const q = quality ?? 0;
+    const weakTarget =
+      4.2 *
+      (pi < 0.0025 ? 2.1 : pi < 0.005 ? 1.65 : pi < 0.01 ? 1.35 : 1.08) *
+      (q < 20 ? 1.4 : q < 40 ? 1.2 : 1);
+    waveGainRef.current = waveGainRef.current * 0.82 + weakTarget * 0.18;
 
     if (bpm > 30 && bpm < 220 && nowMs - lastBpmSampleRef.current > 500) {
       lastBpmSampleRef.current = nowMs;
@@ -220,6 +231,13 @@ const PPGSignalMeter = ({
       smoothedBpmRef.current = 0;
     } else if (!bpm || bpm <= 0) {
       smoothedBpmRef.current = 0;
+    }
+
+    if (!isFingerDetected && !preserveResults) {
+      displayBpmRef.current = 0;
+      displaySpo2Ref.current = 0;
+      displaySysRef.current = 0;
+      displayDiaRef.current = 0;
     }
   }, [value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus, arrhythmiaCount, isMonitoring, diagnostics]);
 
@@ -434,8 +452,11 @@ const PPGSignalMeter = ({
     // === HR ===
     const { isFingerDetected: fingerOn, preserveResults: preserve } = propsRef.current;
     const dispBpm = Math.round(
-      (!fingerOn && !preserve ? 0 : smoothedBpmRef.current) || bpm || 0,
+      (!fingerOn && !preserve ? 0 : displayBpmRef.current) || 0,
     );
+    const dispSpo2 = Math.round(displaySpo2Ref.current);
+    const dispSys = Math.round(displaySysRef.current);
+    const dispDia = Math.round(displayDiaRef.current);
     const hrColor = dispBpm <= 0 ? COLORS.TEXT_DIM
       : dispBpm < 50 ? COLORS.TEXT_DANGER
       : dispBpm < 60 ? COLORS.TEXT_WARN
@@ -490,9 +511,9 @@ const PPGSignalMeter = ({
     }
 
     // === SpO2 ===
-    const spo2Color = spo2 <= 0 ? COLORS.TEXT_DIM
-      : spo2 >= 95 ? COLORS.SPO2
-      : spo2 >= 90 ? COLORS.TEXT_WARN
+    const spo2Color = dispSpo2 <= 0 ? COLORS.TEXT_DIM
+      : dispSpo2 >= 95 ? COLORS.SPO2
+      : dispSpo2 >= 90 ? COLORS.TEXT_WARN
       : COLORS.TEXT_DANGER;
 
     ctx.font = `bold 10px ${FONT_MONO}`;
@@ -502,18 +523,17 @@ const PPGSignalMeter = ({
 
     ctx.font = `bold 56px ${FONT_MONO}`;
     ctx.fillStyle = spo2Color;
-    ctx.fillText(spo2 > 0 ? Math.round(spo2).toString() : '--', colW + 16, metrics.y + 72);
+    ctx.fillText(dispSpo2 > 0 ? dispSpo2.toString() : '--', colW + 16, metrics.y + 72);
 
     ctx.font = `12px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.fillText('%', colW + 16 + (spo2 > 0 ? 64 : 32), metrics.y + 72);
+    ctx.fillText('%', colW + 16 + (dispSpo2 > 0 ? 64 : 32), metrics.y + 72);
 
-    // SpO2 sub
     let spLabel = '';
-    if (spo2 > 0) {
-      if (spo2 >= 95) spLabel = 'NORMOXIA';
-      else if (spo2 >= 90) spLabel = 'HIPOXEMIA LEVE';
-      else if (spo2 >= 85) spLabel = 'HIPOXEMIA MODERADA';
+    if (dispSpo2 > 0) {
+      if (dispSpo2 >= 95) spLabel = 'NORMOXIA';
+      else if (dispSpo2 >= 90) spLabel = 'HIPOXEMIA LEVE';
+      else if (dispSpo2 >= 85) spLabel = 'HIPOXEMIA MODERADA';
       else spLabel = 'HIPOXEMIA SEVERA';
     }
     ctx.font = `bold 10px ${FONT_MONO}`;
@@ -530,8 +550,8 @@ const PPGSignalMeter = ({
     }
 
     // === BP ===
-    const sys = pressure?.systolic || 0;
-    const dia = pressure?.diastolic || 0;
+    const sys = dispSys > 0 ? dispSys : pressure?.systolic || 0;
+    const dia = dispDia > 0 ? dispDia : pressure?.diastolic || 0;
     const map = sys > 0 && dia > 0 ? Math.round(dia + (sys - dia) / 3) : 0;
     const pp = sys > 0 && dia > 0 ? sys - dia : 0;
     const bpConf = pressure?.confidence;
@@ -729,7 +749,7 @@ const PPGSignalMeter = ({
 
     if (preserve && !detected) return;
 
-    const scaledValue = signalValue * 3.5;
+    const scaledValue = signalValue * waveGainRef.current;
     // La detección de picos en HeartBeatProcessor evalúa muestras pasadas (índice 5 de 11).
     // A 30 FPS, esto representa un delay algorítmico de ~166ms.
     // Aplicamos este offset visual para que el "BEEP" coincida milimétricamente con la parte más alta de la onda visible.
@@ -776,8 +796,8 @@ const PPGSignalMeter = ({
       }
       const range = Math.max(24, mx - mn);
       const stats = amplitudeStatsRef.current;
-      stats.min = stats.min * 0.86 + (mn - range * 0.16) * 0.14;
-      stats.max = stats.max * 0.86 + (mx + range * 0.16) * 0.14;
+      stats.min = stats.min * 0.62 + (mn - range * 0.12) * 0.38;
+      stats.max = stats.max * 0.62 + (mx + range * 0.12) * 0.38;
       stats.range = stats.max - stats.min;
     }
 
@@ -1415,6 +1435,20 @@ const PPGSignalMeter = ({
         return;
       }
       lastRenderTime = now;
+
+      const p = propsRef.current;
+      const fingerOn = p.isFingerDetected;
+      const preserve = p.preserveResults;
+      const targetBpm =
+        !fingerOn && !preserve ? 0 : smoothedBpmRef.current || p.bpm || 0;
+      const targetSpo2 = fingerOn || preserve ? p.spo2 ?? 0 : 0;
+      const targetSys = fingerOn || preserve ? p.pressure?.systolic ?? 0 : 0;
+      const targetDia = fingerOn || preserve ? p.pressure?.diastolic ?? 0 : 0;
+      const lerp = (cur: number, tgt: number, a: number) => cur + (tgt - cur) * a;
+      displayBpmRef.current = lerp(displayBpmRef.current, targetBpm, 0.24);
+      displaySpo2Ref.current = lerp(displaySpo2Ref.current, targetSpo2, 0.2);
+      displaySysRef.current = lerp(displaySysRef.current, targetSys, 0.18);
+      displayDiaRef.current = lerp(displayDiaRef.current, targetDia, 0.18);
 
       drawBackground(ctx);
       drawHeader(ctx, now);

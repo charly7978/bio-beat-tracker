@@ -626,14 +626,14 @@ const Index = () => {
   const lastSignalPushRef = useRef(0);
   const lastRrPushRef = useRef(0);
   const beatMarkerTimerRef = useRef<number | null>(null);
-  const HR_PUSH_THROTTLE_MS = 120;
+  const HR_PUSH_THROTTLE_MS = 80;
   // El DSP de vitales (SpO2/BP/arritmia) corre cada N frames para alimentar sus
   // ventanas internas; sólo el setState a React se throttlea para no saturar el
   // árbol. NUNCA bajar la tasa de procesamiento por debajo de ~10 Hz: SpO2 y BP
   // necesitan acumular ciclos cardíacos completos para producir lecturas.
   const VITALS_PUSH_THROTTLE_MS = 300;
   const RR_PUSH_THROTTLE_MS = 250;
-  const SIGNAL_PUSH_THROTTLE_MS = 33; // ~30 Hz a la onda (ya throttleada por el monitor RAF)
+  const SIGNAL_PUSH_THROTTLE_MS = 16; // ~60 Hz a la onda para trazo dinámico
   const DIAG_PUSH_THROTTLE_MS = 200;
 
   // Hot path: corre por cada frame de cámara SIN pasar por React.

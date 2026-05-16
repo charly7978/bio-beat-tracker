@@ -184,11 +184,13 @@ export class HeartBeatProcessor {
       const sigRaw = this.signalBuffer.slice(-win);
       const ts = this.timestampBuffer.slice(-win);
       const sig = this.normalizeWindow(sigRaw, Math.min(150, sigRaw.length));
+      const ensSqi = this.ensembleInputSqi(this.signalQualityIndex);
       const ens = PeakDetectionEnsemble.analyze({
         signal: sig,
         timestampsMs: ts,
         samplingRateHz: sampleRate,
-        sqi: this.ensembleInputSqi(this.signalQualityIndex),
+        sqi: ensSqi,
+        perfusionIndex: this.ppgPerfusionIndex,
         allowSoloElgendiFusion: this.cameraHints.allowSoloElgendiFusion,
       });
       ensembleConf = ens.confidence;
@@ -208,6 +210,10 @@ export class HeartBeatProcessor {
         placementMode: this.placementMode,
         fingerContactConfirmed: this.fingerContactConfirmed,
         nowMs: now,
+        emittedPeakCount: this.consecutivePeaks,
+        recentRrMs: this.rrIntervals,
+        sqi: ensSqi,
+        perfusionIndex: this.ppgPerfusionIndex,
       });
 
       if (decision.emit) {
@@ -247,7 +253,11 @@ export class HeartBeatProcessor {
           }
         }
 
-        if (this.rrIntervals.length >= 1 || decision.reason === 'DUAL_FUSED') {
+        const wScore = decision.weightedScore ?? 0;
+        if (
+          decision.reason === 'DUAL_FUSED' ||
+          (wScore >= 0.52 && this.rrIntervals.length >= 1)
+        ) {
           this.vibrate();
           this.playBeep();
         }
@@ -261,6 +271,7 @@ export class HeartBeatProcessor {
           rejectedPeaks: ens.rejectedPeaks,
           fusedPeakCount: ens.peaks.length,
           emitReason,
+          weightedScore: decision.weightedScore,
           gateRange: this.cachedGateRange,
         },
         lastPeakTime: this.lastPeakTime,

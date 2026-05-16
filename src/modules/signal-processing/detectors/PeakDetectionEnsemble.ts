@@ -7,6 +7,7 @@ import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { clamp } from '../../../utils/math';
 import { isPhysiologicalRR } from '../../../utils/physio';
 import { bpmFromAutocorr } from '../shared/dsp';
+import { scorePeakCandidate } from '../../../lib/measurement/peakScoring';
 import { ElgendiPeakDetector } from './ElgendiPeakDetector';
 import { PanTompkinsPPGDetector } from './PanTompkinsPPGDetector';
 
@@ -15,6 +16,7 @@ export interface PeakDetectionEnsembleInput {
   timestampsMs: number[];
   samplingRateHz: number;
   sqi?: number;
+  perfusionIndex?: number;
   legacyPeakIndices?: number[];
   allowSoloElgendiFusion?: boolean;
 }
@@ -30,7 +32,7 @@ type PeakSource = 'dual' | 'solo_elgendi' | 'solo_pan';
 export class PeakDetectionEnsemble {
   static analyze(input: PeakDetectionEnsembleInput): PeakDetectionResult {
     const rejected: PeakDetectionResult['rejectedPeaks'] = [];
-    const { signal, timestampsMs, samplingRateHz, sqi, allowSoloElgendiFusion } = input;
+    const { signal, timestampsMs, samplingRateHz, sqi, perfusionIndex = 0, allowSoloElgendiFusion } = input;
 
     if (signal.length < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble || signal.length !== timestampsMs.length) {
       return {
@@ -101,7 +103,7 @@ export class PeakDetectionEnsemble {
         fusedIdx.push(clamp(ie, 0, signal.length - 1));
         fusedTimes.push(te);
         peakSources.push('dual');
-      } else if (allowSolo && el.confidence >= 0.1) {
+      } else if (allowSolo && el.confidence >= 0.2) {
         usedEl.add(j);
         fusedIdx.push(clamp(ie, 0, signal.length - 1));
         fusedTimes.push(te);
@@ -128,7 +130,7 @@ export class PeakDetectionEnsemble {
         rejected.push({ index: ip, reason: 'ELGENDI_ALREADY_USED', detector: 'PanTompkinsPPG' });
         continue;
       }
-      if (allowSolo && pt.confidence >= 0.12) {
+      if (allowSolo && pt.confidence >= 0.26 && el.confidence >= 0.08) {
         usedPan.add(k);
         fusedIdx.push(clamp(ip, 0, signal.length - 1));
         fusedTimes.push(tp);
@@ -204,10 +206,39 @@ export class PeakDetectionEnsemble {
       confidence = clamp(confidence + 0.08, 0, 1);
     }
 
+    const sqiVal = sqi ?? 0;
+    const peakScores: number[] = [];
+    for (let i = 0; i < sortedTimes.length; i++) {
+      const rrMs = i > 0 ? sortedTimes[i]! - sortedTimes[i - 1]! : undefined;
+      let prevMed = 0;
+      if (i > 1) {
+        const rrSlice: number[] = [];
+        for (let k = 1; k < i; k++) {
+          const d = sortedTimes[k]! - sortedTimes[k - 1]!;
+          if (isPhysiologicalRR(d)) rrSlice.push(d);
+        }
+        if (rrSlice.length) prevMed = median(rrSlice);
+      }
+      peakScores.push(
+        scorePeakCandidate({
+          source: sortedSources[i]!,
+          elConf: el.confidence,
+          panConf: pt.confidence,
+          ensConf: confidence,
+          spectralAgreement,
+          sqi: sqiVal,
+          perfusionIndex,
+          rrMs,
+          prevRrMedianMs: prevMed > 0 ? prevMed : undefined,
+        }),
+      );
+    }
+
     return {
       peaks: sortedIdx,
       peakTimes: sortedTimes,
       peakSources: sortedSources,
+      peakScores,
       rrIntervalsMs: rr,
       bpmInstant,
       bpmStable: bpmInstant,

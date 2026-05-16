@@ -89,6 +89,8 @@ export interface PeakDetectionResult {
   peakTimes: number[];
   /** Origen de cada pico fusionado (alineado con peakTimes). */
   peakSources?: Array<'dual' | 'solo_elgendi' | 'solo_pan'>;
+  /** Puntuación ponderada 0–1 por pico (alineada con peakTimes). */
+  peakScores?: number[];
   rrIntervalsMs: number[];
   bpmInstant: number | null;
   bpmStable: number | null;
