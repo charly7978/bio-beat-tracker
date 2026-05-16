@@ -11,9 +11,10 @@
     "typecheck": "tsc -p tsconfig.app.json --noEmit",
     "test": "vitest run",
     "check:orphans": "node scripts/check-orphan-imports.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs",
     "check:no-sim": "node scripts/check-no-simulation.mjs",
     "check:no-sim:dist": "node scripts/check-no-simulation-dist.mjs",
-    "check:all": "npm run lint && npm run typecheck && npm run check:orphans && npm run check:no-sim && npm run test && npm run build && npm run check:no-sim:dist",
+    "check:all": "npm run lint && npm run typecheck && npm run check:orphans && npm run check:architecture && npm run check:no-sim && npm run test && npm run build && npm run check:no-sim:dist",
     "preview": "vite preview"
   },
   "dependencies": {

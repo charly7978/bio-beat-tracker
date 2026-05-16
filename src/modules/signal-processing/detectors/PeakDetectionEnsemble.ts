@@ -153,6 +153,10 @@ export class PeakDetectionEnsemble {
         elgendiReason: el.reason,
         spectralBpm: specBpm,
         fusedCount: fusedIdx.length,
+        /** Tiempos (performance.now) para overlay en PPGSignalMeter */
+        fusedPeakTimes: fusedTimes,
+        elgendiPeakTimes: el.peakTimes,
+        panTompkinsPeakTimes: pt.peakTimes,
       },
     };
   }

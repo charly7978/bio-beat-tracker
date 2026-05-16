@@ -58,7 +58,14 @@ export const DebugTelemetryPanel: React.FC<DebugTelemetryPanelProps> = ({
         <Row k="agree" v={fmtPct(sqm?.detectorAgreement)} />
         <Row k="Elgendi" v={fmtPct(sqm?.elgendiConfidence)} />
         <Row k="PanTomp" v={fmtPct(sqm?.panTompkinsConfidence)} />
-        <Row k="fused" v={String(pd.fusedPeakCount ?? '—')} />
+        <Row
+          k="picos"
+          v={
+            pd.fusedPeakCount != null
+              ? `F${pd.fusedPeakCount} E${arrLen(pd.elgendiPeakTimes)} PT${arrLen(pd.panTompkinsPeakTimes)}`
+              : '—'
+          }
+        />
         <Row
           k="torch"
           v={
@@ -74,6 +81,10 @@ export const DebugTelemetryPanel: React.FC<DebugTelemetryPanelProps> = ({
     </div>
   );
 };
+
+function arrLen(v: unknown): number {
+  return Array.isArray(v) ? v.length : 0;
+}
 
 function fmtPct(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return '—';
