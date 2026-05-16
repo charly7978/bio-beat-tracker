@@ -48,20 +48,44 @@ export class PeakDetectionEnsemble {
       };
     }
 
+    // Adaptación automática de fs: estima la cadencia real desde la mediana de Δt.
+    // Si difiere >10% del fs declarado (drift de cámara / cambios de stride / backpressure),
+    // recalcula y propaga el fs efectivo. Detectores y resampler reconstruyen ventanas a partir
+    // de este fs, manteniendo la detección consistente sin reset.
+    const gaps: number[] = [];
+    for (let i = 1; i < timestampsMs.length; i++) {
+      const d = timestampsMs[i] - timestampsMs[i - 1];
+      if (d > 0 && d < 500) gaps.push(d);
+    }
+    let fsEffective = samplingRateHz;
+    let fsAdapted = false;
+    if (gaps.length >= 8) {
+      const sorted = [...gaps].sort((a, b) => a - b);
+      const medDt = sorted[Math.floor(sorted.length / 2)] ?? 1000 / samplingRateHz;
+      const fsFromTs = 1000 / medDt;
+      if (
+        fsFromTs >= 5 && fsFromTs <= 240 &&
+        Math.abs(fsFromTs - samplingRateHz) / samplingRateHz > 0.1
+      ) {
+        fsEffective = fsFromTs;
+        fsAdapted = true;
+      }
+    }
+
     const el = ElgendiPeakDetector.detect({
       signal,
       timestampsMs,
-      samplingRateHz,
+      samplingRateHz: fsEffective,
       sqi,
     });
     const pt = PanTompkinsPPGDetector.detect({
       signal,
       timestampsMs,
-      samplingRateHz,
+      samplingRateHz: fsEffective,
       sqi,
     });
 
-    const spec = bpmFromAutocorr(signal, samplingRateHz);
+    const spec = bpmFromAutocorr(signal, fsEffective);
     const tolMs = PEAK_DETECTION_DEFAULTS.fusionToleranceMs;
     const allowSolo = allowSoloElgendiFusion !== false;
 
@@ -265,6 +289,9 @@ export class PeakDetectionEnsemble {
         fusedPeakTimes: sortedTimes,
         elgendiPeakTimes: el.peakTimes,
         panTompkinsPeakTimes: pt.peakTimes,
+        fsDeclared: samplingRateHz,
+        fsEffective,
+        fsAdapted,
       },
     };
   }
