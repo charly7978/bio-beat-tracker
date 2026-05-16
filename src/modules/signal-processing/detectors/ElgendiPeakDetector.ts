@@ -8,6 +8,7 @@ import { clamp } from '../../../utils/math';
 import {
   bandpassOffline,
   detrendLinear,
+  hampel1D,
   movingAverage,
   resampleToUniformTimeline,
   robustNormalizeZeroCenter,
