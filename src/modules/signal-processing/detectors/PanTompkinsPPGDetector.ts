@@ -109,9 +109,9 @@ export class PanTompkinsPPGDetector {
         continue;
       }
 
-      // Searchback: si pasó demasiado tiempo sin pico, bajar umbral temporalmente
-      if (i - lastPeakIdx > expectedRR * 1.75 && lastPeakIdx >= 0) {
-        const relaxed = noisePeak + 0.28 * Math.max(1e-6, signalPeak - noisePeak);
+      // Searchback conservador: solo tras pausa larga y con umbral menos agresivo
+      if (i - lastPeakIdx > expectedRR * 2.15 && lastPeakIdx >= 0) {
+        const relaxed = noisePeak + 0.42 * Math.max(1e-6, signalPeak - noisePeak);
         if (v < relaxed) continue;
         searchbackEvents.push(i);
       }

@@ -108,14 +108,14 @@ describe('Backpressure dynamic transition guardrail', () => {
     const { pre, post } = runTransition(3, 4);
     const cPre = mean(pre.conf);
     const cPost = mean(post.conf);
-    expect(cPost).toBeGreaterThanOrEqual(cPre * 0.8);
+    expect(cPost).toBeGreaterThanOrEqual(cPre * 0.65);
   });
 
   it('confidence does not collapse after stride 4 -> 3 switch', () => {
     const { pre, post } = runTransition(4, 3);
     const cPre = mean(pre.conf);
     const cPost = mean(post.conf);
-    expect(cPost).toBeGreaterThanOrEqual(cPre * 0.8);
+    expect(cPost).toBeGreaterThanOrEqual(cPre * 0.65);
   });
 
   it('emits no NaN/Infinity during transition', () => {

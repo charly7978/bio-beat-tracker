@@ -23,14 +23,22 @@ export const VITAL_THRESHOLDS = {
     R_VALUE_MAX: 2.5,
   },
   
-  // BLOOD PRESSURE (mmHg)
+  // BLOOD PRESSURE (mmHg + pipeline morfológico)
   BP: {
     SYSTOLIC_MIN: 75,
     SYSTOLIC_MAX: 250,
     DIASTOLIC_MIN: 35,
     DIASTOLIC_MAX: 150,
-    MIN_PP: 18, // Pulse Pressure mínima
-    MAX_PP: 110, // Pulse Pressure máxima
+    MIN_PP: 18,
+    MAX_PP: 110,
+    MIN_CYCLES: 3,
+    MIN_CYCLE_QUALITY: 0.28,
+    MIN_BUFFER_SAMPLES: 120,
+    STABILITY_FRAMES_HIGH: 45,
+    STABILITY_FRAMES_MEDIUM: 28,
+    FEATURE_QUALITY_HIGH: 72,
+    FEATURE_QUALITY_MEDIUM: 48,
+    MIN_RR_CONFIDENCE: 0.08,
   },
   
   // SIGNAL QUALITY (SQI)
@@ -40,6 +48,10 @@ export const VITAL_THRESHOLDS = {
     /** Confianza mínima del ensemble para mostrar BPM en contacto inestable */
     MIN_ENSEMBLE_CONF_UNSTABLE: 0.08,
     MIN_ENSEMBLE_CONF_STABLE: 0.06,
+    /** Confianza mínima del ensemble para emitir pico audible/visual */
+    MIN_ENSEMBLE_CONF_FOR_PEAK: 0.22,
+    /** Acuerdo Elgendi+Pan mínimo para alimentar arritmias */
+    MIN_DETECTOR_AGREEMENT_ARRHYTHMIA: 0.42,
     MIN_FOR_CLINICAL: 55,
     /** PI (AC/DC) mínimo para marcar contacto STABLE — cámara suele dar 0.001–0.008 al inicio */
     MIN_PI: 0.0009,
@@ -58,7 +70,23 @@ export const VITAL_THRESHOLDS = {
     DIAG_LOW_FRAMES_REQ: 10,
     DIAG_VALID_FRAMES_REQ: 4,
   },
-  
+
+  /** Detección de irregularidad del ritmo (conservador — menos falsos positivos) */
+  ARRHYTHMIA: {
+    RR_WINDOW_SIZE: 10,
+    RMSSD_THRESHOLD_MS: 58,
+    MIN_INTERVALS: 8,
+    MIN_SQI: 32,
+    LEARNING_PERIOD_MS: 10_000,
+    MIN_EVENT_INTERVAL_MS: 4500,
+    PNNX_THRESHOLD: 0.38,
+    SHANNON_ENTROPY_THRESHOLD: 2.05,
+    SAMPLE_ENTROPY_THRESHOLD: 1.55,
+    OUTLIER_RATIO: 0.18,
+    ABRUPT_RR_FRAC: 0.14,
+    IRREGULAR_DIFF_MS: 150,
+  },
+
   // FINGER + ROI (cámara trasera + dedo; hemoglobina + pulsación temporal)
   FINGER: {
     /** Fracción del lado corto del frame usada como ROI cuadrado central (más = más dedo visible) */

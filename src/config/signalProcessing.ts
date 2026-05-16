@@ -16,7 +16,9 @@ export const PEAK_DETECTION_DEFAULTS = {
   /** Peso del offset adaptativo sobre la energía de MA_peak */
   offsetWeight: 0.35,
   /** Picos débiles en cámara móvil: prominencia mínima algo más baja (literatura Elgendi usa umbral adaptativo vía MA) */
-  minProminence: 0.048,
+  minProminence: 0.056,
+  /** Factor mínimo del RR fisiológico entre emisiones de pico (anti-doble latido) */
+  peakEmitRefractoryFactor: 0.82,
   minSQI: 10,
   /** Ventana para emitir pico respecto al frame actual (ms) */
   peakEmitWindowMs: 380,

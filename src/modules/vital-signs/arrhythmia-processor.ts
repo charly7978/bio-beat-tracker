@@ -16,19 +16,14 @@ interface RRData {
  * Advanced Arrhythmia Processor based on peer-reviewed cardiac research
  */
 export class ArrhythmiaProcessor {
-  // Configuration based on Harvard Medical School research on HRV - AJUSTADA PARA MAYOR ESPECIFICIDAD
-  private readonly RR_WINDOW_SIZE = 8; // Bajado de 10 para mayor reactividad
-  private readonly RMSSD_THRESHOLD = 48; // Bajado de 55 para captar arritmias más leves
-  private readonly ARRHYTHMIA_LEARNING_PERIOD = 8000;
-
-
-  // Advanced detection parameters - AJUSTADOS PARA MENOS FALSOS POSITIVOS
-  private readonly PNNX_THRESHOLD = 0.30;
-  private readonly SHANNON_ENTROPY_THRESHOLD = 1.85;
-  private readonly SAMPLE_ENTROPY_THRESHOLD = 1.35;
-  
-  // Minimum time between arrhythmias to reduce false positives
-  private readonly MIN_ARRHYTHMIA_INTERVAL = 3500;
+  private readonly A = VITAL_THRESHOLDS.ARRHYTHMIA;
+  private readonly RR_WINDOW_SIZE = this.A.RR_WINDOW_SIZE;
+  private readonly RMSSD_THRESHOLD = this.A.RMSSD_THRESHOLD_MS;
+  private readonly ARRHYTHMIA_LEARNING_PERIOD = this.A.LEARNING_PERIOD_MS;
+  private readonly PNNX_THRESHOLD = this.A.PNNX_THRESHOLD;
+  private readonly SHANNON_ENTROPY_THRESHOLD = this.A.SHANNON_ENTROPY_THRESHOLD;
+  private readonly SAMPLE_ENTROPY_THRESHOLD = this.A.SAMPLE_ENTROPY_THRESHOLD;
+  private readonly MIN_ARRHYTHMIA_INTERVAL = this.A.MIN_EVENT_INTERVAL_MS;
   private readonly MIN_VALID_RR_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS;
   private readonly MAX_VALID_RR_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS;
 
@@ -154,7 +149,7 @@ export class ArrhythmiaProcessor {
     for (let i = 1; i < validRRs.length; i++) {
       const diff = validRRs[i] - validRRs[i - 1];
       sumSquaredDiff += diff * diff;
-      if (Math.abs(diff) > Math.max(100, medianRR * 0.12)) {
+      if (Math.abs(diff) > Math.max(100, medianRR * this.A.ABRUPT_RR_FRAC)) {
         abruptDiffCount++;
       }
     }
@@ -173,7 +168,7 @@ export class ArrhythmiaProcessor {
     const coefficientOfVariation = hrv.cv;
     const rrVariation = Math.abs(lastRR - medianRR) / Math.max(1, medianRR);
     const outlierCount = validRRs.filter(
-      (rr) => Math.abs(rr - medianRR) / Math.max(1, medianRR) > 0.16
+      (rr) => Math.abs(rr - medianRR) / Math.max(1, medianRR) > this.A.OUTLIER_RATIO,
     ).length;
 
     this.calculateNonLinearMetrics(validRRs);
@@ -181,16 +176,25 @@ export class ArrhythmiaProcessor {
     this.lastRMSSD = rmssd;
     this.lastRRVariation = rrVariation;
 
-    // Evidence-based decision: require strong variability + sustained irregularity + secondary confirmation
-    const strongVariability = rmssd > this.RMSSD_THRESHOLD && coefficientOfVariation > 0.10 && rrVariation > 0.10;
-    const nonlinearSupport = this.shannonEntropy > this.SHANNON_ENTROPY_THRESHOLD || this.pnnX > this.PNNX_THRESHOLD;
-    const entropySupport = this.sampleEntropy > this.SAMPLE_ENTROPY_THRESHOLD && outlierCount >= 2;
-    const sustainedIrregularity = abruptDiffCount >= 2 || outlierCount >= 2 || this.detectIrregularSequence(validRRs.slice(-5));
-    const isolatedOutlierPattern = rrVariation > 0.20 && outlierCount >= 2;
+    const strongVariability =
+      rmssd > this.RMSSD_THRESHOLD &&
+      coefficientOfVariation > 0.12 &&
+      rrVariation > 0.12;
+    const nonlinearSupport =
+      this.shannonEntropy > this.SHANNON_ENTROPY_THRESHOLD &&
+      this.pnnX > this.PNNX_THRESHOLD;
+    const entropySupport =
+      this.sampleEntropy > this.SAMPLE_ENTROPY_THRESHOLD && outlierCount >= 3;
+    const sustainedIrregularity =
+      abruptDiffCount >= 3 ||
+      outlierCount >= 3 ||
+      this.detectIrregularSequence(validRRs.slice(-6));
+    const isolatedOutlierPattern = rrVariation > 0.22 && outlierCount >= 3;
 
-    const newArrhythmiaState = (strongVariability || nonlinearSupport) && (
-      sustainedIrregularity || entropySupport || isolatedOutlierPattern
-    );
+    const newArrhythmiaState =
+      strongVariability &&
+      sustainedIrregularity &&
+      (nonlinearSupport || entropySupport || isolatedOutlierPattern);
 
 
     // Notificar cambios en el estado de arritmia
@@ -301,7 +305,7 @@ export class ArrhythmiaProcessor {
     
     let consecutiveLargeDiffs = 0;
     for (const diff of diffs) {
-      if (diff > 130) {
+      if (diff > this.A.IRREGULAR_DIFF_MS) {
         consecutiveLargeDiffs++;
       } else {
         consecutiveLargeDiffs = 0;

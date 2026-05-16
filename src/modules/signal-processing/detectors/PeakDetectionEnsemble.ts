@@ -58,7 +58,7 @@ export class PeakDetectionEnsemble {
 
     const spec = bpmFromAutocorr(signal, samplingRateHz);
 
-    const tolMs = 110;
+    const tolMs = 135;
     const fusedIdx: number[] = [];
     const fusedTimes: number[] = [];
 
@@ -84,8 +84,6 @@ export class PeakDetectionEnsemble {
         fusedIdx.push(clamp(mid, 0, signal.length - 1));
         fusedTimes.push((timestampsMs[ie]! + timestampsMs[ip]!) / 2);
       } else {
-        fusedIdx.push(ie);
-        fusedTimes.push(te);
         rejected.push({ index: ie, reason: 'NO_PAN_MATCH', detector: 'Elgendi' });
       }
     }
@@ -104,6 +102,20 @@ export class PeakDetectionEnsemble {
 
     let bpmInstant: number | null = rr.length ? 60000 / median(rr.slice(-4)) : null;
     const specBpm = spec.bpm > 0 ? spec.bpm : null;
+
+    // Guarda anti-alias (½× o 2×) cuando la fusión estricta pierde latidos alternos
+    if (bpmInstant && specBpm) {
+      const half = bpmInstant * 2;
+      const dbl = bpmInstant / 2;
+      if (Math.abs(half - specBpm) < Math.abs(bpmInstant - specBpm) - 8) {
+        bpmInstant = half;
+      } else if (Math.abs(dbl - specBpm) < Math.abs(bpmInstant - specBpm) - 8) {
+        bpmInstant = dbl;
+      }
+    } else if (!bpmInstant && specBpm) {
+      bpmInstant = specBpm;
+    }
+
     let spectralAgreement = 0;
     if (bpmInstant && specBpm) {
       spectralAgreement = clamp(1 - Math.abs(bpmInstant - specBpm) / Math.max(bpmInstant, specBpm), 0, 1);

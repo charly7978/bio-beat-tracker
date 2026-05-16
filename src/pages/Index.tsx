@@ -815,7 +815,9 @@ const Index = () => {
         lastSignal.filteredValue,
         lastSignal.quality || 0,
         heartBeatResult.bpm,
-        heartBeatResult.rrData && heartBeatResult.rrData.intervals.length >= 2 && heartBeatResult.confidence > 0.12
+        heartBeatResult.rrData &&
+          heartBeatResult.rrData.intervals.length >= 2 &&
+          heartBeatResult.confidence > VITAL_THRESHOLDS.BP.MIN_RR_CONFIDENCE
           ? heartBeatResult.rrData
           : undefined,
         lastSignal.perfusionIndex,
@@ -1036,6 +1038,7 @@ const Index = () => {
               elapsedTime={elapsedTime}
               perfusionIndex={lastSignal?.perfusionIndex || 0}
               pressure={vitalSigns.bloodPressure.value ?? { systolic: 0, diastolic: 0 }}
+              bpStatus={vitalSigns.bloodPressure.status}
               diagnostics={currentDiagnostics}
             />
           </div>

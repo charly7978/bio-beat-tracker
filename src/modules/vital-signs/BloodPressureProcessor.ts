@@ -83,7 +83,8 @@ const DBP_COEFF = {
 };
 
 export class BloodPressureProcessor {
-  private readonly MIN_CYCLES = 5; // Requerido para promediado avanzado
+  private readonly MIN_CYCLES = VITAL_THRESHOLDS.BP.MIN_CYCLES;
+  private readonly MIN_CYCLE_QUALITY = VITAL_THRESHOLDS.BP.MIN_CYCLE_QUALITY;
   private readonly MAX_CYCLES = 25;
   
   // EMA smoothing (más conservador para evitar saltos bruscos)
@@ -104,7 +105,10 @@ export class BloodPressureProcessor {
       confidence: 'INSUFFICIENT', cyclesUsed: 0, featureQuality: 0
     };
 
-    if (signalBuffer.length < 50 || rrIntervals.length < 3) {
+    if (
+      signalBuffer.length < VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES ||
+      rrIntervals.length < 2
+    ) {
       return insufficient;
     }
 
@@ -116,7 +120,7 @@ export class BloodPressureProcessor {
     const validCycles: CycleFeatures[] = [];
     for (const cycle of cycles) {
       const features = PPGFeatureExtractor.extractCycleFeatures(signalBuffer, cycle, sampleRate);
-      if (features && features.quality > 0.35) { // Umbral de calidad superior
+      if (features && features.quality > this.MIN_CYCLE_QUALITY) {
         validCycles.push(features);
       }
     }
@@ -159,10 +163,16 @@ export class BloodPressureProcessor {
     // 8. Validación de Calidad Final
     let confidence: BPEstimate['confidence'] = 'LOW';
     const fq = this.assessFeatureQuality(mf, useCycles.length);
-    if (fq >= 80) confidence = 'HIGH';
-    else if (fq >= 55) confidence = 'MEDIUM';
-    
-    if (dbp >= sbp || (sbp - dbp) < VITAL_THRESHOLDS.BP.MIN_PP) {
+    if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_HIGH) confidence = 'HIGH';
+    else if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_MEDIUM) confidence = 'MEDIUM';
+
+    if (dbp >= sbp) {
+      dbp = Math.min(sbp - VITAL_THRESHOLDS.BP.MIN_PP, dbp);
+    }
+    if (sbp - dbp < VITAL_THRESHOLDS.BP.MIN_PP) {
+      dbp = sbp - VITAL_THRESHOLDS.BP.MIN_PP;
+    }
+    if (dbp >= sbp || dbp < VITAL_THRESHOLDS.BP.DIASTOLIC_MIN) {
       confidence = 'INSUFFICIENT';
     }
 

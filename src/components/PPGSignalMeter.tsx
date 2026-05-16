@@ -24,6 +24,7 @@ interface PPGSignalMeterProps {
   elapsedTime?: number;
   perfusionIndex?: number;
   pressure?: { systolic: number; diastolic: number; confidence?: string; featureQuality?: number };
+  bpStatus?: string | undefined;
   arrhythmiaCount?: number;
   diagnostics?: {
     status?: string;
@@ -104,6 +105,7 @@ const PPGSignalMeter = ({
   elapsedTime = 0,
   perfusionIndex = 0,
   pressure,
+  bpStatus,
   arrhythmiaCount = 0,
   diagnostics
 }: PPGSignalMeterProps) => {
@@ -117,7 +119,7 @@ const PPGSignalMeter = ({
   const propsRef = useRef({ 
     value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus, 
     arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals, 
-    rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, diagnostics 
+    rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus, diagnostics 
   });
   const lastPeakTimeRef = useRef(0);
   const [showPulse, setShowPulse] = useState(false);
@@ -157,7 +159,7 @@ const PPGSignalMeter = ({
     propsRef.current = { 
       value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus, 
       arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals, 
-      rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, diagnostics 
+      rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus, diagnostics 
     };
 
     if (rrIntervals && rrIntervals.length >= 2) {
@@ -216,7 +218,7 @@ const PPGSignalMeter = ({
       pendingTrendArrRef.current = false;
       smoothedBpmRef.current = 0;
     }
-  }, [value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, arrhythmiaCount, isMonitoring, diagnostics]);
+  }, [value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus, arrhythmiaCount, isMonitoring, diagnostics]);
 
   // Pulse animation on peak (UI overlay only)
   useEffect(() => {
@@ -537,7 +539,17 @@ const PPGSignalMeter = ({
 
     ctx.font = `bold 28px ${FONT_MONO}`; // Reduced to fit safely
     ctx.fillStyle = bpColor;
-    ctx.fillText(sys > 0 ? `${sys}/${dia}` : '--/--', bpX, metrics.y + 68);
+    const bpPending =
+      propsRef.current.isMonitoring &&
+      sys <= 0 &&
+      (propsRef.current.bpStatus === 'INSUFFICIENT_WINDOW' ||
+        propsRef.current.bpStatus === 'NO_VALID_SIGNAL' ||
+        propsRef.current.bpStatus === 'WARMUP');
+    ctx.fillText(
+      sys > 0 ? `${sys}/${dia}` : bpPending ? '···' : '--/--',
+      bpX,
+      metrics.y + 68,
+    );
 
     ctx.font = `12px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_SECONDARY;
@@ -560,7 +572,7 @@ const PPGSignalMeter = ({
     }
 
     // Arrhythmia banner (overlay top-right of metrics)
-    if (arr?.includes('ARRITMIA')) {
+    if (arr?.includes('ARRITMIA') && !arr?.includes('CALIBRANDO')) {
       const count = arrCnt || 0;
       const flash = (Math.sin(now / 120) + 1) / 2;
       ctx.fillStyle = `rgba(239, 68, 68, ${0.18 + flash * 0.22})`;

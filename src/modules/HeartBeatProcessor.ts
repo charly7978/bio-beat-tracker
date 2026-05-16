@@ -185,17 +185,22 @@ export class HeartBeatProcessor {
       }
 
       const lastT = ens.peakTimes.length ? ens.peakTimes[ens.peakTimes.length - 1] : 0;
-      const lastIdx = ens.peaks.length ? ens.peaks[ens.peaks.length - 1] : -1;
       const bufferNow = this.timestampBuffer[this.timestampBuffer.length - 1] ?? now;
-      const peakNearEnd = lastIdx >= 0 && lastIdx >= sig.length - 10;
       const peakDelta = lastT > 0
         ? Math.min(Math.abs(lastT - now), Math.abs(lastT - bufferNow))
         : Number.POSITIVE_INFINITY;
       const peakFresh = peakDelta < PEAK_DETECTION_DEFAULTS.peakEmitWindowMs;
+      const minEmitGap =
+        this.MIN_PEAK_INTERVAL_MS * PEAK_DETECTION_DEFAULTS.peakEmitRefractoryFactor;
+      const agreement = ens.agreement;
+      const detectorConsensus =
+        (agreement.elgendi + agreement.panTompkins) / 2;
       if (
         lastT > 0 &&
-        (peakFresh || peakNearEnd) &&
-        Math.abs(lastT - this.lastEmittedPeakTime) > this.MIN_PEAK_INTERVAL_MS * 0.35
+        peakFresh &&
+        ensembleConf >= VITAL_THRESHOLDS.QUALITY.MIN_ENSEMBLE_CONF_FOR_PEAK &&
+        detectorConsensus >= 0.35 &&
+        Math.abs(lastT - this.lastEmittedPeakTime) > minEmitGap
       ) {
         isPeak = true;
         this.lastEmittedPeakTime = lastT;
@@ -226,7 +231,8 @@ export class HeartBeatProcessor {
         ensembleBpm != null &&
         ensembleBpm >= PEAK_DETECTION_DEFAULTS.minBpm &&
         ensembleBpm <= PEAK_DETECTION_DEFAULTS.maxBpm &&
-        ensembleConf >= 0.18 &&
+        ensembleConf >= 0.24 &&
+        detectorConsensus >= 0.32 &&
         ens.rrIntervalsMs.length >= 2
       ) {
         const tail = ens.rrIntervalsMs.slice(-4);

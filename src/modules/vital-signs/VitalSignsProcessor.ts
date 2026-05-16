@@ -80,7 +80,7 @@ export class VitalSignsProcessor {
   };
   
   // Historial de señal
-  private readonly HISTORY_SIZE = 90;
+  private readonly HISTORY_SIZE = VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES;
   private signalHistory: RingF32 = new RingF32(this.HISTORY_SIZE);
   /** Buffer más largo para modulación respiratoria (~10 Hz efectivos desde Index). */
   private readonly RESPIRATION_BUFFER = 320;
@@ -94,7 +94,7 @@ export class VitalSignsProcessor {
   // Gating de estabilidad (Consistencia)
   private stableFramesCount: number = 0;
   private readonly STABILITY_SPO2_FRAMES = 45;  // ~1.5s para SpO2 (actualización rápida)
-  private readonly STABILITY_BP_FRAMES = 60;    // ~2s para BP (necesita más ciclos)
+  private readonly STABILITY_BP_FRAMES = VITAL_THRESHOLDS.BP.STABILITY_FRAMES_HIGH;
   private lastCoherentSpO2: number = 0;
   
   // Suavizado adaptativo para estabilidad SIN perder respuesta
@@ -479,8 +479,13 @@ export class VitalSignsProcessor {
           bpEstimate.systolic,
           bpEstimate.diastolic,
         );
-        const bpReady = bpEstimate.confidence === 'HIGH' ||
-          (this.stableFramesCount >= this.STABILITY_BP_FRAMES && confidence !== 'INVALID');
+        const bpCfg = VITAL_THRESHOLDS.BP;
+        const bpReady =
+          bpEstimate.confidence === 'HIGH' ||
+          (bpEstimate.confidence === 'MEDIUM' &&
+            this.stableFramesCount >= bpCfg.STABILITY_FRAMES_MEDIUM) ||
+          (bpEstimate.confidence === 'LOW' &&
+            this.stableFramesCount >= bpCfg.STABILITY_FRAMES_HIGH);
         if (bpReady) {
           this.measurements.systolicPressure = this.smoothValue(
             this.measurements.systolicPressure,
@@ -497,12 +502,15 @@ export class VitalSignsProcessor {
     }
 
     // Arrhythmia — solo con RR robustos y SQI suficiente
-    const arrhythmiaRR = validRR.slice(-10);
+    const arrCfg = VITAL_THRESHOLDS.ARRHYTHMIA;
+    const arrhythmiaRR = validRR.slice(-arrCfg.RR_WINDOW_SIZE);
+    const detectorAgree = this.lastSqmBundle?.detectorAgreement ?? 0;
     const arrhythmiaInput = (
-      arrhythmiaRR.length >= 5 &&
-      this.measurements.signalQuality >= 20 && // Bajado de 25
-      hr >= 30 &&
-      hr <= 220
+      arrhythmiaRR.length >= arrCfg.MIN_INTERVALS &&
+      this.measurements.signalQuality >= arrCfg.MIN_SQI &&
+      detectorAgree >= VITAL_THRESHOLDS.QUALITY.MIN_DETECTOR_AGREEMENT_ARRHYTHMIA &&
+      hr >= VITAL_THRESHOLDS.HR.MIN &&
+      hr <= VITAL_THRESHOLDS.HR.MAX
     ) ? { ...rrData!, intervals: arrhythmiaRR } : undefined;
 
     const arrhythmiaResult = this.arrhythmiaProcessor.processRRData(arrhythmiaInput);
