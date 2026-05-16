@@ -165,8 +165,8 @@ export class BloodPressureProcessor {
       const excess = pp - 110;
       rawSBP -= excess * 0.5;
       rawDBP += excess * 0.3;
-    } else if (pp < 22) {
-      rawDBP = rawSBP - 22;
+    } else if (pp < VITAL_THRESHOLDS.BP.MIN_PP + 2) {
+      rawDBP = rawSBP - (VITAL_THRESHOLDS.BP.MIN_PP + 2);
     }
 
     // 7. Límites Clínicos y Coherencia (Fidelity Guard)

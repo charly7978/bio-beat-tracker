@@ -184,11 +184,9 @@ const PPGSignalMeter = ({
 
     const nowMs = Date.now();
 
-    if (bpm > 0) {
-      const prev = smoothedBpmRef.current;
-      const jump = prev > 0 ? Math.abs(bpm - prev) / prev : 1;
-      const a = jump > 0.1 ? 0.42 : jump > 0.04 ? 0.3 : 0.22;
-      smoothedBpmRef.current = prev <= 0 ? bpm : prev + (bpm - prev) * a;
+    if (bpm != null && bpm > 0) {
+      displayBpmRef.current = bpm;
+      smoothedBpmRef.current = bpm;
     }
 
     const pi = perfusionIndex ?? 0;
@@ -1438,8 +1436,7 @@ const PPGSignalMeter = ({
       const p = propsRef.current;
       const fingerOn = p.isFingerDetected;
       const preserve = p.preserveResults;
-      const targetBpm =
-        !fingerOn && !preserve ? 0 : p.bpm ?? smoothedBpmRef.current ?? 0;
+      const targetBpm = !fingerOn && !preserve ? 0 : Math.max(0, p.bpm ?? 0);
       const targetSpo2 = fingerOn || preserve ? p.spo2 ?? 0 : 0;
       const targetSys = fingerOn || preserve ? p.pressure?.systolic ?? 0 : 0;
       const targetDia = fingerOn || preserve ? p.pressure?.diastolic ?? 0 : 0;
@@ -1452,7 +1449,7 @@ const PPGSignalMeter = ({
         const out = cur + (tgt - cur) * a;
         return Math.abs(tgt - out) < 0.6 ? tgt : out;
       };
-      displayBpmRef.current = lerpAdaptive(displayBpmRef.current, targetBpm, 0.26);
+      displayBpmRef.current = targetBpm;
       displaySpo2Ref.current = lerpAdaptive(displaySpo2Ref.current, targetSpo2, 0.22);
       displaySysRef.current = lerpAdaptive(displaySysRef.current, targetSys, 0.2);
       displayDiaRef.current = lerpAdaptive(displayDiaRef.current, targetDia, 0.2);
