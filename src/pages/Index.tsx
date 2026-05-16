@@ -22,7 +22,6 @@ import {
   smoothDisplayPair,
   smoothDisplayValue,
 } from "@/lib/measurement/displaySmoothing";
-import { bpmFromEmittedRr } from "@/lib/measurement/peakEmitPolicy";
 import { createDefaultVitalSignsResult } from "@/lib/vitals/defaultVitalSignsResult";
 import { VitalSignsResult } from "@/modules/vital-signs/VitalSignsProcessor";
 import type { ProcessedSignal, ContactState } from "@/types/signal";
@@ -631,7 +630,7 @@ const Index = () => {
   const prevHasUsableContactRef = useRef(false);
   const noContactSessionFramesRef = useRef(0);
   const lastHbInputRef = useRef(0);
-  const lastDisplayBpmRef = useRef(0);
+  const BPM_DISPLAY_HOLD_MS = 2800;
   const displaySpo2Ref = useRef(0);
   const displayBpRef = useRef({ systolic: 0, diastolic: 0 });
 
@@ -674,7 +673,7 @@ const Index = () => {
   const lastSignalPushRef = useRef(0);
   const lastRrPushRef = useRef(0);
   const beatMarkerTimerRef = useRef<number | null>(null);
-  const HR_PUSH_THROTTLE_MS = 50;
+  const HR_PUSH_THROTTLE_MS = 80;
   // El DSP de vitales (SpO2/BP/arritmia) corre cada N frames para alimentar sus
   // ventanas internas; sólo el setState a React se throttlea para no saturar el
   // árbol. NUNCA bajar la tasa de procesamiento por debajo de ~10 Hz: SpO2 y BP
@@ -732,7 +731,6 @@ const Index = () => {
     displaySpo2Ref.current = 0;
     displayBpRef.current = { systolic: 0, diastolic: 0 };
     lastHbInputRef.current = 0;
-    lastDisplayBpmRef.current = 0;
   }, [resetHeartBeat]);
 
   const handleSignalRealtime = useCallback((lastSignal: ProcessedSignal) => {
@@ -840,19 +838,11 @@ const Index = () => {
       latchPeakMs > 0 &&
       nowT - latchPeakMs < SESSION_LATCH.MAX_PEAK_GAP_MS;
 
-    const rrIntervals = heartBeatResult.rrData?.intervals ?? [];
-    const bpmFromRr =
-      rrIntervals.length >= 1 ? Math.round(bpmFromEmittedRr(rrIntervals)) : 0;
-    const bpmProcessor =
+    const bpmLive =
+      fingerConfirmed &&
       heartBeatResult.bpm >= VITAL_THRESHOLDS.HR.MIN &&
       heartBeatResult.bpm <= VITAL_THRESHOLDS.HR.MAX
         ? heartBeatResult.bpm
-        : 0;
-    const bpmLive =
-      fingerConfirmed && (bpmProcessor > 0 || bpmFromRr > 0)
-        ? bpmProcessor > 0
-          ? bpmProcessor
-          : bpmFromRr
         : 0;
 
     if (bpmLive > 0) {
@@ -860,7 +850,15 @@ const Index = () => {
       lastBpmSeenAtRef.current = nowT;
     }
 
-    const bpmOut = !hasUsableContact || !fingerConfirmed ? 0 : bpmLive;
+    const bpmOut = !hasUsableContact
+      ? 0
+      : bpmLive > 0
+        ? bpmLive
+        : peakRecent &&
+            lastGoodBpmRef.current > 0 &&
+            nowT - lastBpmSeenAtRef.current < BPM_DISPLAY_HOLD_MS
+          ? lastGoodBpmRef.current
+          : 0;
 
     const piMin = Q.MIN_PI * Math.max(0.04, hints.minPiScale * 0.18);
     const readiness = evaluateMeasurementReadiness({
@@ -898,26 +896,14 @@ const Index = () => {
           : bpmOut > 0
             ? 'WARMUP'
             : 'NO_VALID_SIGNAL';
-      const bpmDisplay =
-        bpmOut > 0
-          ? bpmOut
-          : lastDisplayBpmRef.current > 0 && peakRecent
-            ? lastDisplayBpmRef.current
-            : 0;
-      if (bpmDisplay > 0) lastDisplayBpmRef.current = bpmDisplay;
-
       setVitalSigns(prev => {
         const next = {
           ...prev,
-          heartRate: { ...prev.heartRate, value: bpmDisplay, status: hrStatus },
+          heartRate: { ...prev.heartRate, value: bpmOut, status: hrStatus },
           signalQuality: sqRounded,
         };
-        vitalSignsRef.current = {
-          ...vitalSignsRef.current,
-          heartRate: next.heartRate,
-          signalQuality: sqRounded,
-        };
-        return bpmDisplay > 0 ? applyLiveDisplaySmooth(next) : next;
+        vitalSignsRef.current = next;
+        return bpmOut > 0 ? applyLiveDisplaySmooth(next) : next;
       });
     }
 

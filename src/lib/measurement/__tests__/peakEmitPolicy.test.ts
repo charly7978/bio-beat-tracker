@@ -81,8 +81,8 @@ describe('peakEmitPolicy', () => {
     expect(d.emit).toBe(true);
   });
 
-  it('no emite solo_elgendi como primer latido sin dual', () => {
-    const ens = mockEns([5000], ['solo_elgendi'], [0.58]);
+  it('permite solo_elgendi como primer latido con score suficiente', () => {
+    const ens = mockEns([5000], ['solo_elgendi'], [0.52]);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,
@@ -97,11 +97,12 @@ describe('peakEmitPolicy', () => {
       sqi: 50,
       perfusionIndex: 0.005,
     });
-    expect(d.emit).toBe(false);
+    expect(d.emit).toBe(true);
+    expect(d.reason).toContain('SOLO_ELGENDI');
   });
 
-  it('modo reacquire permite dual tras stall', () => {
-    const ens = mockEns([5000], ['dual'], [0.55]);
+  it('modo reacquire permite solo_elgendi tras stall sin dual', () => {
+    const ens = mockEns([5000], ['solo_elgendi'], [0.64]);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 2000,
@@ -119,7 +120,7 @@ describe('peakEmitPolicy', () => {
       perfusionIndex: 0.005,
     });
     expect(d.emit).toBe(true);
-    expect(d.reason).toBe('DUAL_FUSED');
+    expect(d.reason).toBe('SOLO_ELGENDI');
   });
 
   it('prefiere el pico más reciente en la ventana viva', () => {

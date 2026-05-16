@@ -18,13 +18,13 @@ export const PEAK_DETECTION_DEFAULTS = {
   /** Peso del offset adaptativo MA_beat (menor = bloques de interés más sensibles) */
   offsetWeight: 0.24,
   /** Factor mínimo del RR fisiológico entre emisiones de pico (anti-doble latido) */
-  peakEmitRefractoryFactor: 0.78,
+  peakEmitRefractoryFactor: 0.75,
   /** Ventana de coincidencia Elgendi ↔ Pan–Tompkins (ms) */
   fusionToleranceMs: 280,
   minSQI: 10,
   /** Ventana para emitir pico respecto al frame actual (ms) */
   /** Debe cubrir ~½ RR a 45 BPM; 380 ms perdía latidos entre frames */
-  peakEmitWindowMs: 520,
+  peakEmitWindowMs: 680,
   /** Acuerdo espectral mínimo antes de penalizar BPM instantáneo */
   spectralAgreementMin: 0.28,
   /** Mínimo de muestras en ventana para correr ensemble */
