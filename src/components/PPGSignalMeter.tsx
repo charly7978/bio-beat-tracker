@@ -28,6 +28,7 @@ interface PPGSignalMeterProps {
   diagnostics?: {
     status?: string;
     message?: string;
+    hasPulsatility?: boolean;
     sqm?: {
       fpsEffective?: number;
       timestampJitterMs?: number;
@@ -368,9 +369,17 @@ const PPGSignalMeter = ({
     ctx.fillStyle = detected ? COLORS.TEXT_PRIMARY : COLORS.TEXT_DIM;
     ctx.fillText(detected ? '● DEDO OK' : '○ SIN DEDO', header.w - 110, header.y + 22);
 
-    // TECHNICAL OVERLAY (Phase 11)
+    // TECHNICAL OVERLAY — no parpadear LOW si la señal sigue siendo pulsátil
     const diag = propsRef.current.diagnostics;
-    if (diag?.status && diag.status !== "VALID" && diag.status !== "WARMUP") {
+    const hideLowFlicker =
+      diag?.status === 'LOW_SIGNAL_QUALITY' &&
+      diag.hasPulsatility === true;
+    if (
+      diag?.status &&
+      diag.status !== 'VALID' &&
+      diag.status !== 'WARMUP' &&
+      !hideLowFlicker
+    ) {
       ctx.fillStyle = COLORS.TEXT_DANGER;
       ctx.font = `bold 10px ${FONT_MONO}`;
       ctx.textAlign = 'center';

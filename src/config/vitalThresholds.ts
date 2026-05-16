@@ -43,6 +43,12 @@ export const VITAL_THRESHOLDS = {
     MAX_JITTER_MS: 50,
     /** Frames con dedo candidato antes de STABLE (≈1 s @ 30 fps) */
     STABLE_FRAMES_REQ: 22,
+    /** Overlay diagnóstico — evita parpadeo VALID ↔ LOW_SIGNAL_QUALITY */
+    DIAG_SQI_EMA_ALPHA: 0.14,
+    DIAG_ENTER_LOW_SQI: 22,
+    DIAG_EXIT_VALID_SQI: 26,
+    DIAG_LOW_FRAMES_REQ: 10,
+    DIAG_VALID_FRAMES_REQ: 4,
   },
   
   // FINGER + ROI (cámara trasera + dedo; hemoglobina + pulsación temporal)

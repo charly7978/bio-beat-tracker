@@ -9,7 +9,11 @@ import {
   type BackpressureConfig,
 } from '../../lib/perf/backpressureConfig';
 import type { MeasurementStatus, SignalQualityMetrics } from '../../types/measurements';
-import { SignalQualityIndex } from '../signal-quality/SignalQualityIndex';
+import {
+  SignalQualityIndex,
+  createDiagnosticStatusState,
+  type DiagnosticStatusState,
+} from '../signal-quality/SignalQualityIndex';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 
@@ -147,6 +151,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   // Cache de stats lentas (recomputadas cada N frames): evita slice+sort por frame
   // sobre ventanas estadísticas de 30-90 muestras que cambian lentamente.
   private cachedSqi = 0;
+  private cachedPeriodicity = 0;
+  private readonly diagStatusState: DiagnosticStatusState = createDiagnosticStatusState();
 
   // === MULTI-SOURCE RANKING (CHROM eliminado — amplifica ruido sin dedo) ===
   private readonly SOURCE_BUFFER_SIZE = 120;
@@ -294,12 +300,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.filteredBuffer.push(filtered);
 
     const endSqi = ppgPerf.start('sqi');
+    this.cachedPeriodicity = this.calculatePeriodicity();
     // SQI unificado basado en múltiples dimensiones técnicas
     const metrics: SignalQualityMetrics = {
       sqi: 0, // `calculate` no usa este campo; el SQI efectivo es `this.cachedSqi` / `sqm.sqi` emitido
       perfusionIndex: this.cachedPI,
       snr: pulseSource.strength,
-      periodicity: this.calculatePeriodicity(), // Nuevo método centralizado
+      periodicity: this.cachedPeriodicity,
       motionScore: this.motionScore,
       saturationRatio: (roi.rawRed > 250 ? 1 : 0),
       underexposureRatio: this.underexposureEma,
@@ -343,6 +350,17 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       );
     }
 
+    const displayStatus = SignalQualityIndex.resolveDiagnosticDisplayStatus(
+      this.diagStatusState,
+      {
+        rejectionStatus,
+        rawSqi: this.signalQuality,
+        pi: perfusionIndex,
+        fingerDetected: this.fingerDetected,
+        contactState: this.contactState,
+      },
+    );
+
     this.onSignalReady({
       timestamp,
       rawValue: pulseSource.value,
@@ -358,18 +376,18 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       diagnostics: {
         message:
           `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
-          `PI:${perfusionIndex.toFixed(2)} C:${(this.smoothedCoverage * 100).toFixed(0)} ` +
-          `${this.contactState}${motionArtifact ? ' MOV' : ''}`,
+          `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
+          `C:${(this.smoothedCoverage * 100).toFixed(0)} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
         hasPulsatility:
           SignalQualityIndex.isClinicallyValid(this.signalQuality, perfusionIndex) ||
           SignalQualityIndex.isAdequateForLiveVitals(this.signalQuality, perfusionIndex),
         pulsatilityValue: this.contactState === 'STABLE_CONTACT' ? Math.max(perfusionIndex, pulseSource.strength * 0.02) : 0,
-        status: rejectionStatus || (this.signalQuality > 45 ? "VALID" : "LOW_SIGNAL_QUALITY") as MeasurementStatus,
+        status: displayStatus,
         sqm: {
           sqi: this.signalQuality,
           perfusionIndex: perfusionIndex,
           snr: pulseSource.strength,
-          periodicity: this.calculatePeriodicity(),
+          periodicity: this.cachedPeriodicity,
           motionScore: this.motionScore,
           saturationRatio: (roi.rawRed > 250 ? 1 : 0),
           underexposureRatio: this.underexposureEma,
@@ -939,6 +957,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.signalQuality = 0;
     this.cachedSqi = 0;
     this.cachedPI = 0;
+    this.cachedPeriodicity = 0;
+    Object.assign(this.diagStatusState, createDiagnosticStatusState());
     this.underexposureEma = 0;
     this.fingerConfidenceCount = 0;
     this.fingerLostCount = 0;
