@@ -21,11 +21,7 @@ const EMPTY_RR = { intervals: [] as number[], lastPeakTime: null as number | nul
 
 /**
  * Hook de procesamiento cardíaco.
- *
- * Diseño: NO mantiene state React (BPM, confidence, SQI). El consumidor recibe
- * los valores directamente en el resultado de `processSignal` y los gestiona como
- * prefiera (típicamente via `useState` o `useRef` en Index.tsx). Esto evita
- * setStates por frame que disparaban re-renders en cascada.
+ * Reinicia seguimiento de picos al perder contacto y al volver a colocar el dedo.
  */
 export const useHeartBeatProcessor = () => {
   const processorRef = useRef<HeartBeatProcessor | null>(null);
@@ -36,10 +32,14 @@ export const useHeartBeatProcessor = () => {
   const lastConfidenceRef = useRef<number>(0);
   const lastFilteredValueRef = useRef(0);
   const lastSqiRef = useRef<number>(0);
-  // Track sustained NO_CONTACT to align with PPGSignalProcessor reset semantics
   const noContactFramesRef = useRef<number>(0);
-  const NO_CONTACT_RESET_THRESHOLD = 90;
-  const NO_CONTACT_HOLD_FRAMES = 8;
+  const wasNoContactRef = useRef(true);
+
+  /** ~4 frames sin dedo antes de vaciar picos (~130 ms @ 30 fps) */
+  const NO_CONTACT_PEAK_RESET_FRAMES = 12;
+  /** ~1 s sin dedo: reset completo del procesador */
+  const NO_CONTACT_FULL_RESET_FRAMES = 30;
+  const NO_CONTACT_HOLD_FRAMES = 4;
 
   useEffect(() => {
     const t = Date.now().toString(36);
@@ -66,8 +66,11 @@ export const useHeartBeatProcessor = () => {
   ): HeartBeatResult => {
     if (!processorRef.current || processingStateRef.current !== 'ACTIVE') {
       return {
-        bpm: lastBpmRef.current, confidence: 0, isPeak: false,
-        filteredValue: lastFilteredValueRef.current, signalQuality: lastSqiRef.current,
+        bpm: 0,
+        confidence: 0,
+        isPeak: false,
+        filteredValue: lastFilteredValueRef.current,
+        signalQuality: lastSqiRef.current,
         rrData: EMPTY_RR,
       };
     }
@@ -82,9 +85,22 @@ export const useHeartBeatProcessor = () => {
       );
     }
 
-    // Sin dedo: no alimentar el ensemble (la onda PPG puede seguir en otro canal)
     if (contactState === 'NO_CONTACT' || !fingerConfirmed) {
       noContactFramesRef.current += 1;
+      wasNoContactRef.current = true;
+
+      if (noContactFramesRef.current >= NO_CONTACT_PEAK_RESET_FRAMES) {
+        processorRef.current.resetPeakTracking();
+        lastBpmRef.current = 0;
+      }
+      if (noContactFramesRef.current >= NO_CONTACT_FULL_RESET_FRAMES) {
+        processorRef.current.reset();
+        lastBpmRef.current = 0;
+        lastConfidenceRef.current = 0;
+        lastSqiRef.current = 0;
+        lastFilteredValueRef.current = 0;
+      }
+
       if (noContactFramesRef.current <= NO_CONTACT_HOLD_FRAMES) {
         return {
           bpm: 0,
@@ -95,20 +111,22 @@ export const useHeartBeatProcessor = () => {
           rrData: EMPTY_RR,
         };
       }
-      if (noContactFramesRef.current >= NO_CONTACT_RESET_THRESHOLD) {
-        processorRef.current.reset();
-        lastBpmRef.current = 0;
-        lastConfidenceRef.current = 0;
-        lastSqiRef.current = 0;
-        lastFilteredValueRef.current = 0;
-      }
       return {
-        bpm: 0, confidence: 0, isPeak: false,
-        filteredValue: 0, signalQuality: 0,
+        bpm: 0,
+        confidence: 0,
+        isPeak: false,
+        filteredValue: 0,
+        signalQuality: 0,
         rrData: EMPTY_RR,
       };
     }
 
+    if (wasNoContactRef.current) {
+      wasNoContactRef.current = false;
+      processorRef.current.resetPeakTracking();
+      lastBpmRef.current = 0;
+      lastConfidenceRef.current = 0;
+    }
     noContactFramesRef.current = 0;
     processedSignalsRef.current++;
 
@@ -157,6 +175,7 @@ export const useHeartBeatProcessor = () => {
     lastFilteredValueRef.current = 0;
     processedSignalsRef.current = 0;
     noContactFramesRef.current = 0;
+    wasNoContactRef.current = true;
 
     processingStateRef.current = 'ACTIVE';
   }, []);

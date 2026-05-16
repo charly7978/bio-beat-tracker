@@ -489,21 +489,26 @@ export class HeartBeatProcessor {
   getRRIntervals(): number[] { return [...this.rrIntervals]; }
   getLastPeakTime(): number { return this.lastPeakTime; }
 
-  reset(): void {
+  /** Limpia estado de picos/RR al quitar el dedo o al volver a colocarlo. */
+  resetPeakTracking(): void {
     this.signalBuffer = [];
     this.derivativeBuffer = [];
     this.timestampBuffer = [];
     this.rrIntervals = [];
     this.smoothBPM = 0;
     this.lastPeakTime = 0;
+    this.lastEmittedPeakTime = 0;
     this.consecutivePeaks = 0;
-    this.signalQualityIndex = 0;
     this.frameTick = 0;
     this.cachedGateRange = 0;
+    this.lastDiagnostics = {};
+  }
+
+  reset(): void {
+    this.resetPeakTracking();
+    this.signalQualityIndex = 0;
     this.cachedSampleRate = 30;
     this.cachedPeriodicity = { bpm: 0, score: 0 };
-    this.lastDiagnostics = {};
-    this.lastEmittedPeakTime = 0;
     this.fingerContactConfirmed = false;
     this.ppgSqi = 0;
     this.ppgPerfusionIndex = 0;

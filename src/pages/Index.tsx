@@ -457,6 +457,8 @@ const Index = () => {
     measurementLatchRef.current = createMeasurementSessionLatch();
     lastGoodBpmRef.current = 0;
     lastBpmSeenAtRef.current = 0;
+    prevHasUsableContactRef.current = false;
+    noContactSessionFramesRef.current = 0;
     lastRrSnapshotRef.current = null;
     setHeartBeatRuntimeHints(inferCameraRuntimeHints());
   }, [isMonitoring, startProcessing, startCalibration, enterFullScreen, sanityProfileId, requestWakeLock, setHeartBeatRuntimeHints]);
@@ -595,6 +597,8 @@ const Index = () => {
     measurementLatchRef.current = createMeasurementSessionLatch();
     lastGoodBpmRef.current = 0;
     lastBpmSeenAtRef.current = 0;
+    prevHasUsableContactRef.current = false;
+    noContactSessionFramesRef.current = 0;
     lastRrSnapshotRef.current = null;
     setHeartbeatSignal(0);
     setBeatMarker(0);
@@ -609,12 +613,15 @@ const Index = () => {
   // === PROCESAR SEÑAL PPG ===
   const vitalSignsFrameCounter = useRef<number>(0);
   const unstableFrameCounter = useRef<number>(0);
-  const UNSTABLE_ZERO_THRESHOLD = 900; // ~30 s: no borrar vitales por parpadeos de gates
+  const UNSTABLE_ZERO_THRESHOLD = 60; // ~2 s sin dedo: limpiar vitales en UI
+  const NO_CONTACT_SESSION_RESET_FRAMES = 18;
   const measurementLatchRef = useRef(createMeasurementSessionLatch());
   const lastRrSnapshotRef = useRef<{ intervals: number[]; lastPeakTime: number | null } | null>(null);
   const lastGoodBpmRef = useRef(0);
   const lastBpmSeenAtRef = useRef(0);
-  const BPM_DISPLAY_HOLD_MS = 4500;
+  const prevHasUsableContactRef = useRef(false);
+  const noContactSessionFramesRef = useRef(0);
+  const BPM_DISPLAY_HOLD_MS = 2800;
   const VITALS_PROCESS_EVERY_N_FRAMES = 3;
   // Throttling de UI: el DSP corre en cada frame, React solo refresca a ritmos sanos.
   const isMonitoringRef = useRef(false);
@@ -665,6 +672,24 @@ const Index = () => {
     });
   }, [lastSignal]);
 
+  const resetFingerContactSession = useCallback(() => {
+    resetHeartBeat();
+    measurementLatchRef.current = createMeasurementSessionLatch();
+    lastGoodBpmRef.current = 0;
+    lastBpmSeenAtRef.current = 0;
+    lastRrSnapshotRef.current = null;
+    unstableFrameCounter.current = 0;
+    setRRIntervals([]);
+    setBeatMarker(0);
+    if (beatMarkerTimerRef.current) {
+      window.clearTimeout(beatMarkerTimerRef.current);
+      beatMarkerTimerRef.current = null;
+    }
+    bpmSanityRef.current.reset();
+    sanityErrorRef.current = null;
+    setSanityError(null);
+  }, [resetHeartBeat]);
+
   const handleSignalRealtime = useCallback((lastSignal: ProcessedSignal) => {
     if (!isMonitoringRef.current) return;
     const signalValue = lastSignal.filteredValue;
@@ -683,6 +708,20 @@ const Index = () => {
     const nowT = performance.now();
     const hasUsableContact =
       fingerConfirmed && contactState !== 'NO_CONTACT';
+
+    if (hasUsableContact && !prevHasUsableContactRef.current) {
+      resetFingerContactSession();
+    }
+    prevHasUsableContactRef.current = hasUsableContact;
+
+    if (!hasUsableContact) {
+      noContactSessionFramesRef.current += 1;
+      if (noContactSessionFramesRef.current === NO_CONTACT_SESSION_RESET_FRAMES) {
+        resetFingerContactSession();
+      }
+    } else {
+      noContactSessionFramesRef.current = 0;
+    }
 
     if (vitalSignsFrameCounter.current % 45 === 0) {
       syncCameraHints();
@@ -718,8 +757,13 @@ const Index = () => {
       setCurrentDiagnostics(mergedDiag);
     }
 
-    const bpmForLatch = heartBeatResult.bpm > 0 ? heartBeatResult.bpm : lastGoodBpmRef.current;
-    if (bpmForLatch > 0) lastGoodBpmRef.current = bpmForLatch;
+    const bpmForLatch =
+      heartBeatResult.bpm > 0
+        ? heartBeatResult.bpm
+        : hasUsableContact
+          ? lastGoodBpmRef.current
+          : 0;
+    if (bpmForLatch > 0 && hasUsableContact) lastGoodBpmRef.current = bpmForLatch;
 
     measurementLatchRef.current = updateMeasurementSessionLatch(
       measurementLatchRef.current,
@@ -747,8 +791,9 @@ const Index = () => {
       lastBpmSeenAtRef.current = nowT;
     }
 
-    const bpmOut =
-      bpmLive > 0
+    const bpmOut = !hasUsableContact
+      ? 0
+      : bpmLive > 0
         ? bpmLive
         : peakRecent &&
             lastGoodBpmRef.current > 0 &&
@@ -901,10 +946,13 @@ const Index = () => {
     }
 
     if (
+      hasUsableContact &&
       heartBeatResult.rrData &&
       heartBeatResult.rrData.intervals.length >= 2
     ) {
       lastRrSnapshotRef.current = heartBeatResult.rrData;
+    } else if (!hasUsableContact) {
+      lastRrSnapshotRef.current = null;
     }
 
     const emittedPeak = hasUsableContact && heartBeatResult.isPeak;
@@ -1058,6 +1106,7 @@ const Index = () => {
     syncCameraHints,
     setFingerPlacementMode,
     setVitalsPlacementMode,
+    resetFingerContactSession,
   ]);
 
   // Conectar el callback realtime al hook de señal una sola vez.
