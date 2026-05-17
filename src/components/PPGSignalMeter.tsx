@@ -99,8 +99,6 @@ const COLORS = {
   TEXT_VIOLET: '#a78bfa',
   SPO2: '#06b6d4',
   BP: '#818cf8',
-  POINCARE_NORMAL: 'rgba(34, 197, 94, 0.7)',
-  POINCARE_ARR: 'rgba(239, 68, 68, 0.85)',
 };
 
 const FONT_MONO = '"SF Mono", Consolas, "Roboto Mono", monospace';
@@ -183,7 +181,6 @@ const PPGSignalMeter = ({
     metrics: { x: 0, y: 0, w: 0, h: 0 },
     plot: { x: 0, y: 0, w: 0, h: 0, centerY: 0 },
     trend: { x: 0, y: 0, w: 0, h: 0 },
-    poincare: { x: 0, y: 0, w: 0, h: 0 },
     footer: { x: 0, y: 0, w: 0, h: 0 },
   });
 
@@ -339,7 +336,7 @@ const PPGSignalMeter = ({
     const metricsH = Math.max(100, Math.min(120, Math.round(cssH * 0.13)));
     const metrics = { x: 0, y: header.h, w: cssW, h: metricsH };
 
-    const lowerH = Math.max(150, Math.round(cssH * 0.22));
+    const lowerH = Math.max(168, Math.round(cssH * 0.26));
     const footerH = 56;
     const buttonsH = 48;
     const plotY = header.h + metricsH;
@@ -351,13 +348,11 @@ const PPGSignalMeter = ({
     plot.centerY = plot.y + plot.h / 2;
 
     const lowerY = plot.y + plot.h + 6;
-    const poincareW = Math.min(lowerH + 16, Math.round(cssW * 0.35));
-    const trend = { x: plotX, y: lowerY, w: plotW - poincareW - 8, h: lowerH - 8 };
-    const poincare = { x: plotX + trend.w + 8, y: lowerY, w: poincareW, h: lowerH - 8 };
+    const trend = { x: plotX, y: lowerY, w: plotW, h: lowerH - 6 };
 
     const footer = { x: 0, y: cssH - buttonsH - footerH, w: cssW, h: footerH };
 
-    layoutRef.current = { dpr, width: cssW, height: cssH, header, metrics, plot, trend, poincare, footer };
+    layoutRef.current = { dpr, width: cssW, height: cssH, header, metrics, plot, trend, footer };
   }, []);
 
   useLayoutEffect(() => {
@@ -1237,43 +1232,72 @@ const PPGSignalMeter = ({
     const { trend } = layoutRef.current;
     if (trend.w < 80 || trend.h < 40) return;
 
-    // Background
     ctx.fillStyle = COLORS.PANEL_BG;
     ctx.fillRect(trend.x, trend.y, trend.w, trend.h);
-    ctx.strokeStyle = COLORS.PANEL_BORDER_DIM;
-    ctx.strokeRect(trend.x, trend.y, trend.w, trend.h);
-
-    ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_PRIMARY;
-    ctx.textAlign = 'left';
-    ctx.fillText('TENDENCIA FC · 60 s', trend.x + 8, trend.y + 14);
+    ctx.strokeStyle = COLORS.PANEL_BORDER;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(trend.x + 0.5, trend.y + 0.5, trend.w - 1, trend.h - 1);
 
     const data = bpmTrendRef.current;
+    const hrv = hrvDisplayRef.current;
+    const arrCnt = propsRef.current.arrhythmiaCount ?? 0;
+    const lastBpm = data.length > 0 ? data[data.length - 1].bpm : 0;
+
+    ctx.font = `bold 11px ${FONT_MONO}`;
+    ctx.fillStyle = COLORS.TEXT_PRIMARY;
+    ctx.textAlign = 'left';
+    ctx.fillText('TENDENCIA FRECUENCIA CARDÍACA · 60 s', trend.x + 10, trend.y + 16);
+
+    ctx.font = `9px ${FONT_MONO}`;
+    ctx.fillStyle = COLORS.TEXT_DIM;
+    const hrvBits: string[] = [];
+    if (hrv.sdnn > 0) hrvBits.push(`SDNN ${hrv.sdnn} ms`);
+    if (hrv.rmssd > 0) hrvBits.push(`RMSSD ${hrv.rmssd} ms`);
+    if (arrCnt > 0) hrvBits.push(`${arrCnt} arr.`);
+    if (hrvBits.length > 0) {
+      ctx.fillText(hrvBits.join(' · '), trend.x + 10, trend.y + 30);
+    }
+
+    if (lastBpm > 0) {
+      ctx.font = `bold 22px ${FONT_MONO}`;
+      ctx.fillStyle = COLORS.SIGNAL;
+      ctx.textAlign = 'right';
+      ctx.fillText(`${Math.round(lastBpm)}`, trend.x + trend.w - 44, trend.y + 28);
+      ctx.font = `bold 10px ${FONT_MONO}`;
+      ctx.fillStyle = COLORS.TEXT_SECONDARY;
+      ctx.fillText('bpm', trend.x + trend.w - 10, trend.y + 28);
+    }
+
     if (data.length < 2) {
       ctx.font = `10px ${FONT_MONO}`;
       ctx.fillStyle = COLORS.TEXT_DIM;
       ctx.textAlign = 'center';
-      ctx.fillText('— sin datos —', trend.x + trend.w / 2, trend.y + trend.h / 2);
+      ctx.fillText('Acumulando tendencia…', trend.x + trend.w / 2, trend.y + trend.h / 2 + 8);
       return;
     }
 
-    const padTop = 24;
-    const padBot = 14;
-    const padL = 36;
-    const padR = 8;
+    const padTop = 40;
+    const padBot = 22;
+    const padL = 40;
+    const padR = 12;
     const innerX = trend.x + padL;
     const innerY = trend.y + padTop;
     const innerW = trend.w - padL - padR;
     const innerH = trend.h - padTop - padBot;
 
-    // Y range based on observed values + sane bands
-    let mn = Infinity, mx = -Infinity;
-    for (const p of data) { if (p.bpm < mn) mn = p.bpm; if (p.bpm > mx) mx = p.bpm; }
-    const span = Math.max(20, mx - mn + 10);
-    const yMin = Math.max(30, Math.floor((mn - 5) / 5) * 5);
+    let mn = Infinity;
+    let mx = -Infinity;
+    let sum = 0;
+    for (const p of data) {
+      if (p.bpm < mn) mn = p.bpm;
+      if (p.bpm > mx) mx = p.bpm;
+      sum += p.bpm;
+    }
+    const avg = sum / data.length;
+    const span = Math.max(24, mx - mn + 12);
+    const yMin = Math.max(30, Math.floor((mn - 8) / 5) * 5);
     const yMax = yMin + span;
 
-    // Reference bands: bradycardia (<60), normal 60-100, tachycardia (>100)
     const yToPx = (v: number) => innerY + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
     const drawBand = (lo: number, hi: number, color: string) => {
       const y1 = Math.max(innerY, yToPx(hi));
@@ -1283,199 +1307,144 @@ const PPGSignalMeter = ({
         ctx.fillRect(innerX, y1, innerW, y2 - y1);
       }
     };
-    drawBand(60, 100, 'rgba(34, 197, 94, 0.06)');
-    drawBand(yMin, 60, 'rgba(245, 158, 11, 0.05)');
-    drawBand(100, yMax, 'rgba(239, 68, 68, 0.05)');
+    drawBand(60, 100, 'rgba(34, 197, 94, 0.09)');
+    drawBand(yMin, 60, 'rgba(245, 158, 11, 0.06)');
+    drawBand(100, yMax, 'rgba(239, 68, 68, 0.06)');
 
-    // Y axis ticks
+    const refLines = [
+      { v: 60, label: '60', color: 'rgba(245, 158, 11, 0.55)' },
+      { v: 100, label: '100', color: 'rgba(239, 68, 68, 0.45)' },
+    ];
+    for (const ref of refLines) {
+      if (ref.v < yMin || ref.v > yMax) continue;
+      const y = yToPx(ref.v);
+      ctx.strokeStyle = ref.color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(innerX, y);
+      ctx.lineTo(innerX + innerW, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = `8px ${FONT_MONO}`;
+      ctx.fillStyle = ref.color;
+      ctx.textAlign = 'left';
+      ctx.fillText(ref.label, innerX + 4, y - 3);
+    }
+
+    const tickStep = span > 50 ? 10 : 5;
     ctx.font = `9px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'right';
-    [yMin, Math.round((yMin + yMax) / 2), yMax].forEach((v) => {
+    for (let v = yMin; v <= yMax; v += tickStep) {
       const y = yToPx(v);
-      ctx.fillText(`${v}`, innerX - 4, y + 3);
-      ctx.strokeStyle = 'rgba(148,163,184,0.15)';
+      ctx.fillText(`${v}`, innerX - 5, y + 3);
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.12)';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(innerX, y); ctx.lineTo(innerX + innerW, y);
+      ctx.moveTo(innerX, y);
+      ctx.lineTo(innerX + innerW, y);
       ctx.stroke();
-    });
+    }
 
-    // X axis (now on right, oldest on left)
     const now = Date.now();
     const tStart = now - TREND_WINDOW_MS;
     const xToPx = (t: number) => innerX + ((t - tStart) / TREND_WINDOW_MS) * innerW;
 
-    // Line segments
-    ctx.lineWidth = 1.8;
-    for (let i = 1; i < data.length; i++) {
-      const p1 = data[i - 1];
-      const p2 = data[i];
-      const x1 = xToPx(p1.t);
-      const y1 = yToPx(p1.bpm);
-      const x2 = xToPx(p2.t);
-      const y2 = yToPx(p2.bpm);
-
+    for (let s = 0; s <= 60; s += 15) {
+      const t = now - s * 1000;
+      const x = xToPx(t);
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.1)';
       ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      
-      if (p2.isArr) {
-        ctx.strokeStyle = COLORS.SIGNAL_ARR;
-        ctx.shadowColor = COLORS.SIGNAL_ARR_GLOW;
-        ctx.shadowBlur = 6;
-        ctx.stroke();
+      ctx.moveTo(x, innerY);
+      ctx.lineTo(x, innerY + innerH);
+      ctx.stroke();
+      ctx.font = `8px ${FONT_MONO}`;
+      ctx.fillStyle = COLORS.TEXT_DIM;
+      ctx.textAlign = 'center';
+      ctx.fillText(s === 0 ? 'ahora' : `−${s}s`, x, innerY + innerH + 14);
+    }
 
-        // Marker dot for arrhythmia
-        ctx.beginPath();
-        ctx.arc(x2, y2, 2.5, 0, Math.PI * 2);
-        ctx.fillStyle = COLORS.SIGNAL_ARR;
-        ctx.fill();
-      } else {
-        ctx.strokeStyle = COLORS.SIGNAL;
-        ctx.shadowColor = 'transparent';
-        ctx.shadowBlur = 0;
-        ctx.stroke();
+    const coords: { x: number; y: number; isArr: boolean }[] = data.map((p) => ({
+      x: xToPx(p.t),
+      y: yToPx(p.bpm),
+      isArr: p.isArr,
+    }));
+
+    ctx.beginPath();
+    ctx.moveTo(coords[0].x, innerY + innerH);
+    for (const c of coords) ctx.lineTo(c.x, c.y);
+    ctx.lineTo(coords[coords.length - 1].x, innerY + innerH);
+    ctx.closePath();
+    const areaGrad = ctx.createLinearGradient(0, innerY, 0, innerY + innerH);
+    areaGrad.addColorStop(0, 'rgba(34, 197, 94, 0.22)');
+    areaGrad.addColorStop(1, 'rgba(34, 197, 94, 0.02)');
+    ctx.fillStyle = areaGrad;
+    ctx.fill();
+
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    let seg = 0;
+    while (seg < coords.length - 1) {
+      const isArr = coords[seg].isArr;
+      let end = seg;
+      while (end < coords.length - 1 && coords[end + 1].isArr === isArr) end++;
+      ctx.beginPath();
+      ctx.moveTo(coords[seg].x, coords[seg].y);
+      for (let k = seg; k < end; k++) {
+        const xc = (coords[k].x + coords[k + 1].x) / 2;
+        const yc = (coords[k].y + coords[k + 1].y) / 2;
+        ctx.quadraticCurveTo(coords[k].x, coords[k].y, xc, yc);
       }
+      ctx.lineTo(coords[end].x, coords[end].y);
+      ctx.strokeStyle = isArr ? COLORS.SIGNAL_ARR : COLORS.SIGNAL;
+      ctx.lineWidth = isArr ? 2.4 : 2;
+      ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
+      ctx.shadowBlur = isArr ? 8 : 5;
+      ctx.stroke();
+      seg = end + 1;
     }
     ctx.shadowBlur = 0;
 
-    // Last marker
-    const last = data[data.length - 1];
-    if (last) {
-      const x = xToPx(last.t);
-      const y = yToPx(last.bpm);
+    for (let i = 0; i < coords.length; i++) {
+      const c = coords[i];
+      if (!data[i].isArr && i !== coords.length - 1) continue;
       ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
-      ctx.fillStyle = COLORS.SIGNAL;
+      ctx.arc(c.x, c.y, data[i].isArr ? 3.5 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = data[i].isArr ? COLORS.SIGNAL_ARR : COLORS.SIGNAL;
       ctx.fill();
-      ctx.font = `bold 10px ${FONT_MONO}`;
-      ctx.fillStyle = COLORS.TEXT_PRIMARY;
-      ctx.textAlign = 'right';
-      ctx.fillText(`${Math.round(last.bpm)} bpm`, innerX + innerW - 4, innerY + 12);
+      if (data[i].isArr) {
+        ctx.font = `bold 7px ${FONT_MONO}`;
+        ctx.fillStyle = '#fecaca';
+        ctx.textAlign = 'center';
+        ctx.fillText('!', c.x, c.y - 8);
+      }
     }
 
-    // Min / max label
+    const avgY = yToPx(avg);
+    ctx.strokeStyle = 'rgba(103, 232, 249, 0.5)';
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(innerX, avgY);
+    ctx.lineTo(innerX + innerW, avgY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = `8px ${FONT_MONO}`;
+    ctx.fillStyle = COLORS.TEXT_INFO;
+    ctx.textAlign = 'right';
+    ctx.fillText(`media ${Math.round(avg)}`, innerX + innerW - 4, avgY - 4);
+
     ctx.font = `9px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'left';
-    ctx.fillText(`min ${Math.round(mn)}  max ${Math.round(mx)}`, innerX, trend.y + trend.h - 4);
-  }, []);
-
-  const drawPoincare = useCallback((ctx: CanvasRenderingContext2D) => {
-    const { poincare } = layoutRef.current;
-    if (poincare.w < 80 || poincare.h < 80) return;
-
-    ctx.fillStyle = COLORS.PANEL_BG;
-    ctx.fillRect(poincare.x, poincare.y, poincare.w, poincare.h);
-    ctx.strokeStyle = COLORS.PANEL_BORDER_DIM;
-    ctx.strokeRect(poincare.x, poincare.y, poincare.w, poincare.h);
-
-    ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText('DIAGRAMA DE POINCARÉ', poincare.x + 8, poincare.y + 18);
-
-    // Subtitle: HRV summary (Línea 2)
-    const hrv = hrvDisplayRef.current;
-    ctx.font = `9px ${FONT_MONO}`;
-    ctx.textAlign = 'left';
-    ctx.fillStyle = COLORS.TEXT_INFO;
-    if (hrv.sdnn > 0) {
-      ctx.fillText(`SDNN ${hrv.sdnn}ms · RMSSD ${hrv.rmssd}ms`, poincare.x + 8, poincare.y + 34);
-    }
-
-    // Data
-    const beats = beatHistoryRef.current.filter(b => isPhysiologicalRR(b.rr));
-    if (beats.length < 4) {
-      ctx.font = `10px ${FONT_MONO}`;
-      ctx.textAlign = 'center';
-      ctx.fillStyle = COLORS.TEXT_DIM;
-      ctx.fillText('— acumulando RR —', poincare.x + poincare.w / 2, poincare.y + poincare.h / 2);
-      return;
-    }
-
-    const padL = 34, padR = 12, padT = 54, padB = 28;
-    const innerX = poincare.x + padL;
-    const innerY = poincare.y + padT;
-    const innerW = poincare.w - padL - padR;
-    const innerH = poincare.h - padT - padB;
-
-    const rrPairs: [number, number, boolean][] = [];
-    for (let i = 1; i < beats.length; i++) {
-      const a = beats[i - 1].rr;
-      const b = beats[i].rr;
-      if (isPhysiologicalRR(a) && isPhysiologicalRR(b)) {
-        rrPairs.push([a, b, beats[i].isArrhythmia || beats[i - 1].isArrhythmia]);
-      }
-    }
-    if (rrPairs.length === 0) return;
-
-    let mn = Infinity, mx = -Infinity;
-    for (const [a, b] of rrPairs) {
-      if (a < mn) mn = a; if (a > mx) mx = a;
-      if (b < mn) mn = b; if (b > mx) mx = b;
-    }
-    const pad = Math.max(60, (mx - mn) * 0.15);
-    const lo = Math.max(300, mn - pad);
-    const hi = Math.min(2000, mx + pad);
-    const range = Math.max(50, hi - lo);
-
-    const xToPx = (v: number) => innerX + ((v - lo) / range) * innerW;
-    const yToPx = (v: number) => innerY + innerH - ((v - lo) / range) * innerH;
-
-    // Axes
-    ctx.strokeStyle = 'rgba(148,163,184,0.18)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(innerX, innerY); ctx.lineTo(innerX, innerY + innerH);
-    ctx.moveTo(innerX, innerY + innerH); ctx.lineTo(innerX + innerW, innerY + innerH);
-    ctx.stroke();
-
-    // Identity line (RRn = RRn+1)
-    ctx.strokeStyle = 'rgba(148,163,184,0.30)';
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath();
-    ctx.moveTo(xToPx(lo), yToPx(lo));
-    ctx.lineTo(xToPx(hi), yToPx(hi));
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Axis labels - Moved for clarity
-    ctx.font = `8px ${FONT_MONO}`;
-    ctx.fillStyle = '#ffffff';
+    ctx.fillText(
+      `min ${Math.round(mn)} · max ${Math.round(mx)} · Δ ${Math.round(mx - mn)}`,
+      innerX,
+      trend.y + trend.h - 6,
+    );
     ctx.textAlign = 'right';
-    ctx.fillText(`${Math.round(hi)}`, innerX - 6, innerY + 4);
-    ctx.fillText(`${Math.round(lo)}`, innerX - 6, innerY + innerH);
-    ctx.textAlign = 'center';
-    ctx.fillText(`${Math.round(lo)}`, innerX, innerY + innerH + 12);
-    ctx.fillText(`${Math.round(hi)} ms`, innerX + innerW, innerY + innerH + 12);
-
-    // Points
-    for (const [a, b, isArr] of rrPairs) {
-      const x = xToPx(a);
-      const y = yToPx(b);
-      ctx.beginPath();
-      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = isArr ? COLORS.POINCARE_ARR : COLORS.POINCARE_NORMAL;
-      ctx.fill();
-    }
-
-    // Compute SD1/SD2 (Poincaré classic)
-    const diffs = rrPairs.map(([a, b]) => (b - a));
-    const sums = rrPairs.map(([a, b]) => (a + b));
-    const meanDiff = diffs.reduce((s, v) => s + v, 0) / diffs.length;
-    const meanSum = sums.reduce((s, v) => s + v, 0) / sums.length;
-    const sd1 = Math.sqrt(diffs.reduce((s, v) => s + (v - meanDiff) ** 2, 0) / diffs.length) / Math.SQRT2;
-    const sd2 = Math.sqrt(sums.reduce((s, v) => s + (v - meanSum) ** 2, 0) / sums.length) / Math.SQRT2;
-
-    ctx.font = `bold 9px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_INFO;
-    ctx.textAlign = 'right';
-    // SD1/SD2 movidos a la línea 2 para no pisar el título
-    ctx.fillText(`SD1 ${sd1.toFixed(1)}ms`, poincare.x + poincare.w - 85, poincare.y + 34);
-    ctx.fillStyle = COLORS.TEXT_VIOLET;
-    ctx.fillText(`SD2 ${sd2.toFixed(1)}ms`, poincare.x + poincare.w - 8, poincare.y + 34);
+    ctx.fillStyle = 'rgba(251, 113, 133, 0.9)';
+    ctx.fillText('● punto rojo = latido arrítmico', innerX + innerW, trend.y + trend.h - 6);
   }, []);
 
   const drawFooter = useCallback((ctx: CanvasRenderingContext2D) => {
@@ -1618,7 +1587,6 @@ const PPGSignalMeter = ({
       drawECGGrid(ctx);
       drawSignal(ctx, now);
       drawTrendStrip(ctx);
-      drawPoincare(ctx);
       drawFooter(ctx);
 
       animationRef.current = requestAnimationFrame(render);
@@ -1630,7 +1598,7 @@ const PPGSignalMeter = ({
       isRunningRef.current = false;
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
     };
-  }, [drawBackground, drawHeader, drawMetricsBar, drawECGGrid, drawSignal, drawTrendStrip, drawPoincare, drawFooter]);
+  }, [drawBackground, drawHeader, drawMetricsBar, drawECGGrid, drawSignal, drawTrendStrip, drawFooter]);
 
   const handleReset = useCallback(() => {
     dataBufferRef.current?.clear();
