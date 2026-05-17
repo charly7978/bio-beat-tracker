@@ -1310,7 +1310,7 @@ const Index = () => {
         {/* MODAL DE AJUSTES REMOVIDO PARA PRODUCCIÓN */}
 
         <div className="relative z-10 h-full">
-          {isMonitoring && (
+          {import.meta.env.DEV && isMonitoring && (
             <DebugTelemetryPanel
               camera={{
                 ...(cameraRef.current?.getDiagnostics?.() as Record<string, unknown>),
