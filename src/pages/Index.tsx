@@ -892,8 +892,13 @@ const Index = () => {
 
     const showWaveform = hasUsableContact;
 
-    if (showWaveform && Number.isFinite(signalValue) && Math.abs(signalValue) > 1e-9) {
-      waveformIngestRef.current?.(lastSignal.timestamp ?? nowT, signalValue);
+    const waveSample =
+      Math.abs(lastSignal.morphologyValue ?? 0) > 1e-9
+        ? lastSignal.morphologyValue!
+        : lastSignal.filteredValue;
+    if (showWaveform && Number.isFinite(waveSample) && Math.abs(waveSample) > 1e-9) {
+      // Mismo reloj que drawSignal (Date.now); performance.now() dejaba la ventana vacía.
+      waveformIngestRef.current?.(Date.now(), waveSample);
     }
 
     if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {

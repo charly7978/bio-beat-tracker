@@ -345,8 +345,10 @@ const PPGSignalMeter = ({
   useEffect(() => {
     if (!waveformIngestRef) return;
     waveformIngestRef.current = (timeMs: number, sampleValue: number) => {
+      const t =
+        timeMs > 0 && timeMs < 1e11 ? Date.now() : timeMs;
       dataBufferRef.current?.push({
-        time: timeMs,
+        time: t,
         value: sampleValue,
         isArrhythmia: beatArrhythmiaRef.current,
       });
@@ -362,6 +364,12 @@ const PPGSignalMeter = ({
       dataBufferRef.current?.clear();
     }
   }, [preserveResults, isFingerDetected]);
+
+  useEffect(() => {
+    if (isMonitoring) {
+      dataBufferRef.current?.clear();
+    }
+  }, [isMonitoring]);
 
   // === DPR-aware sizing with ResizeObserver ===
   const recomputeLayout = useCallback(() => {
@@ -862,8 +870,11 @@ const PPGSignalMeter = ({
     const points = buffer.getPoints();
     if (points.length < 2) return;
 
-    const tCutoff = now - VISUAL_DELAY_MS - WINDOW_MS;
-    const tEnd = now - VISUAL_DELAY_MS;
+    const lastPtTime = points[points.length - 1].time;
+    const clockNow =
+      lastPtTime > 0 && lastPtTime < 1e11 ? performance.now() : now;
+    const tCutoff = clockNow - VISUAL_DELAY_MS - WINDOW_MS;
+    const tEnd = clockNow - VISUAL_DELAY_MS;
 
     type WinPt = { time: number; value: number; isArr: boolean };
     const windowPts: WinPt[] = [];
