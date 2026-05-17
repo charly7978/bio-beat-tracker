@@ -68,14 +68,15 @@ interface PPGSignalMeterProps {
 
 const TARGET_FPS = 60;
 const WINDOW_MS = 2800;
-const BUFFER_SIZE = 4000;
+const BUFFER_SIZE = 12_000;
 const TREND_WINDOW_MS = 60_000;
 const TREND_MAX_POINTS = 240;
 const BEAT_HISTORY_MAX = 30;
 const VISUAL_DELAY_MS = 166;
-const WAVE_RANGE_ATTACK = 0.72;
-const WAVE_RANGE_RELEASE = 0.28;
-const WAVE_VERTICAL_PAD_RATIO = 0.01;
+const WAVE_RANGE_ATTACK = 0.88;
+const WAVE_RANGE_RELEASE = 0.35;
+const WAVE_VERTICAL_PAD_RATIO = 0.16;
+const TRACE_INSET_MIN = 18;
 
 const COLORS = {
   BG_TOP: '#0c1424',
@@ -172,7 +173,11 @@ const PPGSignalMeter = ({
   const displaySysRef = useRef(0);
   const displayDiaRef = useRef(0);
   const displayRangeRef = useRef({ min: -1, max: 1 });
-  const uiModeRef = useRef({ isMonitoring, preserveResults });
+  const uiModeRef = useRef({
+    isMonitoring,
+    preserveResults,
+    hasArrhythmiaAlert: false,
+  });
 
   // Layout — recomputed on resize, DPR-aware
   const layoutRef = useRef({
@@ -181,7 +186,8 @@ const PPGSignalMeter = ({
     height: 0,
     header: { x: 0, y: 0, w: 0, h: 0 },
     metrics: { x: 0, y: 0, w: 0, h: 0 },
-    plot: { x: 0, y: 0, w: 0, h: 0, centerY: 0, traceY: 0, traceH: 0 },
+    plot: { x: 0, y: 0, w: 0, h: 0, centerY: 0, traceY: 0, traceH: 0, innerY: 0, innerH: 0 },
+    alert: { x: 0, y: 0, w: 0, h: 0 },
     trend: { x: 0, y: 0, w: 0, h: 0 },
     poincare: { x: 0, y: 0, w: 0, h: 0 },
     footer: { x: 0, y: 0, w: 0, h: 0 },
@@ -213,7 +219,13 @@ const PPGSignalMeter = ({
       spo2Status,
       diagnostics,
     };
-    uiModeRef.current = { isMonitoring, preserveResults };
+    uiModeRef.current = {
+      isMonitoring,
+      preserveResults,
+      hasArrhythmiaAlert: !!(
+        arrhythmiaStatus?.includes('ARRITMIA') && !arrhythmiaStatus?.includes('CALIBRANDO')
+      ),
+    };
 
     if (rrIntervals && rrIntervals.length >= 2) {
       const last = rrIntervals[rrIntervals.length - 1];
@@ -347,30 +359,34 @@ const PPGSignalMeter = ({
     const { preserveResults: preserve, isMonitoring: monitoring } = uiModeRef.current;
     const showAuxCharts = preserve && !monitoring;
 
-    const header = { x: 0, y: 0, w: cssW, h: 48 };
-    const metricsH = 96;
-    const metrics = { x: 0, y: header.h, w: cssW, h: metricsH };
-    const footerH = 48;
+    const header = { x: 0, y: 0, w: cssW, h: 52 };
+    const alertH = uiModeRef.current.hasArrhythmiaAlert ? 26 : 0;
+    const alert = { x: 0, y: header.h, w: cssW, h: alertH };
+    const metricsH = 108;
+    const metrics = { x: 0, y: header.h + alertH, w: cssW, h: metricsH };
+    const footerH = 52;
     const buttonsH = 48;
     const auxH = showAuxCharts ? Math.min(88, Math.round(cssH * 0.11)) : 0;
 
-    const plotY = header.h + metricsH;
+    const plotY = header.h + alertH + metricsH;
     const plotH = cssH - plotY - auxH - footerH - buttonsH;
     const plotX = LAYOUT_PAD;
     const plotW = cssW - LAYOUT_PAD * 2;
 
+    const plotHResolved = Math.max(200, plotH - 4);
+    const traceInset = Math.max(TRACE_INSET_MIN, Math.round(plotHResolved * 0.09));
     const plot = {
       x: plotX,
       y: plotY + 2,
       w: plotW,
-      h: Math.max(200, plotH - 4),
+      h: plotHResolved,
+      traceY: plotY + 2,
+      traceH: plotHResolved,
+      innerY: plotY + 2 + traceInset,
+      innerH: Math.max(80, plotHResolved - traceInset * 2),
       centerY: 0,
-      traceY: 0,
-      traceH: 0,
     };
-    plot.traceY = plot.y;
-    plot.traceH = plot.h;
-    plot.centerY = plot.traceY + plot.traceH / 2;
+    plot.centerY = plot.innerY + plot.innerH / 2;
 
     const lowerY = plot.y + plot.h + 4;
     const poincareW = showAuxCharts ? Math.min(auxH + 8, Math.round(cssW * 0.32)) : 0;
@@ -394,6 +410,7 @@ const PPGSignalMeter = ({
       width: cssW,
       height: cssH,
       header,
+      alert,
       metrics,
       plot,
       trend,
@@ -412,7 +429,7 @@ const PPGSignalMeter = ({
       ro.disconnect();
       window.removeEventListener('orientationchange', recomputeLayout);
     };
-  }, [recomputeLayout, isMonitoring, preserveResults]);
+  }, [recomputeLayout, isMonitoring, preserveResults, arrhythmiaStatus]);
 
   // ============= DRAWING HELPERS =============
 
@@ -426,11 +443,36 @@ const PPGSignalMeter = ({
 
   }, []);
 
+  const clipZone = (
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    draw: () => void,
+  ) => {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    draw();
+    ctx.restore();
+  };
+
+  const ellipsize = (ctx: CanvasRenderingContext2D, text: string, maxW: number) => {
+    if (ctx.measureText(text).width <= maxW) return text;
+    let t = text;
+    while (t.length > 1 && ctx.measureText(`${t}…`).width > maxW) t = t.slice(0, -1);
+    return `${t}…`;
+  };
+
   const drawHeader = useCallback((ctx: CanvasRenderingContext2D, now: number) => {
     const { header } = layoutRef.current;
     const p = propsRef.current;
     const { quality, isFingerDetected: detected, elapsedTime: elapsed } = p;
     const pad = LAYOUT_PAD;
+    const W = header.w;
+    const colW = (W - pad * 2) / 3;
 
     ctx.fillStyle = COLORS.PANEL_BG;
     ctx.fillRect(header.x, header.y, header.w, header.h);
@@ -440,86 +482,93 @@ const PPGSignalMeter = ({
     ctx.lineTo(header.w, header.y + header.h);
     ctx.stroke();
 
-    const row1Y = header.y + 22;
-    const row2Y = header.y + 40;
+    const row1Y = header.y + 24;
+    const row2Y = header.y + 44;
 
     const pulse = (Math.sin(now / 500) + 1) / 2;
-    ctx.beginPath();
-    ctx.arc(pad + 6, row1Y - 5, 5, 0, Math.PI * 2);
-    ctx.fillStyle = isMonitoring
-      ? `rgba(94, 234, 212, ${0.45 + pulse * 0.4})`
-      : preserveResults
-        ? COLORS.TEXT_INFO
-        : COLORS.TEXT_DIM;
-    ctx.fill();
+    clipZone(ctx, pad, header.y + 6, colW, 40, () => {
+      ctx.beginPath();
+      ctx.arc(pad + 8, row1Y - 6, 5, 0, Math.PI * 2);
+      ctx.fillStyle = isMonitoring
+        ? `rgba(94, 234, 212, ${0.45 + pulse * 0.4})`
+        : preserveResults
+          ? COLORS.TEXT_INFO
+          : COLORS.TEXT_DIM;
+      ctx.fill();
+      ctx.font = `600 13px ${FONT_UI}`;
+      ctx.fillStyle = '#e2e8f0';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      let status = isMonitoring ? 'Monitoreo' : preserveResults ? 'Resultados' : 'En espera';
+      if (isMonitoring) {
+        const t = Math.max(0, Math.floor(elapsed || 0));
+        const em = String(Math.floor(t / 60)).padStart(2, '0');
+        const es = String(t % 60).padStart(2, '0');
+        status = `Monitoreo ${em}:${es}`;
+      }
+      ctx.fillText(ellipsize(ctx, status, colW - 28), pad + 20, row1Y);
+    });
 
-    ctx.font = `600 13px ${FONT_UI}`;
-    ctx.fillStyle = '#e2e8f0';
-    ctx.textAlign = 'left';
-    ctx.fillText(
-      isMonitoring ? 'Monitoreo activo' : preserveResults ? 'Resultados' : 'En espera',
-      pad + 18,
-      row1Y,
-    );
-
-    if (isMonitoring) {
-      const t = Math.max(0, Math.floor(elapsed || 0));
-      const em = String(Math.floor(t / 60)).padStart(2, '0');
-      const es = String(t % 60).padStart(2, '0');
-      ctx.font = `600 13px ${FONT_MONO}`;
-      ctx.fillStyle = COLORS.TEXT_INFO;
-      ctx.fillText(`${em}:${es}`, pad + 148, row1Y);
-    }
-
-    const d = new Date(now);
-    ctx.font = `600 14px ${FONT_MONO}`;
-    ctx.fillStyle = '#f1f5f9';
-    ctx.textAlign = 'center';
-    ctx.fillText(
-      `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`,
-      header.w / 2,
-      row1Y,
-    );
+    clipZone(ctx, pad + colW, header.y + 6, colW, 40, () => {
+      const d = new Date(now);
+      ctx.font = `700 15px ${FONT_MONO}`;
+      ctx.fillStyle = '#f8fafc';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText(
+        `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`,
+        pad + colW * 1.5,
+        row1Y,
+      );
+    });
 
     const qColor =
       quality > 60 ? '#6ee7b7' : quality > 30 ? COLORS.TEXT_WARN : quality > 0 ? COLORS.TEXT_DANGER : COLORS.TEXT_DIM;
-    const piPct = (p.perfusionIndex * 100).toFixed(1);
-    ctx.textAlign = 'right';
-    ctx.font = `600 13px ${FONT_MONO}`;
-    ctx.fillStyle = qColor;
-    ctx.fillText(`SQI ${Math.round(quality)}%`, header.w - pad, row1Y);
-    ctx.font = `12px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.fillText(`PI ${piPct}%`, header.w - pad, row2Y);
-
-    const contactShort = formatContactState(p.contactState);
-    ctx.font = `12px ${FONT_UI}`;
-    ctx.textAlign = 'left';
-    ctx.fillStyle = detected ? '#a7f3d0' : COLORS.TEXT_DIM;
-    ctx.fillText(contactShort, pad + 18, row2Y);
+    clipZone(ctx, pad + colW * 2, header.y + 6, colW, 40, () => {
+      ctx.textAlign = 'right';
+      ctx.font = `600 13px ${FONT_MONO}`;
+      ctx.fillStyle = qColor;
+      ctx.fillText(`SQI ${Math.round(quality)}%`, W - pad, row1Y);
+      ctx.font = `12px ${FONT_MONO}`;
+      ctx.fillStyle = COLORS.TEXT_SECONDARY;
+      ctx.fillText(`PI ${(p.perfusionIndex * 100).toFixed(1)}%`, W - pad, row2Y);
+    });
 
     const diag = p.diagnostics;
     const hint =
       typeof diag?.placementHint === 'string' && detected
         ? diag.placementHint
-        : diag?.status &&
-            diag.status !== 'VALID' &&
-            diag.status !== 'WARMUP' &&
-            !(diag.status === 'LOW_SIGNAL_QUALITY' && diag.hasPulsatility)
-          ? diag.status.replace(/_/g, ' ')
-          : '';
-    if (hint) {
-      ctx.fillStyle = COLORS.TEXT_WARN;
-      ctx.textAlign = 'center';
-      ctx.font = `600 12px ${FONT_UI}`;
-      ctx.fillText(hint, header.w / 2, row2Y);
-    }
+        : '';
+    const contactShort = formatContactState(p.contactState);
+    const row2Text = hint || contactShort;
+    ctx.font = `600 12px ${FONT_UI}`;
+    ctx.fillStyle = hint ? COLORS.TEXT_WARN : detected ? '#a7f3d0' : COLORS.TEXT_DIM;
+    ctx.textAlign = 'center';
+    ctx.fillText(ellipsize(ctx, row2Text, W - pad * 2), W / 2, row2Y);
   }, [isMonitoring, preserveResults]);
+
+  const drawAlertBar = useCallback((ctx: CanvasRenderingContext2D, now: number) => {
+    const { alert } = layoutRef.current;
+    if (alert.h <= 0) return;
+    const { arrhythmiaCount: arrCnt } = propsRef.current;
+    const flash = (Math.sin(now / 200) + 1) / 2;
+    ctx.fillStyle = `rgba(127, 29, 29, ${0.55 + flash * 0.15})`;
+    ctx.fillRect(alert.x, alert.y, alert.w, alert.h);
+    ctx.font = `600 13px ${FONT_UI}`;
+    ctx.fillStyle = '#fecaca';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(
+      `Arritmia detectada · ${arrCnt ?? 0} evento(s)`,
+      alert.x + alert.w / 2,
+      alert.y + alert.h / 2,
+    );
+  }, []);
 
   const drawMetricsBar = useCallback((ctx: CanvasRenderingContext2D, now: number) => {
     const { metrics } = layoutRef.current;
     const p = propsRef.current;
-    const { pressure, arrhythmiaStatus: arr, arrhythmiaCount: arrCnt } = p;
+    const { pressure } = p;
     const { isFingerDetected: fingerOn, preserveResults: preserve } = p;
     const pad = LAYOUT_PAD;
 
@@ -553,60 +602,75 @@ const PPGSignalMeter = ({
     const map = sys > 0 && dia > 0 ? Math.round(dia + (sys - dia) / 3) : 0;
     const pp = sys > 0 && dia > 0 ? sys - dia : 0;
 
+    const fitValueFont = (cx: number, colBoxW: number, text: string, startPx: number) => {
+      let px = startPx;
+      while (px >= 22) {
+        ctx.font = `700 ${px}px ${FONT_MONO}`;
+        if (ctx.measureText(text).width <= colBoxW - 8) return px;
+        px -= 2;
+      }
+      return 22;
+    };
+
     const drawVitalCol = (
       colIndex: number,
       label: string,
-      primaryLine: string,
+      value: string,
+      unit: string,
       subtitle: string,
       color: string,
-      primaryPx: number,
+      valuePx: number,
     ) => {
       const x0 = pad + colW * colIndex;
       const cx = x0 + colW / 2;
+      const boxW = colW - 12;
 
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(x0 + 8, metrics.y + 4, colW - 16, metrics.h - 8);
-      ctx.clip();
+      clipZone(ctx, x0 + 6, metrics.y + 2, boxW, metrics.h - 4, () => {
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
 
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'alphabetic';
+        ctx.font = `600 12px ${FONT_UI}`;
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(label, cx, metrics.y + 20);
 
-      ctx.font = `600 11px ${FONT_UI}`;
-      ctx.fillStyle = '#94a3b8';
-      ctx.fillText(label, cx, metrics.y + 18);
+        const numPx = fitValueFont(cx, boxW, value, valuePx);
+        ctx.font = `700 ${numPx}px ${FONT_MONO}`;
+        ctx.fillStyle = color;
+        ctx.fillText(value, cx, metrics.y + 58);
 
-      ctx.font = `700 ${primaryPx}px ${FONT_MONO}`;
-      ctx.fillStyle = color;
-      ctx.fillText(primaryLine, cx, metrics.y + 54);
-
-      if (subtitle) {
-        ctx.font = `600 10px ${FONT_UI}`;
-        ctx.fillStyle = '#64748b';
-        const maxW = colW - 20;
-        if (ctx.measureText(subtitle).width <= maxW) {
-          ctx.fillText(subtitle, cx, metrics.y + 72);
-        } else {
-          const cut = subtitle.lastIndexOf(' ', Math.floor(subtitle.length * 0.55));
-          const l1 = cut > 0 ? subtitle.slice(0, cut) : subtitle;
-          const l2 = cut > 0 ? subtitle.slice(cut + 1) : '';
-          ctx.fillText(l1, cx, metrics.y + 70);
-          if (l2) ctx.fillText(l2, cx, metrics.y + 82);
+        if (unit) {
+          ctx.font = `600 13px ${FONT_UI}`;
+          ctx.fillStyle = '#94a3b8';
+          ctx.fillText(unit, cx, metrics.y + 76);
         }
-      }
 
-      ctx.restore();
+        if (subtitle) {
+          ctx.font = `600 10px ${FONT_UI}`;
+          ctx.fillStyle = '#64748b';
+          const maxW = boxW - 4;
+          if (ctx.measureText(subtitle).width <= maxW) {
+            ctx.fillText(subtitle, cx, metrics.y + 94);
+          } else {
+            const cut = subtitle.lastIndexOf(' ', Math.floor(subtitle.length * 0.5));
+            const l1 = cut > 0 ? subtitle.slice(0, cut) : subtitle;
+            const l2 = cut > 0 ? subtitle.slice(cut + 1) : '';
+            ctx.fillText(ellipsize(ctx, l1, maxW), cx, metrics.y + 90);
+            if (l2) ctx.fillText(ellipsize(ctx, l2, maxW), cx, metrics.y + 102);
+          }
+        }
+      });
     };
 
     const hrZone = hrZoneLabel(dispBpm);
     const hrColor = dispBpm > 0 ? levelColor(hrZone.level) : COLORS.TEXT_DIM;
     drawVitalCol(
       0,
-      'Frecuencia cardíaca',
-      dispBpm > 0 ? `${dispBpm} bpm` : '—',
+      'Frec. cardíaca',
+      dispBpm > 0 ? String(dispBpm) : '—',
+      dispBpm > 0 ? 'bpm' : '',
       dispBpm > 0 ? hrZone.text : '',
       hrColor,
-      42,
+      40,
     );
 
     const spZone = spo2ZoneLabel(dispSpo2);
@@ -614,10 +678,11 @@ const PPGSignalMeter = ({
     drawVitalCol(
       1,
       'Saturación O₂',
-      dispSpo2 > 0 ? `${dispSpo2} %` : '—',
+      dispSpo2 > 0 ? String(dispSpo2) : '—',
+      dispSpo2 > 0 ? '%' : '',
       dispSpo2 > 0 ? spZone.text : '',
       spColor,
-      42,
+      40,
     );
 
     const bpZone = bpZoneLabel(sys, dia);
@@ -628,44 +693,29 @@ const PPGSignalMeter = ({
       (p.bpStatus === 'INSUFFICIENT_WINDOW' ||
         p.bpStatus === 'NO_VALID_SIGNAL' ||
         p.bpStatus === 'WARMUP');
-    const bpLine = sys > 0 ? `${sys}/${dia}` : bpPending ? '···' : '—';
-    const bpSub = sys > 0 ? bpZone.text : formatAcquisitionStatus(p.acquisitionStatus);
+    const bpVal = sys > 0 ? `${sys}/${dia}` : bpPending ? '···' : '—';
     drawVitalCol(
       2,
       'Presión arterial',
-      bpLine,
-      sys > 0 ? `MAP ${map} · PP ${pp} mmHg` : bpSub,
+      bpVal,
+      sys > 0 ? 'mmHg' : '',
+      sys > 0 ? `${bpZone.text}` : formatAcquisitionStatus(p.acquisitionStatus),
       bpColor,
-      28,
+      30,
     );
     if (sys > 0) {
-      const x0 = pad + colW * 2;
-      const cx = x0 + colW / 2;
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(x0 + 8, metrics.y + 4, colW - 16, metrics.h - 8);
-      ctx.clip();
-      ctx.font = `600 10px ${FONT_UI}`;
-      ctx.fillStyle = '#64748b';
-      ctx.textAlign = 'center';
-      ctx.fillText(bpSub, cx, metrics.y + 86);
-      ctx.restore();
-    }
-
-    if (arr?.includes('ARRITMIA') && !arr?.includes('CALIBRANDO')) {
-      const flash = (Math.sin(now / 200) + 1) / 2;
-      ctx.fillStyle = `rgba(248, 113, 113, ${0.1 + flash * 0.12})`;
-      ctx.fillRect(pad, metrics.y + 4, metrics.w - pad * 2, 16);
-      ctx.font = `600 12px ${FONT_UI}`;
-      ctx.fillStyle = COLORS.TEXT_DANGER;
-      ctx.textAlign = 'center';
-      ctx.fillText(`Arritmia detectada · ${arrCnt ?? 0} evento(s)`, metrics.w / 2, metrics.y + 16);
+      clipZone(ctx, pad + colW * 2 + 6, metrics.y + 2, colW - 12, metrics.h - 4, () => {
+        ctx.font = `600 10px ${FONT_UI}`;
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'center';
+        ctx.fillText(`MAP ${map} · PP ${pp}`, pad + colW * 2.5, metrics.y + 102);
+      });
     }
   }, []);
 
   const drawECGGrid = useCallback((ctx: CanvasRenderingContext2D) => {
     const { plot } = layoutRef.current;
-    const { traceY, traceH } = plot;
+    const { traceY, traceH, innerY, innerH } = plot;
 
     ctx.fillStyle = COLORS.PLOT_BG;
     ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
@@ -683,7 +733,7 @@ const PPGSignalMeter = ({
       ctx.moveTo(x, traceY);
       ctx.lineTo(x, traceY + traceH);
     }
-    for (let y = traceY; y <= traceY + traceH; y += minor) {
+    for (let y = innerY; y <= innerY + innerH; y += minor) {
       ctx.moveTo(plot.x, y);
       ctx.lineTo(plot.x + plot.w, y);
     }
@@ -697,7 +747,7 @@ const PPGSignalMeter = ({
       ctx.moveTo(x, traceY);
       ctx.lineTo(x, traceY + traceH);
     }
-    for (let y = traceY; y <= traceY + traceH; y += major) {
+    for (let y = innerY; y <= innerY + innerH; y += major) {
       ctx.moveTo(plot.x, y);
       ctx.lineTo(plot.x + plot.w, y);
     }
@@ -716,7 +766,7 @@ const PPGSignalMeter = ({
 
     const dr = displayRangeRef.current;
     const midV = (dr.min + dr.max) / 2;
-    const midY = traceY + ((dr.max - midV) / Math.max(dr.max - dr.min, 1e-6)) * traceH;
+    const midY = innerY + ((dr.max - midV) / Math.max(dr.max - dr.min, 1e-6)) * innerH;
 
     ctx.strokeStyle = COLORS.BASELINE;
     ctx.lineWidth = 1;
@@ -750,8 +800,7 @@ const PPGSignalMeter = ({
     const buffer = dataBufferRef.current;
     if (!buffer) return;
     const { plot, dpr } = layoutRef.current;
-    const traceY = plot.traceY;
-    const traceH = plot.traceH;
+    const { innerY, innerH } = plot;
     const plotX = plot.x;
     const plotW = plot.w;
     const { value: signalValue, isFingerDetected: detected, preserveResults: preserve, isPeak: peak } =
@@ -811,7 +860,7 @@ const PPGSignalMeter = ({
     if (windowPts.length < 2 || !Number.isFinite(wMin) || !Number.isFinite(wMax)) return;
 
     const rawRange = Math.max(wMax - wMin, 1e-6);
-    const pad = Math.max(rawRange * WAVE_VERTICAL_PAD_RATIO, rawRange * 0.008 + 0.5);
+    const pad = Math.max(rawRange * WAVE_VERTICAL_PAD_RATIO, rawRange * 0.04 + 1);
     const targetMin = wMin - pad;
     const targetMax = wMax + pad;
 
@@ -823,7 +872,7 @@ const PPGSignalMeter = ({
     const dRange = Math.max(dr.max - dr.min, 1e-6);
 
     const ageToX = (t: number) => plotX + plotW - ((tEnd - t) / WINDOW_MS) * plotW;
-    const valToY = (v: number) => traceY + ((dr.max - v) / dRange) * traceH;
+    const valToY = (v: number) => innerY + ((dr.max - v) / dRange) * innerH;
 
     windowPts.sort((a, b) => a.time - b.time);
 
@@ -848,7 +897,7 @@ const PPGSignalMeter = ({
 
     ctx.save();
     ctx.beginPath();
-    ctx.rect(plotX, traceY, plotW, traceH);
+    ctx.rect(plotX, innerY, plotW, innerH);
     ctx.clip();
 
     ctx.lineWidth = 1;
@@ -872,10 +921,16 @@ const PPGSignalMeter = ({
       ctx.lineCap = 'butt';
     };
 
-    const drawSharpTrace = (arrhythmia: boolean) => {
+    const drawInterpolatedTrace = (arrhythmia: boolean) => {
       let drawing = false;
+      let lastX = 0;
+      let lastY = 0;
+
       for (let i = 0; i < windowPts.length; i++) {
         const p = windowPts[i];
+        const x = ageToX(p.time);
+        const y = valToY(p.value);
+
         if (p.isArr !== arrhythmia) {
           if (drawing) {
             strokeTrace(arrhythmia);
@@ -884,24 +939,33 @@ const PPGSignalMeter = ({
           }
           continue;
         }
-        const x = ageToX(p.time);
-        const y = valToY(p.value);
+
         if (!drawing) {
           ctx.beginPath();
           ctx.moveTo(x, y);
           drawing = true;
-        } else {
-          ctx.lineTo(x, y);
+          lastX = x;
+          lastY = y;
+          continue;
         }
+
+        const steps = Math.max(1, Math.ceil(Math.abs(x - lastX)));
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          ctx.lineTo(lastX + (x - lastX) * t, lastY + (y - lastY) * t);
+        }
+        lastX = x;
+        lastY = y;
       }
+
       if (drawing) {
         strokeTrace(arrhythmia);
         ctx.stroke();
       }
     };
 
-    drawSharpTrace(false);
-    drawSharpTrace(true);
+    drawInterpolatedTrace(false);
+    drawInterpolatedTrace(true);
 
     const visiblePeaks: { x: number; y: number; isArr: boolean; time: number }[] = [];
     for (const beat of beatHistoryRef.current) {
@@ -954,12 +1018,12 @@ const PPGSignalMeter = ({
       const flash = Math.floor(now / 600) % 2 === 0;
       ctx.fillStyle = flash ? 'rgba(248, 113, 113, 0.85)' : 'rgba(248, 113, 113, 0.3)';
       ctx.beginPath();
-      ctx.arc(plotX + 12, traceY + 12, 3, 0, Math.PI * 2);
+      ctx.arc(plot.x + 12, plot.y + 12, 3, 0, Math.PI * 2);
       ctx.fill();
       ctx.font = `600 10px ${FONT_UI}`;
       ctx.fillStyle = '#fca5a5';
       ctx.textAlign = 'left';
-      ctx.fillText('GRAB', plotX + 20, traceY + 16);
+      ctx.fillText('GRAB', plot.x + 20, plot.y + 16);
     }
   }, []);
 
@@ -1308,6 +1372,7 @@ const PPGSignalMeter = ({
 
       drawBackground(ctx);
       drawHeader(ctx, now);
+      drawAlertBar(ctx, now);
       drawMetricsBar(ctx, now);
       drawECGGrid(ctx);
       drawSignal(ctx, now);
@@ -1329,6 +1394,7 @@ const PPGSignalMeter = ({
   }, [
     drawBackground,
     drawHeader,
+    drawAlertBar,
     drawMetricsBar,
     drawECGGrid,
     drawSignal,
