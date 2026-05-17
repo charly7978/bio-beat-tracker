@@ -13,6 +13,7 @@ import {
   levelColor,
 } from '@/lib/ui/ppgMonitorClinical';
 import { densifyCatmullRom2D } from '@/lib/ui/ppgWaveformRender';
+import { acquireCanvas2dContext, drawPlotGridStaticLayer } from '@/lib/ui/ppgPlotStaticLayer';
 
 interface PPGSignalMeterProps {
   value: number;
@@ -62,7 +63,6 @@ interface PPGSignalMeterProps {
   };
 }
 
-const TARGET_FPS = 60;            // (ANTES 30)
 const WINDOW_MS = 2000;          // 2.0s ondas aún más holgadas (antes 3600)
 const BUFFER_SIZE = 2500;        // Incrementar buffer para soportar hasta 300 FPS sin perder la cola
 const TREND_WINDOW_MS = 60_000;  // 60 s de tendencia BPM
@@ -184,6 +184,13 @@ const PPGSignalMeter = ({
     trend: { x: 0, y: 0, w: 0, h: 0 },
     footer: { x: 0, y: 0, w: 0, h: 0 },
   });
+
+  /** Capa estática del plot (cuadrícula) para `drawImage` por frame. */
+  const plotGridCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const plotGridBuiltKeyRef = useRef('');
+  const scanlinePatternRef = useRef<CanvasPattern | null>(null);
+  /** Más densidad Catmull–Rom en táctil (móvil) para curvas más suaves. */
+  const coarsePointerRef = useRef(false);
 
   // === Sync props into ref + compute HRV / trends ===
   useEffect(() => {
@@ -328,8 +335,12 @@ const PPGSignalMeter = ({
     canvas.height = Math.floor(cssH * dpr);
     canvas.style.width = `${cssW}px`;
     canvas.style.height = `${cssH}px`;
-    const ctx = canvas.getContext('2d', { alpha: false });
-    if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    try {
+      coarsePointerRef.current = window.matchMedia('(pointer: coarse)').matches;
+    } catch {
+      coarsePointerRef.current = false;
+    }
 
     // Compute zones in CSS pixels.
     // Heights are proportional, but with sensible minima.
@@ -355,6 +366,30 @@ const PPGSignalMeter = ({
     const footer = { x: 0, y: cssH - buttonsH - footerH, w: cssW, h: footerH };
 
     layoutRef.current = { dpr, width: cssW, height: cssH, header, metrics, plot, trend, footer };
+
+    const plotKey = `${plot.w}x${plot.h}x${dpr}`;
+    if (plotGridBuiltKeyRef.current !== plotKey) {
+      let g = plotGridCanvasRef.current;
+      if (!g) {
+        g = document.createElement('canvas');
+        plotGridCanvasRef.current = g;
+      }
+      g.width = Math.max(1, Math.floor(plot.w * dpr));
+      g.height = Math.max(1, Math.floor(plot.h * dpr));
+      const gctx = acquireCanvas2dContext(g);
+      if (gctx) {
+        gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        drawPlotGridStaticLayer(gctx, plot.w, plot.h, plot.h / 2, {
+          GRID_MINOR: COLORS.GRID_MINOR,
+          GRID_MAJOR: COLORS.GRID_MAJOR,
+          GRID_SEC: COLORS.GRID_SEC,
+          BASELINE: COLORS.BASELINE,
+          PANEL_BORDER: COLORS.PANEL_BORDER,
+        });
+        gctx.setTransform(1, 0, 0, 1, 0, 0);
+        plotGridBuiltKeyRef.current = plotKey;
+      }
+    }
   }, []);
 
   useLayoutEffect(() => {
@@ -372,15 +407,27 @@ const PPGSignalMeter = ({
 
   const drawBackground = useCallback((ctx: CanvasRenderingContext2D) => {
     const { width: W, height: H } = layoutRef.current;
-    
-    // 1. Pure Black Background
+
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, W, H);
 
-    // 2. Scanline overlay (CRT effect)
-    ctx.fillStyle = COLORS.SCANLINE;
-    for (let y = 0; y < H; y += 3) {
-      ctx.fillRect(0, y, W, 1);
+    let pat = scanlinePatternRef.current;
+    if (!pat) {
+      const tile = document.createElement('canvas');
+      tile.width = 1;
+      tile.height = 3;
+      const tctx = tile.getContext('2d', { alpha: true });
+      if (tctx) {
+        tctx.clearRect(0, 0, 1, 3);
+        tctx.fillStyle = COLORS.SCANLINE;
+        tctx.fillRect(0, 0, 1, 1);
+        pat = ctx.createPattern(tile, 'repeat');
+        scanlinePatternRef.current = pat;
+      }
+    }
+    if (pat) {
+      ctx.fillStyle = pat;
+      ctx.fillRect(0, 0, W, H);
     }
   }, []);
 
@@ -694,74 +741,22 @@ const PPGSignalMeter = ({
 
   const drawECGGrid = useCallback((ctx: CanvasRenderingContext2D) => {
     const { plot } = layoutRef.current;
+    const gridCanvas = plotGridCanvasRef.current;
 
-    // Plot background (subtle clinical vignette)
-    const grad = ctx.createLinearGradient(0, plot.y, 0, plot.y + plot.h);
-    grad.addColorStop(0, 'rgba(6, 12, 22, 0.70)');
-    grad.addColorStop(0.5, 'rgba(10, 18, 30, 0.60)');
-    grad.addColorStop(1, 'rgba(6, 12, 22, 0.70)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
-
-    // ECG paper grid: 1mm minor (~5px), 5mm major (~25px), 25mm/s
-    // Use a scale that fits the plot height/width.
-    const pxPerMm = Math.max(4, Math.min(8, plot.h / 30));
-    const minor = pxPerMm;
-    const major = pxPerMm * 5;
-
-    // Minor (1mm)
-    ctx.strokeStyle = COLORS.GRID_MINOR;
-    ctx.lineWidth = 0.5;
-    ctx.beginPath();
-    for (let x = plot.x; x <= plot.x + plot.w; x += minor) {
-      ctx.moveTo(x, plot.y);
-      ctx.lineTo(x, plot.y + plot.h);
+    if (gridCanvas && gridCanvas.width > 0 && gridCanvas.height > 0) {
+      ctx.drawImage(gridCanvas, plot.x, plot.y, plot.w, plot.h);
+    } else {
+      ctx.save();
+      ctx.translate(plot.x, plot.y);
+      drawPlotGridStaticLayer(ctx, plot.w, plot.h, plot.h / 2, {
+        GRID_MINOR: COLORS.GRID_MINOR,
+        GRID_MAJOR: COLORS.GRID_MAJOR,
+        GRID_SEC: COLORS.GRID_SEC,
+        BASELINE: COLORS.BASELINE,
+        PANEL_BORDER: COLORS.PANEL_BORDER,
+      });
+      ctx.restore();
     }
-    for (let y = plot.y; y <= plot.y + plot.h; y += minor) {
-      ctx.moveTo(plot.x, y);
-      ctx.lineTo(plot.x + plot.w, y);
-    }
-    ctx.stroke();
-
-    // Major (5mm)
-    ctx.strokeStyle = COLORS.GRID_MAJOR;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let x = plot.x; x <= plot.x + plot.w; x += major) {
-      ctx.moveTo(x, plot.y);
-      ctx.lineTo(x, plot.y + plot.h);
-    }
-    for (let y = plot.y; y <= plot.y + plot.h; y += major) {
-      ctx.moveTo(plot.x, y);
-      ctx.lineTo(plot.x + plot.w, y);
-    }
-    ctx.stroke();
-
-    // Second markers (1s = 25 mm at 25 mm/s sweep)
-    const oneSec = 25 * pxPerMm;
-    ctx.strokeStyle = COLORS.GRID_SEC;
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    for (let x = plot.x + plot.w; x >= plot.x; x -= oneSec) {
-      ctx.moveTo(x, plot.y);
-      ctx.lineTo(x, plot.y + plot.h);
-    }
-    ctx.stroke();
-
-    // Baseline
-    ctx.strokeStyle = COLORS.BASELINE;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([8, 6]);
-    ctx.beginPath();
-    ctx.moveTo(plot.x, plot.centerY);
-    ctx.lineTo(plot.x + plot.w, plot.centerY);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Plot border w/ corner ticks
-    ctx.strokeStyle = COLORS.PANEL_BORDER;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(plot.x, plot.y, plot.w, plot.h);
 
     // Seconds labels along bottom (White)
     const seconds = Math.floor(WINDOW_MS / 1000);
@@ -934,7 +929,10 @@ const PPGSignalMeter = ({
       isArr: boolean,
     ) => {
       if (knotSlice.length < 2) return;
-      const dense = densifyCatmullRom2D(knotSlice, 8);
+      const dense = densifyCatmullRom2D(
+        knotSlice,
+        coarsePointerRef.current ? 11 : 8,
+      );
       if (dense.length < 2) return;
 
       ctx.beginPath();
@@ -1551,9 +1549,6 @@ const PPGSignalMeter = ({
     if (isRunningRef.current) return;
     isRunningRef.current = true;
 
-    const frameTime = 1000 / TARGET_FPS;
-    let lastRenderTime = 0;
-
     const render = () => {
       if (!isRunningRef.current) return;
       const canvas = canvasRef.current;
@@ -1562,17 +1557,21 @@ const PPGSignalMeter = ({
         animationRef.current = requestAnimationFrame(render);
         return;
       }
-      const ctx = canvas.getContext('2d', { alpha: false });
+      const ctx = acquireCanvas2dContext(canvas);
       if (!ctx) {
         animationRef.current = requestAnimationFrame(render);
         return;
       }
-      const now = Date.now();
-      if (now - lastRenderTime < frameTime) {
-        animationRef.current = requestAnimationFrame(render);
-        return;
+      const { dpr } = layoutRef.current;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      const anyCtx = ctx as CanvasRenderingContext2D & { textRendering?: string };
+      if ('textRendering' in anyCtx) {
+        anyCtx.textRendering = 'geometricPrecision';
       }
-      lastRenderTime = now;
+
+      const now = Date.now();
 
       const p = propsRef.current;
       const fingerOn = p.isFingerDetected;
@@ -1626,10 +1625,13 @@ const PPGSignalMeter = ({
   }, [onReset]);
 
   return (
-    <div ref={containerRef} className="fixed inset-0 bg-slate-950 overflow-hidden">
+    <div
+      ref={containerRef}
+      className="fixed inset-0 bg-slate-950 overflow-hidden touch-none [overscroll-behavior:none] pt-[env(safe-area-inset-top)]"
+    >
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 w-full h-full"
+        className="absolute inset-0 w-full h-full touch-none"
       />
 
       {/* Pulse indicator overlay (top-left near header status) */}
@@ -1650,7 +1652,7 @@ const PPGSignalMeter = ({
       </div>
 
       {/* Action buttons */}
-      <div className="fixed bottom-0 left-0 right-0 h-12 grid grid-cols-2 z-10">
+      <div className="fixed bottom-0 left-0 right-0 h-12 grid grid-cols-2 z-10 pb-[max(0px,env(safe-area-inset-bottom))]">
         <button
           onClick={onStartMeasurement}
           className={`font-semibold text-sm transition-colors border-t border-slate-700/60 ${
