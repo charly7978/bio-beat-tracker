@@ -29,7 +29,7 @@ export interface SignalQualityMetrics {
   motionScore: number | null;
   saturationRatio: number;
   /** Fracción de frames con canal muy oscuro (subexposición) */
-  underexposureRatio?: number;
+  underexposureRatio: number;
   frameDropRatio: number;
   fpsEffective: number;
   timestampJitterMs: number;

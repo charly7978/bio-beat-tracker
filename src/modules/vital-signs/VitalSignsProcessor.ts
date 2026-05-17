@@ -49,12 +49,14 @@ interface RRData {
 // getMonotonicNow importado desde utils/physio.ts
 
 /**
- * PROCESADOR DE SIGNOS VITALES - SIN CLAMPS
+ * PROCESADOR DE SIGNOS VITALES
  *
- * CAMBIOS PRINCIPALES:
- * 1. SpO2 ratio-of-ratios (Beer–Lambert aprox.) + suavizado; la UI muestra estimación cuando SQI+PI son válidos aunque no haya perfil de oxímetro en `CalibrationManager`.
- * 2. Presión arterial PWA morfológica; misma política: estimación visible sin tensiómetro de referencia, con estado `REQUIRES_CALIBRATION` y menor confianza.
- * 3. `processSignal` acepta PI del PPG para no desalinear `isClinicallyValid` respecto al canal RGB usado solo en SpO2.
+ * Política de salida:
+ * - SpO2 y PA solo `VALID` con calibración individual vigente en `CalibrationManager` y SQI/entorno
+ *   por encima de `VITAL_THRESHOLDS.GATES` (alineado con `savePolicy` / Supabase).
+ * - La UI puede seguir mostrando estimaciones con `REQUIRES_CALIBRATION` o `LOW_SIGNAL_QUALITY`
+ *   cuando la señal es usable pero no certificable.
+ * - `processSignal` acepta PI del PPG y bundle SQI del pipeline para alinear gating con el canal real.
  *
  * Referencias:
  * - Ratio-of-Ratios: Webster 1997, Tremper 1989
@@ -312,13 +314,23 @@ export class VitalSignsProcessor {
       periodicity: null,
       motionScore: null,
       saturationRatio: 0,
+      underexposureRatio: 0,
       frameDropRatio: 0,
       fpsEffective: 30,
       timestampJitterMs: 0,
     };
 
-    const hrMinSqi = VITAL_THRESHOLDS.QUALITY.MIN_FOR_HR;
-    const hrOk = this.lastBPM > 0 && sqi >= hrMinSqi;
+    const G = VITAL_THRESHOLDS.GATES;
+    const motion = commonSQM.motionScore ?? 0;
+    const periodicity = commonSQM.periodicity ?? 0;
+
+    const hrMinSqi = G.HR_VALID_MIN_SQI;
+    const hrPeriodicOk = periodicity >= 0.1 || sqi >= 38;
+    const hrOk =
+      this.lastBPM > 0 &&
+      sqi >= hrMinSqi &&
+      this.validPulseCount >= 2 &&
+      hrPeriodicOk;
     const bpUiReady =
       vitalUiGate || (this.validPulseCount >= 2 && sqi >= 12);
 
@@ -377,15 +389,32 @@ export class VitalSignsProcessor {
     const spo2HasDisplay =
       spo2Shown >= 70 && spo2Shown <= 100;
 
-    const spo2Status: MeasurementStatus = !spo2UiReady && !holdActive
-      ? "LOW_SIGNAL_QUALITY"
-      : !spo2HasDisplay
-        ? "NO_VALID_SIGNAL"
-        : spo2Calib.expired
-          ? "CALIBRATION_EXPIRED"
-          : spo2Calib.available
-            ? "VALID"
-            : "REQUIRES_CALIBRATION";
+    const spo2CalibOk = spo2Calib.available && !spo2Calib.expired;
+    const spo2SignalEnvOk =
+      sqi >= G.SPO2_VALID_MIN_SQI &&
+      motion < VITAL_THRESHOLDS.QUALITY.MAX_MOTION &&
+      commonSQM.saturationRatio < 0.72 &&
+      this.rgbData.redDC >= VITAL_THRESHOLDS.SPO2.MIN_RED_DC * 0.75 &&
+      (commonSQM.snr == null || commonSQM.snr >= 0.12);
+
+    let spo2Status: MeasurementStatus;
+    if (!spo2UiReady && !holdActive) {
+      spo2Status = 'LOW_SIGNAL_QUALITY';
+    } else if (!spo2HasDisplay) {
+      spo2Status = 'NO_VALID_SIGNAL';
+    } else if (spo2Calib.expired) {
+      spo2Status = 'CALIBRATION_EXPIRED';
+    } else if (!spo2Calib.available) {
+      spo2Status = 'REQUIRES_CALIBRATION';
+    } else if (!spo2SignalEnvOk) {
+      spo2Status =
+        motion >= VITAL_THRESHOLDS.QUALITY.MAX_MOTION * 0.92
+          ? 'MOTION_ARTIFACT'
+          : 'LOW_SIGNAL_QUALITY';
+    } else {
+      spo2Status = 'VALID';
+    }
+
     const bpSysShown =
       bpUiReady && this.measurements.systolicPressure > 0
         ? this.measurements.systolicPressure
@@ -404,15 +433,29 @@ export class VitalSignsProcessor {
       bpSysShown > 0 &&
       bpDiaShown > 0;
 
-    const bpStatus: MeasurementStatus = !bpUiReady
-      ? "LOW_SIGNAL_QUALITY"
-      : !bpHasMorph
-        ? "NO_VALID_SIGNAL"
-        : bpCalib.expired
-          ? "CALIBRATION_EXPIRED"
-          : bpCalib.available
-            ? "VALID"
-            : "REQUIRES_CALIBRATION";
+    const bpCalibOk = bpCalib.available && !bpCalib.expired;
+    const bpSignalEnvOk =
+      sqi >= G.BP_VALID_MIN_SQI &&
+      motion < VITAL_THRESHOLDS.QUALITY.MAX_MOTION &&
+      commonSQM.saturationRatio < 0.72;
+
+    let bpStatus: MeasurementStatus;
+    if (!bpUiReady) {
+      bpStatus = 'LOW_SIGNAL_QUALITY';
+    } else if (!bpHasMorph) {
+      bpStatus = 'NO_VALID_SIGNAL';
+    } else if (bpCalib.expired) {
+      bpStatus = 'CALIBRATION_EXPIRED';
+    } else if (!bpCalib.available) {
+      bpStatus = 'REQUIRES_CALIBRATION';
+    } else if (!bpSignalEnvOk) {
+      bpStatus =
+        motion >= VITAL_THRESHOLDS.QUALITY.MAX_MOTION * 0.92
+          ? 'MOTION_ARTIFACT'
+          : 'LOW_SIGNAL_QUALITY';
+    } else {
+      bpStatus = 'VALID';
+    }
 
     const respOk = respEst && respEst.score >= 0.14;
     const respStatus: MeasurementStatus = !vitalUiGate
@@ -423,39 +466,86 @@ export class VitalSignsProcessor {
           ? "VALID"
           : "NO_VALID_SIGNAL";
 
+    let hrStatus: MeasurementStatus;
+    if (hrOk) hrStatus = 'VALID';
+    else if (sqi < 8) hrStatus = 'LOW_SIGNAL_QUALITY';
+    else if (!hrPeriodicOk) hrStatus = 'NO_VALID_SIGNAL';
+    else if (sqi < hrMinSqi) hrStatus = 'LOW_SIGNAL_QUALITY';
+    else if (this.validPulseCount < 2) hrStatus = 'INSUFFICIENT_WINDOW';
+    else hrStatus = 'NO_VALID_SIGNAL';
+
+    const hrReason = hrOk
+      ? 'BPM desde ensemble Elgendi + Pan–Tompkins PPG + autocorrelación'
+      : !hrPeriodicOk
+        ? 'Periodicidad insuficiente en ventana actual'
+        : this.validPulseCount < 2
+          ? 'Menos de dos intervalos RR fisiológicos recientes'
+          : sqi < hrMinSqi
+            ? `SQI ${Math.round(sqi)} por debajo del umbral ${hrMinSqi} para BPM válido`
+            : 'Sin consenso fiable de detectores / frecuencia';
+
+    const arrLearning = this.measurements.arrhythmiaStatus.startsWith('CALIBR');
+    let arrhythmiaStatusOut: MeasurementStatus;
+    if (arrLearning) {
+      arrhythmiaStatusOut = 'WARMUP';
+    } else if (!vitalUiGate) {
+      arrhythmiaStatusOut = 'LOW_SIGNAL_QUALITY';
+    } else if (motion >= G.ARRHYTHMIA_MAX_MOTION) {
+      arrhythmiaStatusOut = 'MOTION_ARTIFACT';
+    } else if (sqi < VITAL_THRESHOLDS.ARRHYTHMIA.MIN_SQI) {
+      arrhythmiaStatusOut = 'LOW_SIGNAL_QUALITY';
+    } else if (this.validPulseCount < 3) {
+      arrhythmiaStatusOut = 'INSUFFICIENT_WINDOW';
+    } else {
+      arrhythmiaStatusOut = 'VALID';
+    }
+
+    const arrhythmiaConfidence = clamp(
+      (arrhythmiaStatusOut === 'VALID' ? 0.7 : 0.18) + sqi / 300 - motion * 0.4,
+      0,
+      0.9,
+    );
+
     const res: VitalSignsResult = {
       heartRate: {
         name: "Heart Rate",
         value: hrOk ? Math.round(this.lastBPM) : null,
         unit: "bpm",
         timestamp: now,
-        confidence: hrOk ? Math.min(0.98, 0.45 + sqi / 200) : (sqi >= hrMinSqi ? 0.35 : 0.12),
-        status: !hrOk && sqi < 12 ? "LOW_SIGNAL_QUALITY" : (!hrOk ? "NO_VALID_SIGNAL" : "VALID"),
-        reason: hrOk
-          ? "BPM desde ensemble Elgendi + Pan–Tompkins PPG + autocorrelación"
-          : (sqi < 12 ? "SQI insuficiente para validar picos" : "Sin consenso fiable de detectores / frecuencia"),
+        confidence: hrOk ? Math.min(0.98, 0.45 + sqi / 200) : (sqi >= hrMinSqi ? 0.32 : 0.12),
+        status: hrStatus,
+        reason: hrReason,
         signalQuality: { ...commonSQM },
         diagnostics: { bpmRaw: this.lastBPM }
       },
       spo2: {
         name: "SpO2",
-        value: spo2HasDisplay ? Math.round(this.measurements.spo2) : null,
+        value: spo2HasDisplay ? Math.round(spo2Shown) : null,
         unit: "%",
         timestamp: now,
-        confidence: !spo2HasDisplay
-          ? 0.22
-          : spo2Calib.available && !spo2Calib.expired
+        confidence:
+          spo2Status === 'VALID'
             ? 0.88
-            : spo2Calib.expired
-              ? 0.34
-              : 0.52,
+            : spo2HasDisplay
+              ? spo2CalibOk
+                ? 0.62
+                : 0.48
+              : 0.22,
         status: spo2Status,
         reason:
-          spo2Calib.available && !spo2Calib.expired
-            ? "Beer–Lambert ratio-of-ratios con perfil de referencia vigente"
-            : "Estimación ratio-of-ratios cámara+flash (no sustituye oxímetro certificado); calibre con oxímetro para uso clínico",
+          spo2Status === 'VALID'
+            ? 'Beer–Lambert ratio-of-ratios con perfil de referencia vigente y SQI suficiente'
+            : spo2Calib.expired
+              ? 'Calibración SpO2 vencida: no se marca como válido hasta renovar referencia'
+              : !spo2Calib.available
+                ? 'Estimación ratio-of-ratios cámara+flash; calibre con oxímetro para valor clínicamente anclado'
+                : spo2Status === 'MOTION_ARTIFACT'
+                  ? 'Artefacto de movimiento o inestabilidad; SpO2 no validado'
+                  : 'SQI o perfusión insuficientes para validar SpO2 pese a estimación interna',
         signalQuality: { ...commonSQM },
-        diagnostics: { rValue: this.rValueHistory[this.rValueHistory.length - 1] },
+        diagnostics: {
+          rValue: this.rValueHistory[this.rValueHistory.length - 1] ?? null,
+        },
         calibration: spo2Calib
       },
       bloodPressure: {
@@ -470,16 +560,22 @@ export class VitalSignsProcessor {
         timestamp: now,
         confidence: !bpHasMorph
           ? 0.26
-          : bpCalib.available && !bpCalib.expired && this.lastBPConfidence === 'HIGH'
+          : bpCalibOk && this.lastBPConfidence === 'HIGH'
             ? 0.9
-            : bpCalib.available && !bpCalib.expired
+            : bpCalibOk
               ? 0.64
               : 0.4,
         status: bpStatus,
         reason:
-          bpCalib.available && !bpCalib.expired
-            ? "PWA morfológica con perfil calibrado"
-            : "Estimación PWA desde morfología PPG (sin tensiómetro de referencia); valor orientativo",
+          bpStatus === 'VALID'
+            ? 'PWA morfológica con perfil calibrado y SQI suficiente'
+            : bpCalib.expired
+              ? 'Calibración de tensión arterial vencida'
+              : !bpCalib.available
+                ? 'Estimación PWA desde morfología PPG; requiere referencia de tensiómetro individual'
+                : bpStatus === 'MOTION_ARTIFACT'
+                  ? 'Movimiento excesivo para validar PA desde PPG'
+                  : 'Morfología o calidad de señal insuficientes para PA validada',
         signalQuality: { ...commonSQM },
         diagnostics: { featureQuality: this.lastBPFeatureQuality },
         calibration: bpCalib
@@ -502,9 +598,16 @@ export class VitalSignsProcessor {
         value: { count: this.measurements.arrhythmiaCount, status: this.measurements.arrhythmiaStatus },
         unit: "events", 
         timestamp: now, 
-        confidence: vitalUiGate ? 0.85 : 0.2,
-        status: vitalUiGate ? "VALID" : "LOW_SIGNAL_QUALITY", 
-        reason: "RR interval variability analysis (RMSSD/Shannon)",
+        confidence: arrhythmiaConfidence,
+        status: arrhythmiaStatusOut, 
+        reason:
+          arrhythmiaStatusOut === 'VALID'
+            ? 'Variabilidad RR (RMSSD / entropía) con SQI y movimiento dentro de umbral'
+            : arrhythmiaStatusOut === 'MOTION_ARTIFACT'
+              ? 'Movimiento demasiado alto para interpretar irregularidad de pulso'
+              : arrhythmiaStatusOut === 'INSUFFICIENT_WINDOW'
+                ? 'Ventana RR insuficiente para análisis de regularidad'
+                : 'Calidad de señal insuficiente para análisis de regularidad',
         signalQuality: { ...commonSQM }, 
         diagnostics: { rmssd: this.measurements.lastArrhythmiaData?.rmssd }
       },

@@ -343,12 +343,15 @@ export class HeartBeatProcessor {
 
     const confidence = this.calculateConfidence(ensembleConf, isPeak);
 
+    const publishedSqi =
+      this.ppgSqi >= 5 ? Math.round(clamp(this.ppgSqi, 0, 100)) : this.signalQualityIndex;
+
     return {
       bpm: publishBpm,
       confidence,
       isPeak,
       filteredValue: normalizedValue,
-      sqi: this.signalQualityIndex,
+      sqi: publishedSqi,
       consensusReason: emitReason,
       rrData: {
         intervals: [...this.rrIntervals],

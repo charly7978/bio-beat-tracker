@@ -962,10 +962,10 @@ const Index = () => {
           reacquireHeartPeaks(nowT);
           setVitalSigns(prev => ({
             ...prev,
-            spo2: { ...prev.spo2, value: 0, status: 'NO_VALID_SIGNAL' },
+            spo2: { ...prev.spo2, value: null, status: 'NO_VALID_SIGNAL' },
             bloodPressure: {
               ...prev.bloodPressure,
-              value: { systolic: 0, diastolic: 0 },
+              value: null,
               status: 'NO_VALID_SIGNAL',
             },
           }));
@@ -973,12 +973,12 @@ const Index = () => {
             ...vitalSignsRef.current,
             spo2: {
               ...vitalSignsRef.current.spo2,
-              value: 0,
+              value: null,
               status: 'NO_VALID_SIGNAL',
             },
             bloodPressure: {
               ...vitalSignsRef.current.bloodPressure,
-              value: { systolic: 0, diastolic: 0 },
+              value: null,
               status: 'NO_VALID_SIGNAL',
             },
           };
@@ -995,15 +995,17 @@ const Index = () => {
         lastGoodBpmRef.current = 0;
         lastRrSnapshotRef.current = null;
         setVitalSigns(prev => (
-          prev.heartRate.value === 0 &&
+          (prev.heartRate.value == null || prev.heartRate.value === 0) &&
           (prev.spo2.value == null || prev.spo2.value === 0) &&
-          (prev.bloodPressure.value?.systolic ?? 0) === 0
+          (prev.bloodPressure.value == null ||
+            ((prev.bloodPressure.value?.systolic ?? 0) === 0 &&
+              (prev.bloodPressure.value?.diastolic ?? 0) === 0))
             ? prev
             : {
                 ...prev,
-                heartRate: { ...prev.heartRate, value: 0, status: "NO_VALID_SIGNAL" },
-                spo2: { ...prev.spo2, value: 0, status: "NO_VALID_SIGNAL" },
-                bloodPressure: { ...prev.bloodPressure, value: { systolic: 0, diastolic: 0 }, status: "NO_VALID_SIGNAL" },
+                heartRate: { ...prev.heartRate, value: null, status: "NO_VALID_SIGNAL" },
+                spo2: { ...prev.spo2, value: null, status: "NO_VALID_SIGNAL" },
+                bloodPressure: { ...prev.bloodPressure, value: null, status: "NO_VALID_SIGNAL" },
                 arrhythmia: { ...prev.arrhythmia, value: { count: 0, status: "NORMAL" } },
                 signalQuality: 0,
               }

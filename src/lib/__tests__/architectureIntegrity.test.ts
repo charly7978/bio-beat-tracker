@@ -62,6 +62,7 @@ describe('architecture integrity', () => {
     expect(VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS).toBe(270);
     const cfg = readFileSync(join(ROOT, 'src/config/vitalThresholds.ts'), 'utf8');
     expect(cfg).toContain('PHYSIOLOGICAL_RR_MIN_MS');
+    expect(cfg).toContain('GATES:');
     expect(existsSync(join(ROOT, 'docs/ARCHITECTURE.md'))).toBe(true);
   });
 });

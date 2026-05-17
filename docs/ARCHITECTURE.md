@@ -33,7 +33,8 @@ Index.tsx → PPGSignalMeter + DebugTelemetryPanel + Supabase
 | Dominio | Módulo canónico |
 |--------|------------------|
 | Contrato de medición | `src/types/measurements.ts` (`VitalMeasurement`, `PeakDetectionResult`) |
-| Umbrales fisiológicos | `src/config/vitalThresholds.ts` |
+| Umbrales fisiológicos y **gates de `VALID`** | `src/config/vitalThresholds.ts` (`VITAL_THRESHOLDS.GATES`) |
+| Restricciones de captura (`getUserMedia`) | `src/config/cameraConstraints.ts` |
 | DSP / picos (ventanas, BPM min/max) | `src/config/signalProcessing.ts` |
 | Filtros y utilidades DSP | `src/modules/signal-processing/shared/dsp.ts` |
 | SQI central | `src/modules/signal-quality/SignalQualityIndex.ts` |
@@ -44,7 +45,7 @@ CI ejecuta `npm run check:architecture` para impedir procesadores paralelos y ru
 
 ## Cámara y flash
 
-`CameraView` usa la API estándar:
+`CameraView` usa la API estándar y **constraints declarados** en `src/config/cameraConstraints.ts` (una sola fuente para `getUserMedia`):
 
 - `getSupportedConstraints`, `getCapabilities`, `getSettings`, `applyConstraints`
 - Informe `DeviceCapabilityReport`: resolución real, FPS efectivo, `timestampJitterMs`, `frameDropRatio`, torch soportado/activo
@@ -88,11 +89,11 @@ Reglas típicas:
 
 | Medición | Condición para `VALID` |
 |----------|-------------------------|
-| BPM | dedo, ventana, SQI, ensemble coherente, sin movimiento dominante |
-| SpO2 | calibración vigente, canales estables, sin saturación |
-| PA | **calibración individual vigente** (`REQUIRES_CALIBRATION` / `CALIBRATION_EXPIRED` si no) |
-| Respiración | ventana mínima, SQI, BPM estable |
-| Irregularidad | RR fiables del ensemble |
+| BPM | dedo, ≥2 RR fisiológicos, SQI ≥ `GATES.HR_VALID_MIN_SQI`, periodicidad mínima en bundle SQI |
+| SpO2 | **perfil de calibración vigente** + SQI ≥ `GATES.SPO2_VALID_MIN_SQI` + movimiento/saturación/rojo dentro de umbral |
+| PA | **calibración individual vigente** + morfología PWA + SQI ≥ `GATES.BP_VALID_MIN_SQI` |
+| Respiración | ventana mínima, SQI, estabilidad de frames |
+| Irregularidad | RR fiables, SQI ≥ `ARRHYTHMIA.MIN_SQI`, movimiento < `GATES.ARRHYTHMIA_MAX_MOTION` |
 
 ## UI de depuración
 

@@ -1,5 +1,10 @@
 import React, { useRef, useEffect, forwardRef, useImperativeHandle } from "react";
 import { createLogger } from "@/utils/logger";
+import {
+  PPG_CAMERA_GET_USER_MEDIA,
+  PPG_CAMERA_TARGET_FPS,
+  PPG_TORCH_RETRY_DELAY_MS,
+} from "@/config/cameraConstraints";
 
 const log = createLogger("CameraView");
 
@@ -83,7 +88,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
           torchSupported: !!caps.torch,
           torchActive: settings.torch === true,
           torchApplyVerified: torchVerified,
-          fpsRequested: 30,
+          fpsRequested: PPG_CAMERA_TARGET_FPS,
           fpsEffective: settings.frameRate || 0,
           resolution: { width: settings.width || 0, height: settings.height || 0 },
           exposureMode: settings.exposureMode,
@@ -150,7 +155,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
 
       if (caps.frameRate) {
         const maxFps = caps.frameRate.max ?? 30;
-        const targetFps = Math.min(30, maxFps);
+        const targetFps = Math.min(PPG_CAMERA_TARGET_FPS, maxFps);
         constraints.push({ frameRate: targetFps });
       }
 
@@ -224,16 +229,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
 
       try {
         // Una sola apertura: facingMode environment + constraints óptimos para PPG.
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 640, max: 960 },
-            height: { ideal: 480, max: 720 },
-            // 30 fps estable: varios Motorola fallan con ideal 60 + min 24 (overconstraint / AE inestable).
-            frameRate: { ideal: 30, min: 15, max: 30 },
-          },
-        });
+        const stream = await navigator.mediaDevices.getUserMedia(PPG_CAMERA_GET_USER_MEDIA);
 
         if (!mounted) {
           stream.getTracks().forEach((t) => t.stop());
@@ -253,7 +249,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
           await stabilizeTrack(track);
           let torchOn = await activateTorch(track);
           if (!torchOn) {
-            await new Promise((r) => setTimeout(r, 400));
+            await new Promise((r) => setTimeout(r, PPG_TORCH_RETRY_DELAY_MS));
             torchOn = await activateTorch(track);
           }
           if (torchOn) log.info("Flash activado");

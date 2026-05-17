@@ -9,10 +9,13 @@ const sqm = {
   periodicity: null as number | null,
   motionScore: null as number | null,
   saturationRatio: 0,
+  underexposureRatio: 0,
   frameDropRatio: 0,
   fpsEffective: 30,
   timestampJitterMs: 0,
 };
+
+const calibOk = { required: true as const, available: true as const, expired: false as const };
 
 function makeVs(hrStatus: VitalSignsResult['heartRate']['status'], sqiRound: number): VitalSignsResult {
   const now = Date.now();
@@ -29,7 +32,7 @@ function makeVs(hrStatus: VitalSignsResult['heartRate']['status'], sqiRound: num
   });
   return {
     heartRate: { ...m('HR', 72), status: hrStatus },
-    spo2: m('SpO2', 97),
+    spo2: { ...m('SpO2', 97), calibration: calibOk },
     bloodPressure: {
       name: 'BP',
       value: { systolic: 120, diastolic: 80 },
@@ -40,6 +43,7 @@ function makeVs(hrStatus: VitalSignsResult['heartRate']['status'], sqiRound: num
       reason: '',
       signalQuality: { ...sqm, sqi: sqiRound },
       diagnostics: {},
+      calibration: calibOk,
     },
     respiration: { ...m('RR', null), status: 'INSUFFICIENT_WINDOW' },
     arrhythmia: {
@@ -89,5 +93,30 @@ describe('evaluateFinalMeasurementSave', () => {
     vs.heartRate = { ...vs.heartRate, value: 30 };
     const r = evaluateFinalMeasurementSave(vs, 60);
     expect(r.canSaveFinal).toBe(true);
+  });
+
+  it('rechaza BP con REQUIRES_CALIBRATION aunque existan valores numéricos', () => {
+    const vs = makeVs('VALID', 60);
+    vs.bloodPressure = {
+      ...vs.bloodPressure,
+      status: 'REQUIRES_CALIBRATION',
+      calibration: { required: true, available: false, expired: false },
+    };
+    const r = evaluateFinalMeasurementSave(vs, 60);
+    expect(r.canSaveFinal).toBe(false);
+    expect(r.reasons).toContain('BP_NOT_VALID');
+  });
+
+  it('rechaza SpO2 sin calibración vigente aunque status sea numéricamente plausible', () => {
+    const vs = makeVs('VALID', 60);
+    vs.spo2 = {
+      ...vs.spo2,
+      status: 'VALID',
+      value: 97,
+      calibration: { required: true, available: false, expired: false },
+    };
+    const r = evaluateFinalMeasurementSave(vs, 60);
+    expect(r.canSaveFinal).toBe(false);
+    expect(r.reasons).toContain('SPO2_NOT_VALID');
   });
 });

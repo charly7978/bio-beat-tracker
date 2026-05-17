@@ -96,6 +96,21 @@ export const VITAL_THRESHOLDS = {
     },
   },
   
+  /**
+   * Umbrales para marcar `MeasurementStatus === "VALID"` en vitales derivados de cámara.
+   * Por debajo: señal puede mostrarse como orientativa con otros estados (p. ej. REQUIRES_CALIBRATION).
+   */
+  GATES: {
+    /** SpO2 solo VALID con SQI alto + calibración vigente (alineado con guardado final) */
+    SPO2_VALID_MIN_SQI: 55,
+    /** PA solo VALID con perfil de tensiómetro vigente + SQI alto */
+    BP_VALID_MIN_SQI: 55,
+    /** BPM publicado como VALID: más estricto que el mínimo solo para “ver onda” */
+    HR_VALID_MIN_SQI: 22,
+    /** Irregularidad pulsar: no declarar análisis fiable con movimiento dominante */
+    ARRHYTHMIA_MAX_MOTION: 0.42,
+  },
+
   // SIGNAL QUALITY (SQI)
   QUALITY: {
     /** SQI mínimo para publicar BPM en UI (la onda puede verse antes) */

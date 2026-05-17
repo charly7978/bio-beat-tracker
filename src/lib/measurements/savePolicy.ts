@@ -84,8 +84,12 @@ export function evaluateFinalMeasurementSave(
   }
 
   const spo2Val = vitalSigns.spo2.value;
+  const spo2CalibOk =
+    vitalSigns.spo2.calibration?.available === true &&
+    vitalSigns.spo2.calibration?.expired !== true;
   const spo2Ok =
     vitalSigns.spo2.status === 'VALID' &&
+    spo2CalibOk &&
     spo2Val != null &&
     spo2Val >= VITAL_THRESHOLDS.SPO2.MIN_VALID &&
     spo2Val <= VITAL_THRESHOLDS.SPO2.MAX_VALID;
@@ -95,9 +99,12 @@ export function evaluateFinalMeasurementSave(
   }
 
   const bpVal = vitalSigns.bloodPressure.value;
+  const bpCalibOk =
+    vitalSigns.bloodPressure.calibration?.available === true &&
+    vitalSigns.bloodPressure.calibration?.expired !== true;
   const bpOk =
-    (vitalSigns.bloodPressure.status === 'VALID' ||
-      vitalSigns.bloodPressure.status === 'REQUIRES_CALIBRATION') &&
+    vitalSigns.bloodPressure.status === 'VALID' &&
+    bpCalibOk &&
     bpVal != null &&
     bpVal.systolic > 0 &&
     bpVal.diastolic > 0;

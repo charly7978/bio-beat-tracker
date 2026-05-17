@@ -11,6 +11,7 @@ const emptySq: SignalQualityMetrics = {
   periodicity: null,
   motionScore: null,
   saturationRatio: 0,
+  underexposureRatio: 0,
   frameDropRatio: 0,
   fpsEffective: 30,
   timestampJitterMs: 0,
@@ -27,15 +28,15 @@ export function createDefaultVitalSignsResult(): VitalSignsResult {
     diagnostics: {},
   };
   return {
-    heartRate: { ...base, name: 'HR', value: 0, unit: 'bpm' },
-    spo2: { ...base, name: 'SpO2', value: 0, unit: '%' },
+    heartRate: { ...base, name: 'Heart Rate', value: null, unit: 'bpm' },
+    spo2: { ...base, name: 'SpO2', value: null, unit: '%' },
     bloodPressure: {
       ...base,
       name: 'BP',
-      value: { systolic: 0, diastolic: 0 },
+      value: null,
       unit: 'mmHg',
     },
-    respiration: { ...base, name: 'RR', value: 0, unit: 'rpm' },
+    respiration: { ...base, name: 'RR', value: null, unit: 'rpm' },
     arrhythmia: {
       ...base,
       name: 'Arrhythmia',
