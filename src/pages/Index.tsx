@@ -1368,6 +1368,11 @@ const Index = () => {
                     : undefined,
               }}
               bpStatus={vitalSigns.bloodPressure.status}
+              contactState={
+                lastSignal?.contactState ??
+                (lastSignal?.fingerDetected ? 'UNSTABLE_CONTACT' : 'NO_CONTACT')
+              }
+              acquisitionStatus={acquisitionStatusLabel}
               diagnostics={currentDiagnostics}
             />
           </div>

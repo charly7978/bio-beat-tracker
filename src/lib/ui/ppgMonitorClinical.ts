@@ -2,6 +2,7 @@
  * Etiquetas y umbrales clínicos para el monitor PPG (solo presentación).
  */
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
+import { isPhysiologicalRR } from '@/utils/physio';
 
 export type ClinicalLevel = 'normal' | 'warn' | 'danger' | 'dim';
 
@@ -83,4 +84,87 @@ export function isHrInRange(bpm: number): boolean {
 
 export function isSpo2InRange(spo2: number): boolean {
   return spo2 >= SPO2.MIN_VALID && spo2 <= SPO2.MAX_VALID;
+}
+
+/** Índice de irregularidad RR (CV %) — referencia flux-interval / FA PPG ~20%. */
+export function computeRrIrregularityPct(rrIntervals: number[]): number | null {
+  const valid = rrIntervals.filter((rr) => isPhysiologicalRR(rr));
+  if (valid.length < 2) return null;
+  const mean = valid.reduce((a, v) => a + v, 0) / valid.length;
+  if (mean <= 0) return null;
+  const variance = valid.reduce((a, v) => a + (v - mean) ** 2, 0) / valid.length;
+  const cvPct = (Math.sqrt(variance) / mean) * 100;
+  return Math.round(cvPct);
+}
+
+export interface RhythmPanelInfo {
+  title: string;
+  detail: string;
+  guidance: string;
+  level: ClinicalLevel;
+  irregularityPct: number | null;
+}
+
+export function buildRhythmPanel(
+  arrhythmiaStatus: string | undefined,
+  count: number,
+  rrIntervals: number[],
+  hrv?: { sdnn: number; rmssd: number },
+): RhythmPanelInfo {
+  const irr = computeRrIrregularityPct(rrIntervals);
+  const calibrating = arrhythmiaStatus?.includes('CALIBRANDO');
+  const detected =
+    !calibrating && (arrhythmiaStatus?.includes('ARRITMIA') || (irr !== null && irr >= 20));
+
+  const hrvLine =
+    hrv && hrv.sdnn > 0
+      ? `SDNN ${hrv.sdnn} ms · RMSSD ${hrv.rmssd > 0 ? hrv.rmssd : '—'} ms`
+      : '';
+
+  if (detected) {
+    return {
+      title: 'ARRITMIA / RITMO IRREGULAR',
+      detail: [
+        count > 0 ? `${count} latido(s) marcado(s)` : null,
+        irr !== null ? `CV-RR ${irr}% (referencia alerta ≥20%)` : null,
+        hrvLine || null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      guidance:
+        'Segmentos en rojo = intervalos anómalos. Confirmar con ECG de 12 derivaciones si persiste.',
+      level: 'danger',
+      irregularityPct: irr,
+    };
+  }
+
+  if (irr !== null && irr >= 12) {
+    return {
+      title: 'RITMO SINUSAL CON VARIACIÓN',
+      detail: `CV-RR ${irr}% · ${hrvLine || 'variabilidad fisiológica'}`,
+      guidance: 'Vigilar tendencia; aún sin criterio de arritmia sostenida.',
+      level: 'warn',
+      irregularityPct: irr,
+    };
+  }
+
+  return {
+    title: 'RITMO SINUSAL REGULAR',
+    detail: [irr !== null ? `CV-RR ${irr}%` : null, hrvLine || null].filter(Boolean).join(' · ') || 'Intervalos estables',
+    guidance: 'Morfología PPG coherente con pulso periódico.',
+    level: 'normal',
+    irregularityPct: irr,
+  };
+}
+
+export function ibiSegmentLabel(ibiMs: number, meanIbiMs?: number): ClinicalLabel {
+  if (!isPhysiologicalRR(ibiMs)) return { text: '—', level: 'dim' };
+  const ms = Math.round(ibiMs);
+  if (!meanIbiMs || !isPhysiologicalRR(meanIbiMs)) {
+    return { text: `${ms} ms`, level: 'normal' };
+  }
+  const diffPct = (Math.abs(ibiMs - meanIbiMs) / meanIbiMs) * 100;
+  if (diffPct >= 25) return { text: `${ms} ms IRREG`, level: 'danger' };
+  if (diffPct >= 15) return { text: `${ms} ms VAR`, level: 'warn' };
+  return { text: `${ms} ms`, level: 'normal' };
 }

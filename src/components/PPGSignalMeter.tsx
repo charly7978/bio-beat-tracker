@@ -6,6 +6,12 @@ import {
   DISPLAY_SMOOTH_ALPHAS,
   lerpDisplayValue,
 } from '@/lib/measurement/displaySmoothing';
+import {
+  buildRhythmPanel,
+  formatContactState,
+  ibiSegmentLabel,
+  levelColor,
+} from '@/lib/ui/ppgMonitorClinical';
 
 interface PPGSignalMeterProps {
   value: number;
@@ -30,6 +36,8 @@ interface PPGSignalMeterProps {
   pressure?: { systolic: number; diastolic: number; confidence?: string; featureQuality?: number };
   bpStatus?: string | undefined;
   arrhythmiaCount?: number;
+  contactState?: string;
+  acquisitionStatus?: string;
   diagnostics?: {
     status?: string;
     message?: string;
@@ -59,6 +67,10 @@ const BUFFER_SIZE = 2500;        // Incrementar buffer para soportar hasta 300 F
 const TREND_WINDOW_MS = 60_000;  // 60 s de tendencia BPM
 const TREND_MAX_POINTS = 240;
 const BEAT_HISTORY_MAX = 30;
+const VISUAL_DELAY_MS = 166;
+const AMP_ATTACK = 0.44;
+const AMP_RELEASE = 0.56;
+const RR_TACHO_H = 34;
 
 const COLORS = {
   BG_TOP: '#06090f',
@@ -112,7 +124,9 @@ const PPGSignalMeter = ({
   pressure,
   bpStatus,
   arrhythmiaCount = 0,
-  diagnostics
+  contactState,
+  acquisitionStatus,
+  diagnostics,
 }: PPGSignalMeterProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -124,8 +138,17 @@ const PPGSignalMeter = ({
   const propsRef = useRef({ 
     value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus, 
     arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals, 
-    rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus, diagnostics 
+    rawArrhythmiaData,
+    elapsedTime,
+    perfusionIndex,
+    pressure,
+    bpStatus,
+    contactState,
+    acquisitionStatus,
+    diagnostics,
   });
+
+  const sweepPulseRef = useRef(0);
   const lastPeakTimeRef = useRef(0);
   const [showPulse, setShowPulse] = useState(false);
 
@@ -169,7 +192,14 @@ const PPGSignalMeter = ({
     propsRef.current = { 
       value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus, 
       arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals, 
-      rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus, diagnostics 
+      rawArrhythmiaData,
+      elapsedTime,
+      perfusionIndex,
+      pressure,
+      bpStatus,
+      contactState,
+      acquisitionStatus,
+      diagnostics,
     };
 
     if (rrIntervals && rrIntervals.length >= 2) {
@@ -238,7 +268,27 @@ const PPGSignalMeter = ({
       displaySysRef.current = 0;
       displayDiaRef.current = 0;
     }
-  }, [value, quality, isFingerDetected, arrhythmiaStatus, preserveResults, isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus, arrhythmiaCount, isMonitoring, diagnostics]);
+  }, [
+    value,
+    quality,
+    isFingerDetected,
+    arrhythmiaStatus,
+    preserveResults,
+    isPeak,
+    bpm,
+    spo2,
+    rrIntervals,
+    rawArrhythmiaData,
+    elapsedTime,
+    perfusionIndex,
+    pressure,
+    bpStatus,
+    arrhythmiaCount,
+    isMonitoring,
+    contactState,
+    acquisitionStatus,
+    diagnostics,
+  ]);
 
   // Pulse animation on peak (UI overlay only)
   useEffect(() => {
@@ -603,16 +653,20 @@ const PPGSignalMeter = ({
       ctx.fillText(bpLabel, metrics.w - 12, metrics.y + 102);
     }
 
-    // Arrhythmia banner (overlay top-right of metrics)
-    if (arr?.includes('ARRITMIA') && !arr?.includes('CALIBRANDO')) {
-      const count = arrCnt || 0;
-      const flash = (Math.sin(now / 120) + 1) / 2;
-      ctx.fillStyle = `rgba(239, 68, 68, ${0.18 + flash * 0.22})`;
-      ctx.fillRect(metrics.x + 16, metrics.y, metrics.w - 32, 14);
+    const rhythmBanner = buildRhythmPanel(
+      arr,
+      arrCnt ?? 0,
+      propsRef.current.rrIntervals ?? [],
+      hrvDisplayRef.current,
+    );
+    if (rhythmBanner.level === 'danger' || rhythmBanner.level === 'warn') {
+      ctx.fillStyle =
+        rhythmBanner.level === 'danger' ? 'rgba(127, 29, 29, 0.75)' : 'rgba(120, 53, 15, 0.65)';
+      ctx.fillRect(metrics.x + 12, metrics.y + 2, metrics.w - 24, 18);
       ctx.font = `bold 10px ${FONT_MONO}`;
-      ctx.fillStyle = COLORS.TEXT_DANGER;
+      ctx.fillStyle = rhythmBanner.level === 'danger' ? '#fecaca' : '#fde68a';
       ctx.textAlign = 'center';
-      ctx.fillText(`⚠ ARRITMIA DETECTADA · ${count} evento${count === 1 ? '' : 's'}`, metrics.w / 2, metrics.y + 10);
+      ctx.fillText(rhythmBanner.title, metrics.w / 2, metrics.y + 14);
     }
 
     // TELEMETRY (Phase 11) + ensemble de picos
@@ -749,10 +803,7 @@ const PPGSignalMeter = ({
     if (preserve && !detected) return;
 
     const scaledValue = signalValue * waveGainRef.current;
-    // La detección de picos en HeartBeatProcessor evalúa muestras pasadas (índice 5 de 11).
-    // A 30 FPS, esto representa un delay algorítmico de ~166ms.
-    // Aplicamos este offset visual para que el "BEEP" coincida milimétricamente con la parte más alta de la onda visible.
-    const VISUAL_DELAY_MS = 166; 
+    if (peak) sweepPulseRef.current = 1;
 
     if (peak) {
       const currentCount = propsRef.current.arrhythmiaCount || 0;
@@ -795,8 +846,12 @@ const PPGSignalMeter = ({
       }
       const range = Math.max(24, mx - mn);
       const stats = amplitudeStatsRef.current;
-      stats.min = stats.min * 0.62 + (mn - range * 0.12) * 0.38;
-      stats.max = stats.max * 0.62 + (mx + range * 0.12) * 0.38;
+      const targetMin = mn - range * 0.1;
+      const targetMax = mx + range * 0.1;
+      const expanding = targetMax - targetMin > stats.range;
+      const blend = expanding ? AMP_ATTACK : AMP_RELEASE;
+      stats.min = stats.min * (1 - blend) + targetMin * blend;
+      stats.max = stats.max * (1 - blend) + targetMax * blend;
       stats.range = stats.max - stats.min;
     }
 
@@ -807,34 +862,71 @@ const PPGSignalMeter = ({
     // forzamos un mínimo para evitar división por cero → NaN/Infinity en Y.
     const safeRange = stats.range > 1 ? stats.range : 1;
 
-    // Build coordinates
+    const wavePadTop = 12;
+    const wavePadBot = RR_TACHO_H + 12;
+    const waveH = Math.max(40, plot.h - wavePadTop - wavePadBot);
+    const waveBaseY = plot.y + wavePadTop + waveH;
+
     const coords: { x: number; y: number; isArr: boolean }[] = [];
     for (let i = 0; i < points.length; i++) {
       const pt = points[i];
-      const age = now - pt.time - VISUAL_DELAY_MS; // Offset para sincronizar audio/video
+      const age = now - pt.time - VISUAL_DELAY_MS;
       if (age > WINDOW_MS) continue;
       const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
       if (x < plot.x || x > plot.x + plot.w) continue;
-      const y = plot.y + ((stats.max - pt.value) / safeRange) * plot.h;
+      const y = plot.y + wavePadTop + ((stats.max - pt.value) / safeRange) * waveH;
       coords.push({ x, y, isArr: pt.isArrhythmia });
     }
 
     if (coords.length < 2) return;
 
-    // Fill under curve
     ctx.save();
     ctx.beginPath();
-    ctx.moveTo(coords[0].x, plot.centerY);
-    for (const c of coords) ctx.lineTo(c.x, c.y);
-    ctx.lineTo(coords[coords.length - 1].x, plot.centerY);
-    ctx.closePath();
-    const fillGrad = ctx.createLinearGradient(0, plot.y, 0, plot.y + plot.h);
-    fillGrad.addColorStop(0, 'rgba(34, 197, 94, 0.10)');
-    fillGrad.addColorStop(0.5, 'rgba(34, 197, 94, 0.03)');
-    fillGrad.addColorStop(1, 'rgba(34, 197, 94, 0.0)');
-    ctx.fillStyle = fillGrad;
-    ctx.fill();
-    ctx.restore();
+    ctx.rect(plot.x, plot.y, plot.w, plot.h);
+    ctx.clip();
+
+    let seg = 0;
+    while (seg < coords.length) {
+      if (!coords[seg].isArr) {
+        seg++;
+        continue;
+      }
+      let end = seg;
+      while (end < coords.length && coords[end].isArr) end++;
+      const x0 = coords[seg].x;
+      const x1 = coords[end - 1].x;
+      ctx.fillStyle = 'rgba(127, 29, 29, 0.26)';
+      ctx.fillRect(x0, plot.y + wavePadTop, Math.max(3, x1 - x0 + 1), waveH);
+      seg = end;
+    }
+
+    const fillSegment = (startIdx: number, endIdx: number, arrhythmia: boolean) => {
+      if (endIdx <= startIdx) return;
+      ctx.beginPath();
+      ctx.moveTo(coords[startIdx].x, waveBaseY);
+      for (let k = startIdx; k < endIdx; k++) ctx.lineTo(coords[k].x, coords[k].y);
+      ctx.lineTo(coords[endIdx - 1].x, waveBaseY);
+      ctx.closePath();
+      const fillGrad = ctx.createLinearGradient(0, plot.y + wavePadTop, 0, waveBaseY);
+      if (arrhythmia) {
+        fillGrad.addColorStop(0, 'rgba(248, 113, 113, 0.22)');
+        fillGrad.addColorStop(1, 'rgba(127, 29, 29, 0.04)');
+      } else {
+        fillGrad.addColorStop(0, 'rgba(34, 197, 94, 0.16)');
+        fillGrad.addColorStop(1, 'rgba(34, 197, 94, 0.02)');
+      }
+      ctx.fillStyle = fillGrad;
+      ctx.fill();
+    };
+
+    let fi = 0;
+    while (fi < coords.length - 1) {
+      const arrSeg = coords[fi].isArr;
+      let fj = fi;
+      while (fj < coords.length - 1 && coords[fj].isArr === arrSeg) fj++;
+      fillSegment(fi, fj + 1, arrSeg);
+      fi = fj;
+    }
 
     // Stroke segments — Smooth electric curve
     ctx.lineJoin = 'round';
@@ -877,23 +969,26 @@ const PPGSignalMeter = ({
       i = j;
     }
 
-    // Scanning Head (Efecto "Cometa" con Halo pulsante)
+    sweepPulseRef.current *= 0.9;
     const head = coords[coords.length - 1];
     if (head) {
-      const pulse = (Math.sin(now / 150) + 1) / 2;
-      
-      // Halo exterior suave
+      const pulse = Math.max(sweepPulseRef.current, 0.08);
+      ctx.strokeStyle = head.isArr ? 'rgba(248, 113, 113, 0.55)' : 'rgba(34, 197, 94, 0.45)';
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.arc(head.x, head.y, 5 + pulse * 5, 0, Math.PI * 2);
-      ctx.fillStyle = head.isArr ? 'rgba(239, 68, 68, 0.15)' : 'rgba(34, 197, 94, 0.15)';
-      ctx.fill();
+      ctx.moveTo(head.x, plot.y + wavePadTop);
+      ctx.lineTo(head.x, plot.y + plot.h - wavePadBot + 8);
+      ctx.stroke();
 
-      // Núcleo brillante
       ctx.beginPath();
-      ctx.arc(head.x, head.y, 3, 0, Math.PI * 2);
+      ctx.arc(head.x, head.y, 4 + pulse * 6, 0, Math.PI * 2);
+      ctx.fillStyle = head.isArr ? 'rgba(248, 113, 113, 0.2)' : 'rgba(34, 197, 94, 0.2)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, 2.5, 0, Math.PI * 2);
       ctx.fillStyle = '#ffffff';
-      ctx.shadowColor = '#ffffff';
-      ctx.shadowBlur = 10 + pulse * 6;
+      ctx.shadowColor = head.isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
+      ctx.shadowBlur = 8 + pulse * 10;
       ctx.fill();
     }
     ctx.shadowBlur = 0;
@@ -913,7 +1008,7 @@ const PPGSignalMeter = ({
         if (d < minDist) { minDist = d; nearestPt = pt; }
       }
       if (nearestPt && minDist < 200) {
-        const y = plot.y + ((stats.max - nearestPt.value) / safeRange) * plot.h;
+        const y = plot.y + wavePadTop + ((stats.max - nearestPt.value) / safeRange) * waveH;
         visiblePeaks.push({ x, y, isArr: beat.isArrhythmia, time: beat.time });
       }
     }
@@ -936,7 +1031,7 @@ const PPGSignalMeter = ({
         }
       }
       if (nearestPt && minDist < 280) {
-        const y = plot.y + ((stats.max - nearestPt.value) / safeRange) * plot.h;
+        const y = plot.y + wavePadTop + ((stats.max - nearestPt.value) / safeRange) * waveH;
         detectorPeaks.push({ x, y, kind });
       }
     };
@@ -1015,64 +1110,126 @@ const PPGSignalMeter = ({
       ctx.fill();
 
       if (p.isArr) {
-        const alpha = (Math.sin(now / 80) + 1) / 2;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 12, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(239,68,68,${0.3 + alpha * 0.5})`;
-        ctx.lineWidth = 2;
+        ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(239, 68, 68, 0.65)';
+        ctx.lineWidth = 1.5;
         ctx.stroke();
+        ctx.font = `bold 8px ${FONT_MONO}`;
+        ctx.fillStyle = '#fecaca';
+        ctx.textAlign = 'center';
+        ctx.fillText('ARR', p.x, p.y - 12);
       }
     }
 
-    // IBI annotations between consecutive visible peaks
-    ctx.font = `9px ${FONT_MONO}`;
+    const rrForLabels = propsRef.current.rrIntervals ?? [];
+    const validRr = rrForLabels.filter((r) => isPhysiologicalRR(r));
+    const meanIbi =
+      validRr.length > 0 ? validRr.reduce((a, v) => a + v, 0) / validRr.length : ibiDisplayRef.current;
+
+    ctx.font = `bold 9px ${FONT_MONO}`;
     ctx.textAlign = 'center';
-    ctx.fillStyle = COLORS.TEXT_INFO;
     for (let i = 0; i < visiblePeaks.length - 1; i++) {
       const p1 = visiblePeaks[i];
       const p2 = visiblePeaks[i + 1];
       const ibiMs = Math.abs(p2.time - p1.time);
-      if (isPhysiologicalRR(ibiMs)) {
-        const midX = (p1.x + p2.x) / 2;
-        const topY = Math.min(p1.y, p2.y) - 18;
-        ctx.strokeStyle = 'rgba(103,232,249,0.45)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(p1.x, topY + 6);
-        ctx.lineTo(p1.x, topY);
-        ctx.lineTo(p2.x, topY);
-        ctx.lineTo(p2.x, topY + 6);
-        ctx.stroke();
-        ctx.fillText(`${Math.round(ibiMs)} ms`, midX, topY - 2);
+      if (!isPhysiologicalRR(ibiMs)) continue;
+      const label = ibiSegmentLabel(ibiMs, meanIbi);
+      const midX = (p1.x + p2.x) / 2;
+      const topY = Math.min(p1.y, p2.y) - 20;
+      ctx.strokeStyle =
+        label.level === 'danger'
+          ? 'rgba(248, 113, 113, 0.7)'
+          : label.level === 'warn'
+            ? 'rgba(245, 158, 11, 0.65)'
+            : 'rgba(103, 232, 249, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(p1.x, topY + 6);
+      ctx.lineTo(p1.x, topY);
+      ctx.lineTo(p2.x, topY);
+      ctx.lineTo(p2.x, topY + 6);
+      ctx.stroke();
+      ctx.fillStyle = levelColor(label.level);
+      ctx.fillText(label.text, midX, topY - 3);
+    }
+
+    const tachoY = plot.y + plot.h - RR_TACHO_H + 4;
+    ctx.fillStyle = 'rgba(8, 14, 26, 0.85)';
+    ctx.fillRect(plot.x + 2, tachoY - 4, plot.w - 4, RR_TACHO_H);
+    ctx.font = `bold 8px ${FONT_MONO}`;
+    ctx.fillStyle = COLORS.TEXT_DIM;
+    ctx.textAlign = 'left';
+    ctx.fillText('TACHOGRAMA RR (IBI)', plot.x + 8, tachoY + 8);
+    if (visiblePeaks.length >= 2) {
+      const ibis: number[] = [];
+      for (let i = 0; i < visiblePeaks.length - 1; i++) {
+        const d = Math.abs(visiblePeaks[i + 1].time - visiblePeaks[i].time);
+        if (isPhysiologicalRR(d)) ibis.push(d);
+      }
+      const maxIbi = Math.max(...ibis, 900);
+      const minIbi = Math.min(...ibis, 400);
+      const spanIbi = Math.max(120, maxIbi - minIbi);
+      for (let i = 0; i < visiblePeaks.length - 1; i++) {
+        const ibiMs = Math.abs(visiblePeaks[i + 1].time - visiblePeaks[i].time);
+        if (!isPhysiologicalRR(ibiMs)) continue;
+        const midX = (visiblePeaks[i].x + visiblePeaks[i + 1].x) / 2;
+        const h = ((ibiMs - minIbi) / spanIbi) * (RR_TACHO_H - 16);
+        const irregular = ibiSegmentLabel(ibiMs, meanIbi).level !== 'normal';
+        ctx.fillStyle = irregular ? 'rgba(239, 68, 68, 0.85)' : 'rgba(34, 197, 94, 0.75)';
+        ctx.fillRect(midX - 3, tachoY + RR_TACHO_H - 10 - h, 6, h);
       }
     }
 
-    // --- Monitor HUD Overlay ---
-    const { isMonitoring, quality, perfusionIndex } = propsRef.current;
-    ctx.save();
-    
-    // REC Indicator
-    if (isMonitoring) {
-      const flash = Math.floor(now / 500) % 2 === 0;
-      ctx.fillStyle = flash ? '#ef4444' : 'rgba(239, 68, 68, 0.3)';
-      ctx.beginPath();
-      ctx.arc(plot.x + 18, plot.y + 16, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-      
-      ctx.font = `bold 10px ${FONT_MONO}`;
-      ctx.textAlign = 'left';
-      ctx.fillStyle = '#ef4444';
-      ctx.fillText('REC', plot.x + 28, plot.y + 20);
-    }
+    const p = propsRef.current;
+    const rhythm = buildRhythmPanel(
+      p.arrhythmiaStatus,
+      p.arrhythmiaCount ?? 0,
+      p.rrIntervals ?? [],
+      hrvDisplayRef.current,
+    );
+    const panelH = 56;
+    const panelY = plot.y + 8;
+    ctx.fillStyle = 'rgba(8, 14, 26, 0.88)';
+    ctx.strokeStyle =
+      rhythm.level === 'danger'
+        ? 'rgba(239, 68, 68, 0.55)'
+        : rhythm.level === 'warn'
+          ? 'rgba(245, 158, 11, 0.45)'
+          : 'rgba(34, 197, 94, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.fillRect(plot.x + 8, panelY, Math.min(plot.w - 16, 340), panelH);
+    ctx.strokeRect(plot.x + 8, panelY, Math.min(plot.w - 16, 340), panelH);
+    ctx.textAlign = 'left';
+    ctx.font = `bold 11px ${FONT_MONO}`;
+    ctx.fillStyle = levelColor(rhythm.level);
+    ctx.fillText(rhythm.title, plot.x + 16, panelY + 16);
+    ctx.font = `9px ${FONT_MONO}`;
+    ctx.fillStyle = '#cbd5e1';
+    ctx.fillText(rhythm.detail, plot.x + 16, panelY + 30);
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText(rhythm.guidance, plot.x + 16, panelY + 44);
 
-    // Mini Metrics (Top Right of Plot)
-    ctx.font = `bold 10px ${FONT_MONO}`;
+    if (p.isMonitoring) {
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.85)';
+      ctx.beginPath();
+      ctx.arc(plot.x + plot.w - 42, plot.y + 18, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.font = `bold 10px ${FONT_MONO}`;
+      ctx.fillStyle = '#fca5a5';
+      ctx.textAlign = 'right';
+      ctx.fillText('REC', plot.x + plot.w - 12, plot.y + 22);
+    }
+    ctx.font = `bold 9px ${FONT_MONO}`;
     ctx.textAlign = 'right';
-    ctx.fillStyle = 'rgba(34, 197, 94, 0.8)';
-    ctx.fillText(`SQI: ${Math.round(quality)}%`, plot.x + plot.w - 12, plot.y + 20);
-    ctx.fillStyle = 'rgba(103, 232, 249, 0.8)';
-    ctx.fillText(`PI: ${perfusionIndex.toFixed(2)}`, plot.x + plot.w - 12, plot.y + 34);
-    
+    ctx.fillStyle = 'rgba(34, 197, 94, 0.9)';
+    ctx.fillText(`SQI ${Math.round(p.quality)}%`, plot.x + plot.w - 12, plot.y + 38);
+    ctx.fillStyle = 'rgba(103, 232, 249, 0.9)';
+    ctx.fillText(`PI ${(p.perfusionIndex ?? 0).toFixed(3)}`, plot.x + plot.w - 12, plot.y + 52);
+    const contact = formatContactState(p.contactState);
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText(contact, plot.x + plot.w - 12, plot.y + 66);
+
     ctx.restore();
   }, []);
 
