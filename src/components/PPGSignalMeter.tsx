@@ -12,6 +12,7 @@ import {
   ibiSegmentLabel,
   levelColor,
 } from '@/lib/ui/ppgMonitorClinical';
+import { densifyCatmullRom2D } from '@/lib/ui/ppgWaveformRender';
 
 interface PPGSignalMeterProps {
   value: number;
@@ -320,7 +321,7 @@ const PPGSignalMeter = ({
     const container = containerRef.current;
     if (!canvas || !container) return;
     const rect = container.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
     const cssW = Math.max(320, Math.floor(rect.width));
     const cssH = Math.max(480, Math.floor(rect.height));
     canvas.width = Math.floor(cssW * dpr);
@@ -787,7 +788,7 @@ const PPGSignalMeter = ({
     ctx.textAlign = 'left';
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.font = `9px ${FONT_MONO}`;
-    ctx.fillText('25 mm/s · 0.3–5 Hz · PPG-RG', plot.x + 4, plot.y - 4);
+    ctx.fillText('25 mm/s · PPG · trazado Catmull–Rom (fiel a muestras)', plot.x + 4, plot.y - 4);
   }, []);
 
   const drawSignal = useCallback((ctx: CanvasRenderingContext2D, now: number) => {
@@ -905,11 +906,11 @@ const PPGSignalMeter = ({
       ctx.closePath();
       const fillGrad = ctx.createLinearGradient(0, plot.y + wavePadTop, 0, waveBaseY);
       if (arrhythmia) {
-        fillGrad.addColorStop(0, 'rgba(248, 113, 113, 0.22)');
-        fillGrad.addColorStop(1, 'rgba(127, 29, 29, 0.04)');
+        fillGrad.addColorStop(0, 'rgba(248, 113, 113, 0.14)');
+        fillGrad.addColorStop(1, 'rgba(127, 29, 29, 0.03)');
       } else {
-        fillGrad.addColorStop(0, 'rgba(34, 197, 94, 0.16)');
-        fillGrad.addColorStop(1, 'rgba(34, 197, 94, 0.02)');
+        fillGrad.addColorStop(0, 'rgba(34, 197, 94, 0.10)');
+        fillGrad.addColorStop(1, 'rgba(34, 197, 94, 0.015)');
       }
       ctx.fillStyle = fillGrad;
       ctx.fill();
@@ -924,45 +925,55 @@ const PPGSignalMeter = ({
       fi = fj;
     }
 
-    // Stroke segments — Smooth electric curve
+    // Trazado fino tipo monitor clínico: Catmull–Rom entre muestras reales (sin inventar periodo)
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
-    // Función auxiliar para dibujar un segmento suave
-    const drawSmoothSegment = (startIdx: number, endIdx: number) => {
+    const strokeProfessionalTrace = (
+      knotSlice: { x: number; y: number }[],
+      isArr: boolean,
+    ) => {
+      if (knotSlice.length < 2) return;
+      const dense = densifyCatmullRom2D(knotSlice, 8);
+      if (dense.length < 2) return;
+
       ctx.beginPath();
-      ctx.moveTo(coords[startIdx].x, coords[startIdx].y);
-      for (let k = startIdx; k < endIdx - 1; k++) {
-        const xc = (coords[k].x + coords[k + 1].x) / 2;
-        const yc = (coords[k].y + coords[k + 1].y) / 2;
-        ctx.quadraticCurveTo(coords[k].x, coords[k].y, xc, yc);
+      ctx.moveTo(dense[0].x, dense[0].y);
+      for (let k = 1; k < dense.length; k++) {
+        ctx.lineTo(dense[k].x, dense[k].y);
       }
-      ctx.lineTo(coords[endIdx - 1].x, coords[endIdx - 1].y);
+
+      // Halo muy suave (profundidad “fosfórica” sin línea gruesa)
+      ctx.strokeStyle = isArr ? 'rgba(248, 113, 113, 0.22)' : 'rgba(45, 212, 191, 0.18)';
+      ctx.lineWidth = 1.85;
+      ctx.shadowColor = isArr ? 'rgba(239, 68, 68, 0.35)' : 'rgba(16, 185, 129, 0.28)';
+      ctx.shadowBlur = isArr ? 7 : 6;
+      ctx.stroke();
+
+      // Núcleo claro (contraste en fondo oscuro)
+      ctx.strokeStyle = isArr ? 'rgba(254, 202, 202, 0.92)' : 'rgba(236, 253, 245, 0.88)';
+      ctx.lineWidth = 1.05;
+      ctx.shadowBlur = 2;
+      ctx.stroke();
+
+      // Línea fina profesional encima (definición máxima)
+      ctx.strokeStyle = isArr ? '#fca5a5' : '#5eead4';
+      ctx.lineWidth = 0.72;
+      ctx.shadowBlur = 0;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
     };
 
-    let i = 0;
-    while (i < coords.length - 1) {
-      const isArr = coords[i].isArr;
-      let j = i;
-      while (j < coords.length - 1 && coords[j].isArr === isArr) {
-        j++;
+    let segStart = 0;
+    while (segStart < coords.length) {
+      const isArrSeg = coords[segStart].isArr;
+      let segEnd = segStart + 1;
+      while (segEnd < coords.length && coords[segEnd].isArr === isArrSeg) {
+        segEnd++;
       }
-      
-      // 1. Primary Neon Glow (Outer)
-      drawSmoothSegment(i, j + 1 > coords.length ? j : j + 1);
-      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.35)' : 'rgba(34, 197, 94, 0.35)';
-      ctx.lineWidth = 6;
-      ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
-      ctx.shadowBlur = 15;
-      ctx.stroke();
-
-      // 2. High-Intensity Core (Inner)
-      ctx.strokeStyle = isArr ? '#fecaca' : '#bbf7d0'; 
-      ctx.lineWidth = 2.2;
-      ctx.shadowBlur = 3;
-      ctx.stroke();
-      
-      i = j;
+      const knotSlice = coords.slice(segStart, segEnd).map(({ x, y }) => ({ x, y }));
+      strokeProfessionalTrace(knotSlice, isArrSeg);
+      segStart = segEnd;
     }
 
     sweepPulseRef.current *= 0.9;
