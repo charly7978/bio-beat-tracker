@@ -15,9 +15,20 @@ import {
   levelColor,
   spo2ZoneLabel,
 } from '@/lib/ui/ppgMonitorClinical';
+import {
+  computeWaveformScale,
+  decimateMinMaxPreserve,
+  strokeCatmullRom,
+  type ScreenPoint,
+  type WaveformPoint,
+} from '@/lib/ui/ppgWaveformPath';
+
+export type WaveformIngestFn = (timeMs: number, value: number) => void;
 
 interface PPGSignalMeterProps {
   value: number;
+  /** Ingesta directa desde el DSP (sin React); tasa completa de frames. */
+  waveformIngestRef?: React.MutableRefObject<WaveformIngestFn | null>;
   quality: number;
   isFingerDetected: boolean;
   onStartMeasurement: () => void;
@@ -67,15 +78,16 @@ interface PPGSignalMeterProps {
 }
 
 const TARGET_FPS = 60;
-const WINDOW_MS = 2800;
-const BUFFER_SIZE = 12_000;
+const WINDOW_MS = 2500;
+const BUFFER_SIZE = 16_000;
 const TREND_WINDOW_MS = 60_000;
 const TREND_MAX_POINTS = 240;
 const BEAT_HISTORY_MAX = 30;
-const VISUAL_DELAY_MS = 166;
-const WAVE_AMP_HEADROOM = 1.28;
+const VISUAL_DELAY_MS = 100;
+const WAVE_AMP_HEADROOM = 1.14;
 const TRACE_INSET_MIN = 22;
 const ALERT_SLOT_H = 26;
+const WAVE_NORM_CLAMP = 1.12;
 
 const COLORS = {
   BG_TOP: '#0c1424',
@@ -88,10 +100,11 @@ const COLORS = {
   GRID_MAJOR: 'rgba(148, 163, 184, 0.14)',
   GRID_SEC: 'rgba(148, 163, 184, 0.22)',
   BASELINE: 'rgba(148, 163, 184, 0.35)',
-  SIGNAL: '#4ade80',
-  SIGNAL_DIM: 'rgba(74, 222, 128, 0.38)',
+  SIGNAL: '#2dd4bf',
+  SIGNAL_GLOW: 'rgba(45, 212, 191, 0.45)',
+  SIGNAL_FILL: 'rgba(45, 212, 191, 0.14)',
   SIGNAL_ARR: '#fb7185',
-  SIGNAL_ARR_DIM: 'rgba(251, 113, 133, 0.35)',
+  SIGNAL_ARR_FILL: 'rgba(251, 113, 133, 0.12)',
   PEAK_NORMAL: '#4ade80',
   PEAK_ARR: '#fb7185',
   VALLEY: '#64748b',
@@ -114,6 +127,7 @@ const LAYOUT_PAD = 16;
 
 const PPGSignalMeter = ({
   value,
+  waveformIngestRef,
   quality,
   isFingerDetected,
   onStartMeasurement,
@@ -327,6 +341,20 @@ const PPGSignalMeter = ({
       dataBufferRef.current = new CircularBuffer(BUFFER_SIZE);
     }
   }, []);
+
+  useEffect(() => {
+    if (!waveformIngestRef) return;
+    waveformIngestRef.current = (timeMs: number, sampleValue: number) => {
+      dataBufferRef.current?.push({
+        time: timeMs,
+        value: sampleValue,
+        isArrhythmia: beatArrhythmiaRef.current,
+      });
+    };
+    return () => {
+      waveformIngestRef.current = null;
+    };
+  }, [waveformIngestRef]);
 
   // Clear buffer when results preserved & finger removed
   useEffect(() => {
@@ -827,7 +855,9 @@ const PPGSignalMeter = ({
     }
     const currentIsArrhythmia = beatArrhythmiaRef.current;
 
-    buffer.push({ time: now, value: signalValue, isArrhythmia: currentIsArrhythmia });
+    if (!waveformIngestRef?.current) {
+      buffer.push({ time: now, value: signalValue, isArrhythmia: currentIsArrhythmia });
+    }
 
     const points = buffer.getPoints();
     if (points.length < 2) return;
@@ -850,114 +880,74 @@ const PPGSignalMeter = ({
 
     if (windowPts.length < 2 || !Number.isFinite(wMin) || !Number.isFinite(wMax)) return;
 
-    const sortedVals = windowPts.map((p) => p.value).sort((a, b) => a - b);
-    const pLo = sortedVals[Math.max(0, Math.floor(sortedVals.length * 0.03))] ?? wMin;
-    const pHi = sortedVals[Math.min(sortedVals.length - 1, Math.ceil(sortedVals.length * 0.97))] ?? wMax;
-    const center = (pLo + pHi) * 0.5;
-    const halfSpan = Math.max((pHi - pLo) * 0.5, 0.5) * WAVE_AMP_HEADROOM;
-    const yTop = innerY + 3;
-    const yBot = innerY + innerH - 3;
+    windowPts.sort((a, b) => a.time - b.time);
+
+    const { center, halfSpan } = computeWaveformScale(
+      windowPts.map((p) => p.value),
+      WAVE_AMP_HEADROOM,
+    );
+    const yMargin = 4;
+    const yTop = innerY + yMargin;
+    const yBot = innerY + innerH - yMargin;
     const ampPx = (yBot - yTop) * 0.5;
 
     const ageToX = (t: number) => plotX + plotW - ((tEnd - t) / WINDOW_MS) * plotW;
     const valToY = (v: number) => {
       const norm = (v - center) / halfSpan;
-      const clamped = Math.max(-1, Math.min(1, norm));
-      return plot.centerY - clamped * ampPx;
+      const clamped = Math.max(-WAVE_NORM_CLAMP, Math.min(WAVE_NORM_CLAMP, norm));
+      const y = plot.centerY - clamped * ampPx;
+      return Math.max(yTop, Math.min(yBot, y));
     };
-
-    windowPts.sort((a, b) => a.time - b.time);
 
     const pxCols = Math.max(1, Math.floor(plotW));
     const msPerPx = WINDOW_MS / pxCols;
-    const colMin = new Float64Array(pxCols);
-    const colMax = new Float64Array(pxCols);
-    const colArr = new Uint8Array(pxCols);
-    colMin.fill(Number.POSITIVE_INFINITY);
-    colMax.fill(Number.NEGATIVE_INFINITY);
-
-    for (let i = 0; i < windowPts.length; i++) {
-      const p = windowPts[i];
-      const age = tEnd - p.time;
-      let ci = pxCols - 1 - Math.floor((age / WINDOW_MS) * pxCols);
-      if (ci < 0) ci = 0;
-      if (ci >= pxCols) ci = pxCols - 1;
-      if (p.value < colMin[ci]) colMin[ci] = p.value;
-      if (p.value > colMax[ci]) colMax[ci] = p.value;
-      if (p.isArr) colArr[ci] = 1;
+    const maxDrawPts = Math.max(256, Math.floor(plotW * 2.5));
+    let drawPts: WaveformPoint[] = windowPts;
+    if (drawPts.length > maxDrawPts) {
+      drawPts = decimateMinMaxPreserve(drawPts, Math.floor(maxDrawPts / 2));
+      drawPts.sort((a, b) => a.time - b.time);
     }
+
+    const toScreen = (pts: WaveformPoint[]): ScreenPoint[] =>
+      pts.map((p) => ({
+        x: ageToX(p.time),
+        y: valToY(p.value),
+        isArr: p.isArr,
+      }));
+
+    const drawMorphologyTrace = (arrhythmia: boolean) => {
+      const segment = drawPts.filter((p) => p.isArr === arrhythmia);
+      if (segment.length < 2) return;
+      const screen = toScreen(segment);
+      const baseY = plot.centerY;
+
+      ctx.beginPath();
+      strokeCatmullRom(ctx, screen);
+      ctx.lineTo(screen[screen.length - 1].x, baseY);
+      ctx.lineTo(screen[0].x, baseY);
+      ctx.closePath();
+      ctx.fillStyle = arrhythmia ? COLORS.SIGNAL_ARR_FILL : COLORS.SIGNAL_FILL;
+      ctx.fill();
+
+      ctx.beginPath();
+      strokeCatmullRom(ctx, screen);
+      ctx.strokeStyle = arrhythmia ? COLORS.SIGNAL_ARR : COLORS.SIGNAL;
+      ctx.lineWidth = Math.max(1.75, 2.1 * Math.min(dpr, 2.5) / 2);
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.shadowColor = arrhythmia ? COLORS.SIGNAL_ARR : COLORS.SIGNAL_GLOW;
+      ctx.shadowBlur = arrhythmia ? 4 : 6;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    };
 
     ctx.save();
     ctx.beginPath();
     ctx.rect(plotX, innerY, plotW, innerH);
     ctx.clip();
 
-    ctx.lineWidth = 1;
-    ctx.lineCap = 'butt';
-    for (let col = 0; col < pxCols; col++) {
-      if (!Number.isFinite(colMin[col])) continue;
-      const x = plotX + col + 0.5;
-      const yTop = valToY(colMax[col]);
-      const yBot = valToY(colMin[col]);
-      ctx.strokeStyle = colArr[col] ? COLORS.SIGNAL_ARR_DIM : COLORS.SIGNAL_DIM;
-      ctx.beginPath();
-      ctx.moveTo(x, yTop);
-      ctx.lineTo(x, yBot);
-      ctx.stroke();
-    }
-
-    const strokeTrace = (arrhythmia: boolean) => {
-      ctx.strokeStyle = arrhythmia ? COLORS.SIGNAL_ARR : COLORS.SIGNAL;
-      ctx.lineWidth = Math.max(1.35, 1.65 * Math.min(dpr, 2.5) / 2);
-      ctx.lineJoin = 'miter';
-      ctx.lineCap = 'butt';
-    };
-
-    const drawInterpolatedTrace = (arrhythmia: boolean) => {
-      let drawing = false;
-      let lastX = 0;
-      let lastY = 0;
-
-      for (let i = 0; i < windowPts.length; i++) {
-        const p = windowPts[i];
-        const x = ageToX(p.time);
-        const y = valToY(p.value);
-
-        if (p.isArr !== arrhythmia) {
-          if (drawing) {
-            strokeTrace(arrhythmia);
-            ctx.stroke();
-            drawing = false;
-          }
-          continue;
-        }
-
-        if (!drawing) {
-          ctx.beginPath();
-          ctx.moveTo(x, y);
-          drawing = true;
-          lastX = x;
-          lastY = y;
-          continue;
-        }
-
-        const steps = Math.max(1, Math.ceil(Math.abs(x - lastX)));
-        for (let s = 1; s <= steps; s++) {
-          const t = s / steps;
-          ctx.lineTo(lastX + (x - lastX) * t, lastY + (y - lastY) * t);
-        }
-        lastX = x;
-        lastY = y;
-      }
-
-      if (drawing) {
-        strokeTrace(arrhythmia);
-        ctx.stroke();
-      }
-    };
-
-    drawInterpolatedTrace(false);
-    drawInterpolatedTrace(true);
+    drawMorphologyTrace(false);
+    drawMorphologyTrace(true);
 
     const visiblePeaks: { x: number; y: number; isArr: boolean; time: number }[] = [];
     for (const beat of beatHistoryRef.current) {
@@ -1016,7 +1006,7 @@ const PPGSignalMeter = ({
       ctx.textAlign = 'left';
       ctx.fillText('GRAB', plot.x + 20, plot.y + 16);
     }
-  }, []);
+  }, [waveformIngestRef]);
 
   const drawTrendStrip = useCallback((ctx: CanvasRenderingContext2D) => {
     const { trend } = layoutRef.current;
