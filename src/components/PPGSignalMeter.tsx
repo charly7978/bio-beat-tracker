@@ -73,10 +73,9 @@ const TREND_WINDOW_MS = 60_000;
 const TREND_MAX_POINTS = 240;
 const BEAT_HISTORY_MAX = 30;
 const VISUAL_DELAY_MS = 166;
-const WAVE_RANGE_ATTACK = 0.88;
-const WAVE_RANGE_RELEASE = 0.35;
-const WAVE_VERTICAL_PAD_RATIO = 0.16;
-const TRACE_INSET_MIN = 18;
+const WAVE_AMP_HEADROOM = 1.28;
+const TRACE_INSET_MIN = 22;
+const ALERT_SLOT_H = 26;
 
 const COLORS = {
   BG_TOP: '#0c1424',
@@ -172,7 +171,7 @@ const PPGSignalMeter = ({
   const displaySpo2Ref = useRef(0);
   const displaySysRef = useRef(0);
   const displayDiaRef = useRef(0);
-  const displayRangeRef = useRef({ min: -1, max: 1 });
+  const canvasCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const uiModeRef = useRef({
     isMonitoring,
     preserveResults,
@@ -354,13 +353,14 @@ const PPGSignalMeter = ({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
+      canvasCtxRef.current = ctx;
     }
 
     const { preserveResults: preserve, isMonitoring: monitoring } = uiModeRef.current;
     const showAuxCharts = preserve && !monitoring;
 
     const header = { x: 0, y: 0, w: cssW, h: 52 };
-    const alertH = uiModeRef.current.hasArrhythmiaAlert ? 26 : 0;
+    const alertH = ALERT_SLOT_H;
     const alert = { x: 0, y: header.h, w: cssW, h: alertH };
     const metricsH = 108;
     const metrics = { x: 0, y: header.h + alertH, w: cssW, h: metricsH };
@@ -429,18 +429,14 @@ const PPGSignalMeter = ({
       ro.disconnect();
       window.removeEventListener('orientationchange', recomputeLayout);
     };
-  }, [recomputeLayout, isMonitoring, preserveResults, arrhythmiaStatus]);
+  }, [recomputeLayout, isMonitoring, preserveResults]);
 
   // ============= DRAWING HELPERS =============
 
   const drawBackground = useCallback((ctx: CanvasRenderingContext2D) => {
     const { width: W, height: H } = layoutRef.current;
-    const grad = ctx.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, COLORS.BG_TOP);
-    grad.addColorStop(1, COLORS.BG_BOTTOM);
-    ctx.fillStyle = grad;
+    ctx.fillStyle = COLORS.BG_TOP;
     ctx.fillRect(0, 0, W, H);
-
   }, []);
 
   const clipZone = (
@@ -485,15 +481,10 @@ const PPGSignalMeter = ({
     const row1Y = header.y + 24;
     const row2Y = header.y + 44;
 
-    const pulse = (Math.sin(now / 500) + 1) / 2;
     clipZone(ctx, pad, header.y + 6, colW, 40, () => {
       ctx.beginPath();
       ctx.arc(pad + 8, row1Y - 6, 5, 0, Math.PI * 2);
-      ctx.fillStyle = isMonitoring
-        ? `rgba(94, 234, 212, ${0.45 + pulse * 0.4})`
-        : preserveResults
-          ? COLORS.TEXT_INFO
-          : COLORS.TEXT_DIM;
+      ctx.fillStyle = isMonitoring ? '#5eead4' : preserveResults ? COLORS.TEXT_INFO : COLORS.TEXT_DIM;
       ctx.fill();
       ctx.font = `600 13px ${FONT_UI}`;
       ctx.fillStyle = '#e2e8f0';
@@ -547,13 +538,15 @@ const PPGSignalMeter = ({
     ctx.fillText(ellipsize(ctx, row2Text, W - pad * 2), W / 2, row2Y);
   }, [isMonitoring, preserveResults]);
 
-  const drawAlertBar = useCallback((ctx: CanvasRenderingContext2D, now: number) => {
+  const drawAlertBar = useCallback((ctx: CanvasRenderingContext2D) => {
     const { alert } = layoutRef.current;
-    if (alert.h <= 0) return;
     const { arrhythmiaCount: arrCnt } = propsRef.current;
-    const flash = (Math.sin(now / 200) + 1) / 2;
-    ctx.fillStyle = `rgba(127, 29, 29, ${0.55 + flash * 0.15})`;
+    const active = uiModeRef.current.hasArrhythmiaAlert;
+
+    ctx.fillStyle = active ? 'rgba(127, 29, 29, 0.72)' : COLORS.PANEL_BG;
     ctx.fillRect(alert.x, alert.y, alert.w, alert.h);
+    if (!active) return;
+
     ctx.font = `600 13px ${FONT_UI}`;
     ctx.fillStyle = '#fecaca';
     ctx.textAlign = 'center';
@@ -764,9 +757,7 @@ const PPGSignalMeter = ({
     }
     ctx.stroke();
 
-    const dr = displayRangeRef.current;
-    const midV = (dr.min + dr.max) / 2;
-    const midY = innerY + ((dr.max - midV) / Math.max(dr.max - dr.min, 1e-6)) * innerH;
+    const midY = plot.centerY;
 
     ctx.strokeStyle = COLORS.BASELINE;
     ctx.lineWidth = 1;
@@ -859,20 +850,21 @@ const PPGSignalMeter = ({
 
     if (windowPts.length < 2 || !Number.isFinite(wMin) || !Number.isFinite(wMax)) return;
 
-    const rawRange = Math.max(wMax - wMin, 1e-6);
-    const pad = Math.max(rawRange * WAVE_VERTICAL_PAD_RATIO, rawRange * 0.04 + 1);
-    const targetMin = wMin - pad;
-    const targetMax = wMax + pad;
-
-    const dr = displayRangeRef.current;
-    const expanding = targetMax - targetMin > dr.max - dr.min;
-    const blend = expanding ? WAVE_RANGE_ATTACK : WAVE_RANGE_RELEASE;
-    dr.min = dr.min * (1 - blend) + targetMin * blend;
-    dr.max = dr.max * (1 - blend) + targetMax * blend;
-    const dRange = Math.max(dr.max - dr.min, 1e-6);
+    const sortedVals = windowPts.map((p) => p.value).sort((a, b) => a - b);
+    const pLo = sortedVals[Math.max(0, Math.floor(sortedVals.length * 0.03))] ?? wMin;
+    const pHi = sortedVals[Math.min(sortedVals.length - 1, Math.ceil(sortedVals.length * 0.97))] ?? wMax;
+    const center = (pLo + pHi) * 0.5;
+    const halfSpan = Math.max((pHi - pLo) * 0.5, 0.5) * WAVE_AMP_HEADROOM;
+    const yTop = innerY + 3;
+    const yBot = innerY + innerH - 3;
+    const ampPx = (yBot - yTop) * 0.5;
 
     const ageToX = (t: number) => plotX + plotW - ((tEnd - t) / WINDOW_MS) * plotW;
-    const valToY = (v: number) => innerY + ((dr.max - v) / dRange) * innerH;
+    const valToY = (v: number) => {
+      const norm = (v - center) / halfSpan;
+      const clamped = Math.max(-1, Math.min(1, norm));
+      return plot.centerY - clamped * ampPx;
+    };
 
     windowPts.sort((a, b) => a.time - b.time);
 
@@ -1015,8 +1007,7 @@ const PPGSignalMeter = ({
     ctx.restore();
 
     if (propsRef.current.isMonitoring) {
-      const flash = Math.floor(now / 600) % 2 === 0;
-      ctx.fillStyle = flash ? 'rgba(248, 113, 113, 0.85)' : 'rgba(248, 113, 113, 0.3)';
+      ctx.fillStyle = 'rgba(248, 113, 113, 0.75)';
       ctx.beginPath();
       ctx.arc(plot.x + 12, plot.y + 12, 3, 0, Math.PI * 2);
       ctx.fill();
@@ -1334,12 +1325,8 @@ const PPGSignalMeter = ({
       if (!isRunningRef.current) return;
       const canvas = canvasRef.current;
       const buffer = dataBufferRef.current;
-      if (!canvas || !buffer) {
-        animationRef.current = requestAnimationFrame(render);
-        return;
-      }
-      const ctx = canvas.getContext('2d', { alpha: false });
-      if (!ctx) {
+      const ctx = canvasCtxRef.current;
+      if (!canvas || !buffer || !ctx) {
         animationRef.current = requestAnimationFrame(render);
         return;
       }
@@ -1372,7 +1359,7 @@ const PPGSignalMeter = ({
 
       drawBackground(ctx);
       drawHeader(ctx, now);
-      drawAlertBar(ctx, now);
+      drawAlertBar(ctx);
       drawMetricsBar(ctx, now);
       drawECGGrid(ctx);
       drawSignal(ctx, now);
@@ -1405,7 +1392,6 @@ const PPGSignalMeter = ({
 
   const handleReset = useCallback(() => {
     dataBufferRef.current?.clear();
-    displayRangeRef.current = { min: -1, max: 1 };
     beatHistoryRef.current = [];
     lastArrhythmiaCountRef.current = 0;
     ibiDisplayRef.current = 0;
