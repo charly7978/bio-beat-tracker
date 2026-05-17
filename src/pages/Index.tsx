@@ -1359,8 +1359,22 @@ const Index = () => {
               rrIntervals={rrIntervals}
               elapsedTime={elapsedTime}
               perfusionIndex={lastSignal?.perfusionIndex || 0}
-              pressure={vitalSigns.bloodPressure.value ?? { systolic: 0, diastolic: 0 }}
+              pressure={{
+                ...(vitalSigns.bloodPressure.value ?? { systolic: 0, diastolic: 0 }),
+                confidence: vitalSigns.bloodPressure.status,
+                featureQuality:
+                  typeof vitalSigns.bloodPressure.diagnostics?.featureQuality === 'number'
+                    ? vitalSigns.bloodPressure.diagnostics.featureQuality
+                    : undefined,
+              }}
               bpStatus={vitalSigns.bloodPressure.status}
+              contactState={
+                lastSignal?.contactState ??
+                (lastSignal?.fingerDetected ? 'UNSTABLE_CONTACT' : 'NO_CONTACT')
+              }
+              acquisitionStatus={acquisitionStatusLabel}
+              heartRateStatus={vitalSigns.heartRate.status}
+              spo2Status={vitalSigns.spo2.status}
               diagnostics={currentDiagnostics}
             />
           </div>
