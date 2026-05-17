@@ -333,22 +333,23 @@ const PPGSignalMeter = ({
     // Compute zones in CSS pixels.
     // Heights are proportional, but with sensible minima.
     const header = { x: 0, y: 0, w: cssW, h: 36 };
-    const metricsH = Math.max(100, Math.min(120, Math.round(cssH * 0.13)));
+    const metricsH = Math.max(92, Math.min(108, Math.round(cssH * 0.11)));
     const metrics = { x: 0, y: header.h, w: cssW, h: metricsH };
 
-    const lowerH = Math.max(168, Math.round(cssH * 0.26));
-    const footerH = 56;
+    // Franja de tendencia compacta → más altura para el monitor (onda PPG).
+    const lowerH = Math.max(68, Math.min(86, Math.round(cssH * 0.095)));
+    const footerH = 46;
     const buttonsH = 48;
     const plotY = header.h + metricsH;
     const plotH = cssH - plotY - lowerH - footerH - buttonsH;
 
-    const plotX = 24; // Reducido para ocupar más ancho (antes 56)
-    const plotW = cssW - plotX - 8;
-    const plot = { x: plotX, y: plotY + 8, w: plotW, h: Math.max(150, plotH - 8), centerY: 0 };
+    const plotX = 12;
+    const plotW = cssW - plotX * 2;
+    const plot = { x: plotX, y: plotY + 6, w: plotW, h: Math.max(180, plotH - 6), centerY: 0 };
     plot.centerY = plot.y + plot.h / 2;
 
-    const lowerY = plot.y + plot.h + 6;
-    const trend = { x: plotX, y: lowerY, w: plotW, h: lowerH - 6 };
+    const lowerY = plot.y + plot.h + 4;
+    const trend = { x: plotX, y: lowerY, w: plotW, h: Math.max(64, lowerH - 4) };
 
     const footer = { x: 0, y: cssH - buttonsH - footerH, w: cssW, h: footerH };
 
@@ -1230,7 +1231,9 @@ const PPGSignalMeter = ({
 
   const drawTrendStrip = useCallback((ctx: CanvasRenderingContext2D) => {
     const { trend } = layoutRef.current;
-    if (trend.w < 80 || trend.h < 40) return;
+    if (trend.w < 80 || trend.h < 36) return;
+
+    const compact = trend.h < 92;
 
     ctx.fillStyle = COLORS.PANEL_BG;
     ctx.fillRect(trend.x, trend.y, trend.w, trend.h);
@@ -1241,45 +1244,42 @@ const PPGSignalMeter = ({
     const data = bpmTrendRef.current;
     const hrv = hrvDisplayRef.current;
     const arrCnt = propsRef.current.arrhythmiaCount ?? 0;
-    const lastBpm = data.length > 0 ? data[data.length - 1].bpm : 0;
 
-    ctx.font = `bold 11px ${FONT_MONO}`;
+    ctx.font = `bold ${compact ? 9 : 10}px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_PRIMARY;
     ctx.textAlign = 'left';
-    ctx.fillText('TENDENCIA FRECUENCIA CARDÍACA · 60 s', trend.x + 10, trend.y + 16);
+    ctx.fillText(
+      compact ? 'TENDENCIA BPM · 60s' : 'TENDENCIA FRECUENCIA CARDÍACA · 60 s',
+      trend.x + 8,
+      trend.y + (compact ? 12 : 14),
+    );
 
-    ctx.font = `9px ${FONT_MONO}`;
+    ctx.font = `8px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DIM;
     const hrvBits: string[] = [];
-    if (hrv.sdnn > 0) hrvBits.push(`SDNN ${hrv.sdnn} ms`);
-    if (hrv.rmssd > 0) hrvBits.push(`RMSSD ${hrv.rmssd} ms`);
-    if (arrCnt > 0) hrvBits.push(`${arrCnt} arr.`);
-    if (hrvBits.length > 0) {
-      ctx.fillText(hrvBits.join(' · '), trend.x + 10, trend.y + 30);
-    }
-
-    if (lastBpm > 0) {
-      ctx.font = `bold 22px ${FONT_MONO}`;
-      ctx.fillStyle = COLORS.SIGNAL;
+    if (hrv.sdnn > 0) hrvBits.push(`SDNN ${hrv.sdnn}`);
+    if (hrv.rmssd > 0) hrvBits.push(`RMSSD ${hrv.rmssd}`);
+    if (arrCnt > 0) hrvBits.push(`${arrCnt} arr`);
+    if (hrvBits.length > 0 && !compact) {
+      ctx.fillText(hrvBits.join(' · '), trend.x + 8, trend.y + 26);
+    } else if (hrvBits.length > 0) {
       ctx.textAlign = 'right';
-      ctx.fillText(`${Math.round(lastBpm)}`, trend.x + trend.w - 44, trend.y + 28);
-      ctx.font = `bold 10px ${FONT_MONO}`;
-      ctx.fillStyle = COLORS.TEXT_SECONDARY;
-      ctx.fillText('bpm', trend.x + trend.w - 10, trend.y + 28);
+      ctx.fillText(hrvBits.join(' · '), trend.x + trend.w - 8, trend.y + 12);
+      ctx.textAlign = 'left';
     }
 
     if (data.length < 2) {
-      ctx.font = `10px ${FONT_MONO}`;
+      ctx.font = `9px ${FONT_MONO}`;
       ctx.fillStyle = COLORS.TEXT_DIM;
       ctx.textAlign = 'center';
-      ctx.fillText('Acumulando tendencia…', trend.x + trend.w / 2, trend.y + trend.h / 2 + 8);
+      ctx.fillText('Acumulando…', trend.x + trend.w / 2, trend.y + trend.h / 2 + 4);
       return;
     }
 
-    const padTop = 40;
-    const padBot = 22;
-    const padL = 40;
-    const padR = 12;
+    const padTop = compact ? 24 : 32;
+    const padBot = compact ? 10 : 16;
+    const padL = compact ? 32 : 36;
+    const padR = 8;
     const innerX = trend.x + padL;
     const innerY = trend.y + padTop;
     const innerW = trend.w - padL - padR;
@@ -1362,7 +1362,7 @@ const PPGSignalMeter = ({
       ctx.font = `8px ${FONT_MONO}`;
       ctx.fillStyle = COLORS.TEXT_DIM;
       ctx.textAlign = 'center';
-      ctx.fillText(s === 0 ? 'ahora' : `−${s}s`, x, innerY + innerH + 14);
+      ctx.fillText(s === 0 ? 'ahora' : `−${s}s`, x, innerY + innerH + (compact ? 9 : 12));
     }
 
     const coords: { x: number; y: number; isArr: boolean }[] = data.map((p) => ({
@@ -1438,13 +1438,15 @@ const PPGSignalMeter = ({
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'left';
     ctx.fillText(
-      `min ${Math.round(mn)} · max ${Math.round(mx)} · Δ ${Math.round(mx - mn)}`,
+      `min ${Math.round(mn)} · max ${Math.round(mx)}`,
       innerX,
-      trend.y + trend.h - 6,
+      trend.y + trend.h - 4,
     );
-    ctx.textAlign = 'right';
-    ctx.fillStyle = 'rgba(251, 113, 133, 0.9)';
-    ctx.fillText('● punto rojo = latido arrítmico', innerX + innerW, trend.y + trend.h - 6);
+    if (!compact) {
+      ctx.textAlign = 'right';
+      ctx.fillStyle = 'rgba(251, 113, 133, 0.85)';
+      ctx.fillText('● arrítmico', innerX + innerW, trend.y + trend.h - 4);
+    }
   }, []);
 
   const drawFooter = useCallback((ctx: CanvasRenderingContext2D) => {
@@ -1464,7 +1466,7 @@ const PPGSignalMeter = ({
     ctx.font = `10px ${FONT_MONO}`;
     ctx.fillStyle = COLORS.TEXT_DIM;
     ctx.textAlign = 'left';
-    ctx.fillText('HRV', footer.x + 12, footer.y + 16);
+    ctx.fillText('HRV', footer.x + 12, footer.y + 12);
 
     const cells = [
       { label: 'IBI', value: ibiDisplayRef.current > 0 ? `${ibiDisplayRef.current}ms` : '--', color: COLORS.TEXT_INFO },
@@ -1481,10 +1483,10 @@ const PPGSignalMeter = ({
       ctx.font = `8px ${FONT_MONO}`;
       ctx.fillStyle = COLORS.TEXT_DIM;
       ctx.textAlign = 'left';
-      ctx.fillText(c.label, cx, footer.y + 32);
-      ctx.font = `bold 12px ${FONT_MONO}`;
+      ctx.fillText(c.label, cx, footer.y + 24);
+      ctx.font = `bold 11px ${FONT_MONO}`;
       ctx.fillStyle = c.color;
-      ctx.fillText(c.value, cx, footer.y + 48);
+      ctx.fillText(c.value, cx, footer.y + 38);
     });
 
     // Alarms (right side)
