@@ -7,7 +7,7 @@ import { useHeartBeatProcessor } from "@/hooks/useHeartBeatProcessor";
 import { useVitalSignsProcessor } from "@/hooks/useVitalSignsProcessor";
 import { useSaveMeasurement } from "@/hooks/useSaveMeasurement";
 import { useHealthAnalysis } from "@/hooks/useHealthAnalysis";
-import PPGSignalMeter, { type WaveformIngestFn } from "@/components/PPGSignalMeter";
+import PPGSignalMeter from "@/components/PPGSignalMeter";
 import { DebugTelemetryPanel } from "@/components/DebugTelemetryPanel";
 import { SignalQualityIndex } from "@/modules/signal-quality/SignalQualityIndex";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
@@ -678,7 +678,6 @@ const Index = () => {
   const lastHrPushRef = useRef(0);
   const lastVitalsPushRef = useRef(0);
   const lastSignalPushRef = useRef(0);
-  const waveformIngestRef = useRef<WaveformIngestFn | null>(null);
   const lastRrPushRef = useRef(0);
   const beatMarkerTimerRef = useRef<number | null>(null);
   const HR_PUSH_THROTTLE_MS = 80;
@@ -744,7 +743,7 @@ const Index = () => {
 
   const handleSignalRealtime = useCallback((lastSignal: ProcessedSignal) => {
     if (!isMonitoringRef.current) return;
-    const signalValue = lastSignal.morphologyValue ?? lastSignal.filteredValue;
+    const signalValue = lastSignal.filteredValue;
     const contactState: ContactState =
       lastSignal.contactState ??
       (lastSignal.fingerDetected ? "UNSTABLE_CONTACT" : "NO_CONTACT");
@@ -891,15 +890,6 @@ const Index = () => {
     } = readiness;
 
     const showWaveform = hasUsableContact;
-
-    const waveSample =
-      Math.abs(lastSignal.morphologyValue ?? 0) > 1e-9
-        ? lastSignal.morphologyValue!
-        : lastSignal.filteredValue;
-    if (showWaveform && Number.isFinite(waveSample) && Math.abs(waveSample) > 1e-9) {
-      // Mismo reloj que drawSignal (Date.now); performance.now() dejaba la ventana vacía.
-      waveformIngestRef.current?.(Date.now(), waveSample);
-    }
 
     if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {
       lastSignalPushRef.current = nowT;
@@ -1350,7 +1340,6 @@ const Index = () => {
           )}
           <div className="flex-1 h-full">
             <PPGSignalMeter 
-              waveformIngestRef={waveformIngestRef}
               value={heartbeatSignal}
               quality={lastSignal?.quality || 0}
               isFingerDetected={
@@ -1379,13 +1368,6 @@ const Index = () => {
                     : undefined,
               }}
               bpStatus={vitalSigns.bloodPressure.status}
-              contactState={
-                lastSignal?.contactState ??
-                (lastSignal?.fingerDetected ? 'UNSTABLE_CONTACT' : 'NO_CONTACT')
-              }
-              acquisitionStatus={acquisitionStatusLabel}
-              heartRateStatus={vitalSigns.heartRate.status}
-              spo2Status={vitalSigns.spo2.status}
               diagnostics={currentDiagnostics}
             />
           </div>
