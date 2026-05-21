@@ -1,5 +1,6 @@
 /**
  * Política única: qué se puede guardar como medición final vs solo intento auditable.
+ * Incluye validación de artefactos (movimiento, saturación, subexposición).
  */
 import type { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
 import type { MeasurementStatus } from '@/types/measurements';
@@ -9,7 +10,22 @@ export type MeasurementAttemptOutcome =
   | 'valid_saved'
   | 'rejected_low_quality'
   | 'rejected_incomplete'
-  | 'rejected_status';
+  | 'rejected_status'
+  | 'rejected_artifact';
+
+export interface ArtifactMetrics {
+  motionArtifactRatio: number;
+  saturationRatio: number;
+  underexposureRatio: number;
+  totalFrames: number;
+}
+
+const ARTIFACT_LIMITS = {
+  MAX_MOTION_RATIO: 0.25,
+  MAX_SATURATION_RATIO: 0.15,
+  MAX_UNDEREXPOSURE_RATIO: 0.20,
+  MIN_TOTAL_FRAMES: 30,
+} as const;
 
 function statusOk(s: MeasurementStatus | undefined): boolean {
   return s === 'VALID';
@@ -19,7 +35,8 @@ function statusOk(s: MeasurementStatus | undefined): boolean {
 export function buildAttemptDiagnostics(
   vitalSigns: VitalSignsResult,
   signalQuality: number,
-  reasons: string[]
+  reasons: string[],
+  artifactMetrics?: ArtifactMetrics,
 ): Record<string, unknown> {
   const snap = (name: string, m: VitalSignsResult['heartRate']) => ({
     name,
@@ -32,6 +49,7 @@ export function buildAttemptDiagnostics(
   return {
     signalQuality,
     reasons,
+    ...(artifactMetrics ? { artifacts: artifactMetrics } : {}),
     vitals: {
       heartRate: snap('HR', vitalSigns.heartRate),
       spo2: snap('SpO2', vitalSigns.spo2),
@@ -53,7 +71,8 @@ export function buildAttemptDiagnostics(
 
 export function evaluateFinalMeasurementSave(
   vitalSigns: VitalSignsResult,
-  signalQuality: number
+  signalQuality: number,
+  artifactMetrics?: ArtifactMetrics,
 ): {
   canSaveFinal: boolean;
   outcome: MeasurementAttemptOutcome;
@@ -107,11 +126,30 @@ export function evaluateFinalMeasurementSave(
   }
 
   const sqiOk = signalQuality >= minSqi;
-  const canSaveFinal = hrOk && sqiOk && spo2Ok && bpOk;
+
+  // Validación de artefactos de sesión
+  let artifactOk = true;
+  if (artifactMetrics && artifactMetrics.totalFrames >= ARTIFACT_LIMITS.MIN_TOTAL_FRAMES) {
+    if (artifactMetrics.motionArtifactRatio > ARTIFACT_LIMITS.MAX_MOTION_RATIO) {
+      artifactOk = false;
+      reasons.push(`MOTION_RATIO_${(artifactMetrics.motionArtifactRatio * 100).toFixed(0)}pct`);
+    }
+    if (artifactMetrics.saturationRatio > ARTIFACT_LIMITS.MAX_SATURATION_RATIO) {
+      artifactOk = false;
+      reasons.push(`SATURATION_RATIO_${(artifactMetrics.saturationRatio * 100).toFixed(0)}pct`);
+    }
+    if (artifactMetrics.underexposureRatio > ARTIFACT_LIMITS.MAX_UNDEREXPOSURE_RATIO) {
+      artifactOk = false;
+      reasons.push(`UNDEREXPOSURE_RATIO_${(artifactMetrics.underexposureRatio * 100).toFixed(0)}pct`);
+    }
+  }
+
+  const canSaveFinal = hrOk && sqiOk && spo2Ok && bpOk && artifactOk;
 
   let outcome: MeasurementAttemptOutcome = 'valid_saved';
   if (!canSaveFinal) {
-    if (!sqiOk) outcome = 'rejected_low_quality';
+    if (!artifactOk) outcome = 'rejected_artifact';
+    else if (!sqiOk) outcome = 'rejected_low_quality';
     else if (!hrOk) outcome = 'rejected_status';
     else outcome = 'rejected_incomplete';
   }

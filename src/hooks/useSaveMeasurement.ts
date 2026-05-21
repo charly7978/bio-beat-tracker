@@ -6,11 +6,13 @@ import { toast } from '@/hooks/use-toast';
 import {
   buildAttemptDiagnostics,
   evaluateFinalMeasurementSave,
+  type ArtifactMetrics,
 } from '@/lib/measurements/savePolicy';
 
 interface MeasurementData {
   vitalSigns: VitalSignsResult;
   signalQuality: number;
+  artifactMetrics?: ArtifactMetrics;
 }
 
 async function insertMeasurementAttempt(
@@ -46,11 +48,13 @@ export const useSaveMeasurement = () => {
       }
 
       const sq = Math.round(data.signalQuality);
+      const artifactMetrics = data.artifactMetrics;
       const { canSaveFinal, outcome, reasons } = evaluateFinalMeasurementSave(
         data.vitalSigns,
-        sq
+        sq,
+        artifactMetrics,
       );
-      const diagnostics = buildAttemptDiagnostics(data.vitalSigns, sq, reasons);
+      const diagnostics = buildAttemptDiagnostics(data.vitalSigns, sq, reasons, artifactMetrics);
 
       if (!canSaveFinal) {
         await insertMeasurementAttempt(user.id, outcome, sq, diagnostics);

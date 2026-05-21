@@ -459,6 +459,10 @@ const Index = () => {
     prevHasUsableContactRef.current = false;
     noContactSessionFramesRef.current = 0;
     lastRrSnapshotRef.current = null;
+    motionArtifactFramesRef.current = 0;
+    saturationFramesRef.current = 0;
+    underexposedFramesRef.current = 0;
+    artifactCheckFramesRef.current = 0;
     setHeartBeatRuntimeHints(inferCameraRuntimeHints());
   }, [isMonitoring, startProcessing, startCalibration, enterFullScreen, sanityProfileId, requestWakeLock, setHeartBeatRuntimeHints]);
 
@@ -522,10 +526,21 @@ const Index = () => {
         dataToSave.spo2.value >= VITAL_THRESHOLDS.SPO2.MIN_VALID) ||
       (dataToSave.bloodPressure.value?.systolic ?? 0) > 0;
 
+    const totalCheckFrames = artifactCheckFramesRef.current;
+    const artifactMetrics = totalCheckFrames > 0
+      ? {
+          motionArtifactRatio: motionArtifactFramesRef.current / totalCheckFrames,
+          saturationRatio: saturationFramesRef.current / totalCheckFrames,
+          underexposureRatio: underexposedFramesRef.current / totalCheckFrames,
+          totalFrames: totalCheckFrames,
+        }
+      : undefined;
+
     if (hasMeasurable) {
       await saveMeasurement({
         vitalSigns: dataToSave,
         signalQuality: sqForSave,
+        artifactMetrics,
       });
     }
     
@@ -599,6 +614,10 @@ const Index = () => {
     prevHasUsableContactRef.current = false;
     noContactSessionFramesRef.current = 0;
     lastRrSnapshotRef.current = null;
+    motionArtifactFramesRef.current = 0;
+    saturationFramesRef.current = 0;
+    underexposedFramesRef.current = 0;
+    artifactCheckFramesRef.current = 0;
     setHeartbeatSignal(0);
     setBeatMarker(0);
     setRRIntervals([]);
@@ -627,6 +646,10 @@ const Index = () => {
   const displayHrRef = useRef(0);
   const displaySpo2Ref = useRef(0);
   const displayBpRef = useRef({ systolic: 0, diastolic: 0 });
+  const motionArtifactFramesRef = useRef(0);
+  const saturationFramesRef = useRef(0);
+  const underexposedFramesRef = useRef(0);
+  const artifactCheckFramesRef = useRef(0);
 
   /** Suavizado sutil solo en UI; `vitalSignsRef` conserva valores crudos para guardado. */
   const applyLiveDisplaySmooth = useCallback((vitals: VitalSignsResult): VitalSignsResult => {
@@ -768,6 +791,21 @@ const Index = () => {
       }
     } else {
       noContactSessionFramesRef.current = 0;
+    }
+
+    // Contadores de artefactos de sesión
+    artifactCheckFramesRef.current += 1;
+    if (lastSignal.motionArtifact) {
+      motionArtifactFramesRef.current += 1;
+    }
+    const sqm = diag && typeof diag === 'object' && diag.sqm && typeof diag.sqm === 'object'
+      ? diag.sqm as Record<string, unknown>
+      : {};
+    if (typeof sqm.saturationRatio === 'number' && sqm.saturationRatio > 0.75) {
+      saturationFramesRef.current += 1;
+    }
+    if (typeof sqm.underexposureRatio === 'number' && sqm.underexposureRatio > 0.82) {
+      underexposedFramesRef.current += 1;
     }
 
     if (vitalSignsFrameCounter.current % 45 === 0) {
