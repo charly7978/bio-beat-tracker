@@ -862,13 +862,11 @@ const PPGSignalMeter = ({
     const waveBaseY = plot.y + wavePadTop + waveH;
 
     const coords: { x: number; y: number; isArr: boolean }[] = [];
-    const RIGHT_PAD = 28;
-    const plotW = plot.w - RIGHT_PAD;
     for (let i = 0; i < points.length; i++) {
       const pt = points[i];
       const age = now - pt.time - VISUAL_DELAY_MS;
       if (age > WINDOW_MS) continue;
-      const x = plot.x + plotW - (age * plotW / WINDOW_MS);
+      const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
       if (x < plot.x || x > plot.x + plot.w) continue;
       const y = plot.y + wavePadTop + ((stats.max - pt.value) / safeRange) * waveH;
       coords.push({ x, y, isArr: pt.isArrhythmia });
