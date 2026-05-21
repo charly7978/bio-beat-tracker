@@ -143,18 +143,20 @@ export const VITAL_THRESHOLDS = {
   },
 
   // FINGER + ROI (cámara trasera + dedo; hemoglobina + pulsación temporal)
+  // NOTA: umbrales relajados para tolerar dedo no perfectamente centrado
+  // (ROI más grande, centerBias más plano, tiles más permisivos)
   FINGER: {
-    /** Fracción del lado corto del frame usada como ROI cuadrado central (más = más dedo visible) */
-    ROI_SIZE_FRACTION: 0.96,
+    /** Fracción del lado corto del frame usada como ROI cuadrado central (0.98 = más dedo visible) */
+    ROI_SIZE_FRACTION: 0.98,
     /** Penalización radial en tiles: menor = más tolerante si el dedo no está perfectamente centrado */
-    ROI_CENTER_BIAS_MULT: 0.95,
-    ROI_CENTER_BIAS_MIN: 0.35,
+    ROI_CENTER_BIAS_MULT: 0.50,
+    ROI_CENTER_BIAS_MIN: 0.50,
     /** Brillo mínimo en score de tile (total RGB medio por celda) */
     TILE_BRIGHTNESS_OFFSET: 82,
     MIN_RED_INTENSITY: 36,
     MIN_RED_DOMINANCE: 7,
     MIN_RG_RATIO: 1.04,
-    MIN_COVERAGE: 0.12,
+    MIN_COVERAGE: 0.10,
     /** R/B mínimo — dedo absorbe azul; flash sin dedo suele fallar esto */
     HEMOGLOBIN_MIN_RB: 1.22,
     SOFT_COVERAGE_MULT: 0.85,
@@ -179,7 +181,7 @@ export const VITAL_THRESHOLDS = {
     MAINTAIN_RG: 1.03,
     MAINTAIN_RB: 1.14,
     MAINTAIN_DOMINANCE: 6.5,
-    MAINTAIN_COVERAGE: 0.09,
+    MAINTAIN_COVERAGE: 0.08,
     /** Mantener por PI cuando la firma RGB falla un frame */
     PULSE_HOLD_MIN_PI: 0.00038,
     PULSE_HOLD_MIN_RED: 34,
@@ -199,14 +201,14 @@ export const VITAL_THRESHOLDS = {
     PULSATILE_ACQUIRE_FINGER_ROI: 0.12,
     PULSATILE_ACQUIRE_MAX_MOTION: 2.1,
     PULSATILE_ACQUIRE_MIN_DOMINANCE: 4.4,
-    /** Clasificación por tile (ROI 5×5) */
-    TILE_MIN_RED: 28,
-    TILE_MIN_TOTAL: 52,
-    TILE_MIN_DOMINANCE: 4,
-    TILE_MIN_RG: 1.06,
-    TILE_MIN_COMBINED_SCORE: 0.26,
+    /** Clasificación por tile (ROI 5×5) — umbrales relajados para tolerar dedo parcial/ladeado */
+    TILE_MIN_RED: 24,
+    TILE_MIN_TOTAL: 44,
+    TILE_MIN_DOMINANCE: 3,
+    TILE_MIN_RG: 1.04,
+    TILE_MIN_COMBINED_SCORE: 0.21,
     TILE_DOMINANCE_SCORE_OFFSET: 5,
-    MIN_FINGER_TILES_FOR_WEIGHTING: 3,
+    MIN_FINGER_TILES_FOR_WEIGHTING: 2,
     FINGER_CONFIRM_FRAMES: 5,
     /** Tras perder firma instantánea: frames hasta degradar */
     INSTANT_LOST_TO_UNSTABLE: 2,
