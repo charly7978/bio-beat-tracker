@@ -879,6 +879,46 @@ const PPGSignalMeter = ({
     ctx.rect(plot.x, plot.y, plot.w, plot.h);
     ctx.clip();
 
+    // === AFTERGLOW: latidos viejos (2-6s) comprimidos en left 20% ===
+    const PERSIST_MS = 4000;
+    const afterglowCoords: { x: number; y: number; isArr: boolean; opacity: number }[] = [];
+    for (let i = 0; i < points.length; i++) {
+      const pt = points[i];
+      const age = now - pt.time - VISUAL_DELAY_MS;
+      if (age <= WINDOW_MS || age > WINDOW_MS + PERSIST_MS) continue;
+      const afterglowAge = age - WINDOW_MS;
+      const ratio = afterglowAge / PERSIST_MS;
+      const opacity = 0.10 * (1 - ratio);
+      if (opacity < 0.008) continue;
+      const y = plot.y + wavePadTop + ((stats.max - pt.value) / safeRange) * waveH;
+      const x = plot.x + plot.w * 0.20 * (1 - ratio);
+      afterglowCoords.push({ x, y, isArr: pt.isArrhythmia, opacity });
+    }
+    if (afterglowCoords.length > 5) {
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      let agSeg = 0;
+      while (agSeg < afterglowCoords.length - 1) {
+        const isArr = afterglowCoords[agSeg].isArr;
+        let agEnd = agSeg;
+        while (agEnd < afterglowCoords.length - 1 && afterglowCoords[agEnd].isArr === isArr) agEnd++;
+        const opacityTotal = afterglowCoords.slice(agSeg, Math.min(agEnd + 1, afterglowCoords.length))
+          .reduce((sum, p) => sum + p.opacity, 0);
+        const avgOpacity = opacityTotal / (agEnd - agSeg + 1);
+        if (avgOpacity < 0.008) { agSeg = agEnd; continue; }
+        ctx.beginPath();
+        ctx.moveTo(afterglowCoords[agSeg].x, afterglowCoords[agSeg].y);
+        for (let k = agSeg + 1; k <= agEnd && k < afterglowCoords.length; k++) {
+          ctx.lineTo(afterglowCoords[k].x, afterglowCoords[k].y);
+        }
+        ctx.strokeStyle = isArr ? `rgba(239, 68, 68, ${avgOpacity.toFixed(3)})` : `rgba(34, 197, 94, ${avgOpacity.toFixed(3)})`;
+        ctx.lineWidth = 2.5;
+        ctx.shadowBlur = 0;
+        ctx.stroke();
+        agSeg = agEnd;
+      }
+    }
+
     let seg = 0;
     while (seg < coords.length) {
       if (!coords[seg].isArr) {
