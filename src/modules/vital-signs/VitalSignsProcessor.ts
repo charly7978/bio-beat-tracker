@@ -114,6 +114,8 @@ export class VitalSignsProcessor {
   private lastSqmBundle: SignalQualityMetrics | null = null;
   private spo2DisplayHold = 0;
   private spo2DisplayFrames = 0;
+  private lastValidPulseCount = -1;
+  private rgbDataReady = false;
   /** Evita que BP desaparezca por un frame de gate bajo */
   private displayHold = {
     systolic: 0,
@@ -169,6 +171,7 @@ export class VitalSignsProcessor {
   
   setRGBData(data: RGBData): void {
     this.rgbData = data;
+    this.rgbDataReady = true;
   }
 
   setPlacementMode(mode: FingerPlacementMode): void {
@@ -228,13 +231,17 @@ export class VitalSignsProcessor {
     // Validar pulso real (BP y arritmias)
     this.validateRealPulse(rrData);
 
-    // SpO2: solo alimenta el buffer cuando hay pulso valido.
-    // Sin pulso, no entra basura al buffer → recuperacion instantanea al re-colocar el dedo.
-    if (this.rgbData.redDC === 0 && this.rgbData.greenDC === 0) {
+    // SpO2: detectar transicion sin-pulso → con-pulso para resetear estado.
+    if (this.lastValidPulseCount === 0 && this.validPulseCount >= 1) {
       this.spo2Processor.reset();
+      this.rgbDataReady = false;
     }
+    this.lastValidPulseCount = this.validPulseCount;
+
     this.measurements.spo2 = 0;
-    if (this.validPulseCount >= 1) {
+    // Solo alimentar cuando hay pulso valido Y datos RGB frescos.
+    // Sin rgbDataReady, los AC/DC viejos (pre-reset) contaminarian el buffer.
+    if (this.validPulseCount >= 1 && this.rgbDataReady) {
       const sp2 = this.spo2Processor.update(
         this.rgbData.redAC, this.rgbData.redDC,
         this.rgbData.greenAC, this.rgbData.greenDC,
