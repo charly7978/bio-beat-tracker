@@ -19,8 +19,8 @@ export interface PulseAgcConfig {
 }
 
 export const DEFAULT_PULSE_AGC: PulseAgcConfig = {
-  targetPeak: 22,
-  minScale: 1.2,
+  targetPeak: 40,
+  minScale: 2.5,
   maxScale: 12,
   minRobustRange: 0.06,
   tailSize: 96,
@@ -75,7 +75,7 @@ export function applyPulseAgc(
       ? clamp((cfg.targetPeak / Math.max(rr * 0.55, cfg.minRobustRange * 0.4)) * periodGate * motionGate, cfg.minScale, cfg.maxScale)
       : cfg.minScale;
 
-  state.scale = state.scale * 0.65 + desired * 0.35;
+  state.scale = state.scale * 0.40 + desired * 0.60;
 
   const out = filtered * state.scale;
   const cap = cfg.targetPeak * cfg.maxScale;

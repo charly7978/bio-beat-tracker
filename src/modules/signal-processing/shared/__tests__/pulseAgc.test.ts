@@ -22,7 +22,7 @@ describe('pulseAgc', () => {
     for (let i = 0; i < 80; i++) {
       last = applyPulseAgc(state, (Math.random() - 0.5) * 0.05, 0.05, 0.6);
     }
-    expect(Math.abs(last)).toBeLessThan(1.5);
-    expect(state.scale).toBeLessThan(2.5);
+    expect(Math.abs(last)).toBeLessThan(1.0);
+    expect(state.scale).toBeGreaterThanOrEqual(2);
   });
 });
