@@ -14,11 +14,11 @@ export const PEAK_DETECTION_DEFAULTS = {
   /** Ventana larga tipo Elgendi (~667 ms) */
   beatWindowMs: 667,
   /** Prominencia mínima de referencia (Elgendi); se escala por calibración en ventana */
-  minProminence: 0.017,
+  minProminence: 0.019,
   /** Peso del offset adaptativo MA_beat (referencia; calibración ajusta por SQI/PI) */
   offsetWeight: 0.22,
   /** Factor mínimo del RR fisiológico entre emisiones de pico (anti-doble latido) */
-  peakEmitRefractoryFactor: 0.72,
+  peakEmitRefractoryFactor: 0.80,
   /** Tolerancia de fusión por defecto si no hay BPM espectral (~⅓ RR a 72 bpm) */
   fusionToleranceMs: 300,
   minSQI: 10,
@@ -57,7 +57,7 @@ export const PEAK_DETECTION_DEFAULTS = {
     FUSION_TOLERANCE_RR_FRAC: 0.34,
     FUSION_TOLERANCE_MS_MIN: 180,
     FUSION_TOLERANCE_MS_MAX: 420,
-    SOLO_ELGENDI_BASE: 0.14,
+    SOLO_ELGENDI_BASE: 0.15,
     SOLO_ELGENDI_MIN: 0.1,
     SOLO_ELGENDI_MAX: 0.22,
     TARGET_PI: 0.0045,

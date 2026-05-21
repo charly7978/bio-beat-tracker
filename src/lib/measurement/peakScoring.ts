@@ -18,7 +18,7 @@ export const PEAK_SCORE_THRESHOLDS = {
   dualMin: 0.36,
   soloMin: 0.45,
   /** Desviación máxima vs mediana RR previa para aceptar pico */
-  rrMedianMaxRelDev: 0.32,
+  rrMedianMaxRelDev: 0.26,
 } as const;
 
 export interface PeakScoreInput {
