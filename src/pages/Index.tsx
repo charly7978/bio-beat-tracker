@@ -1173,9 +1173,9 @@ const Index = () => {
     return () => setSignalCallback(null);
   }, [setSignalCallback, handleSignalRealtime]);
 
-  // AUTO-FINALIZAR a los 60 segundos (1 minuto)
+  // AUTO-FINALIZAR a los 90 segundos (1.5 minutos)
   useEffect(() => {
-    if (isMonitoring && elapsedTime >= 60) {
+    if (isMonitoring && elapsedTime >= 90) {
       finalizeMeasurement();
     }
   }, [elapsedTime, isMonitoring, finalizeMeasurement]);
