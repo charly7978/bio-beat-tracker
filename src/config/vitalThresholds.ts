@@ -21,9 +21,12 @@ export const VITAL_THRESHOLDS = {
     CRITICAL_LOW: 90,
     R_VALUE_MIN: 0.05,
     R_VALUE_MAX: 3.5,
-    /** SpO2 = intercept − slope × R_mediana (range amplio: smartphone RR es inherentemente inestable — SmartPhOx 2024) */
+    /** SpO2 = intercept − slope × R_mediana.
+     * Smartphone usa red+green (no red+IR como oxímetro médico). El ratio R sale ~2× más alto
+     * porque la absorción del verde difiere del IR. Slope 5 compensa el factor ~2x.
+     * SmartPhOx 2024 confirma: RR smartphone necesita calibración específica por dispositivo. */
     R_MODEL_INTERCEPT: 101,
-    R_MODEL_SLOPE: 10,
+    R_MODEL_SLOPE: 5,
     DISPLAY_CAP: 99,
     R_HISTORY_SAMPLES: 7,
     MIN_PI_PERCENT: 0.02,
