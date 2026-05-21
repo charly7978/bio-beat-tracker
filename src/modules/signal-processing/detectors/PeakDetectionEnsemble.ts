@@ -223,7 +223,7 @@ export class PeakDetectionEnsemble {
     const soloPan = sortedSources.filter((s) => s === 'solo_pan').length;
     const agreeEl = clamp((dualFused * 2 + soloEl) / (nE + nP), 0, 1);
     const agreePan = clamp((dualFused * 2 + soloPan) / (nE + nP), 0, 1);
-    const agreeAuto = spec.score;
+    const _agreeAuto = spec.score;
 
     let confidence =
       agreeEl * 0.26 +

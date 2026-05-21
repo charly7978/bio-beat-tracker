@@ -306,7 +306,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     let rejectionStatus: MeasurementStatus | null = null;
     const r = this.smoothedRed;
     const g = this.smoothedGreen;
-    const b = this.smoothedBlue;
+    const _b = this.smoothedBlue;
 
     const underInstant = r < 12 && g < 10 ? 1 : 0;
     this.underexposureEma = this.underexposureEma * 0.92 + underInstant * 0.08;
@@ -1032,7 +1032,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   ): { value: number; label: string; strength: number } {
     const rNorm = this.redBaseline > 0 ? (this.redBaseline - rawRed) / this.redBaseline : 0;
     const gNorm = this.greenBaseline > 0 ? (this.greenBaseline - rawGreen) / this.greenBaseline : 0;
-    const bNorm = this.blueBaseline > 0 ? (this.blueBaseline - rawBlue) / this.blueBaseline : 0;
+    const _bNorm = this.blueBaseline > 0 ? (this.blueBaseline - rawBlue) / this.blueBaseline : 0;
 
     const clampMax = placement === 'pad' ? 0.07 : placement === 'tip' ? 0.05 : 0.06;
     const clampPulse = (v: number) => clamp(v, -clampMax, clampMax);

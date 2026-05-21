@@ -70,7 +70,7 @@ export class HeartBeatProcessor {
     const unlock = async () => {
       if (this.audioUnlocked) return;
       try {
-        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
         this.audioContext = new AudioContextClass();
         await this.audioContext.resume();
         this.audioUnlocked = true;

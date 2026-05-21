@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { ppgPerf } from '@/utils/logger';
 import { supabase } from '@/integrations/supabase/client';
+import type { Database } from '@/integrations/supabase/types';
 import { bufferSnapshot, drainBuffer, deleteIds } from '@/lib/perf/indexedDbBuffer';
+
+type PerfSnapshotInsert = Database['public']['Tables']['perf_snapshots']['Insert'];
 
 const CONSENT_KEY = 'perf_telemetry_consent';
 const APP_VERSION = '1.0.0';
@@ -20,7 +23,7 @@ function deviceInfo() {
   return {
     userAgent: nav?.userAgent ?? 'unknown',
     hardwareConcurrency: nav?.hardwareConcurrency ?? 0,
-    deviceMemory: (nav as any)?.deviceMemory ?? 0,
+    deviceMemory: (nav as Navigator | null)?.deviceMemory ?? 0,
     screen: scr ? { w: scr.width, h: scr.height } : null,
     dpr: typeof window !== 'undefined' ? window.devicePixelRatio : 1,
   };
@@ -78,8 +81,8 @@ export function usePerfTelemetry(opts: {
       // Reintentar items pendientes
       const pending = await drainBuffer();
       if (pending.length) {
-        const rows = pending.map((p) => ({ ...(p.payload as object), user_id: user.id }));
-        const { error } = await supabase.from('perf_snapshots').insert(rows as any);
+        const rows: PerfSnapshotInsert[] = pending.map((p) => ({ ...p.payload, user_id: user.id } as PerfSnapshotInsert));
+        const { error } = await supabase.from('perf_snapshots').insert(rows);
         if (!error) await deleteIds(pending.map((p) => p.id));
       }
 
@@ -101,7 +104,7 @@ export function usePerfTelemetry(opts: {
         app_version: APP_VERSION,
         consent_given: true,
       };
-      const { error } = await supabase.from('perf_snapshots').insert(row as any);
+      const { error } = await supabase.from('perf_snapshots').insert(row as PerfSnapshotInsert);
       if (error) {
         await bufferSnapshot(row);
       }

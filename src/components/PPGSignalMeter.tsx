@@ -472,7 +472,7 @@ const PPGSignalMeter = ({
 
   const drawMetricsBar = useCallback((ctx: CanvasRenderingContext2D, now: number) => {
     const { metrics } = layoutRef.current;
-    const { bpm, spo2, pressure, perfusionIndex: pi, arrhythmiaStatus: arr, arrhythmiaCount: arrCnt } = propsRef.current;
+    const { pressure, perfusionIndex: pi, arrhythmiaStatus: arr, arrhythmiaCount: arrCnt } = propsRef.current;
 
     // Background row
     ctx.fillStyle = 'rgba(6, 12, 22, 0.85)';
@@ -599,7 +599,7 @@ const PPGSignalMeter = ({
     const dia = dispDia > 0 ? dispDia : pressure?.diastolic || 0;
     const map = sys > 0 && dia > 0 ? Math.round(dia + (sys - dia) / 3) : 0;
     const pp = sys > 0 && dia > 0 ? sys - dia : 0;
-    const bpConf = pressure?.confidence;
+    const _bpConf = pressure?.confidence;
 
     const bpColor = sys <= 0 ? COLORS.TEXT_DIM
       : sys >= 140 || dia >= 90 ? COLORS.TEXT_DANGER
@@ -794,7 +794,7 @@ const PPGSignalMeter = ({
     const buffer = dataBufferRef.current;
     if (!buffer) return;
     const { plot } = layoutRef.current;
-    const { value: signalValue, isFingerDetected: detected, arrhythmiaStatus: arrStatus, preserveResults: preserve, isPeak: peak } = propsRef.current;
+    const { value: signalValue, isFingerDetected: detected, arrhythmiaStatus: _arrStatus, preserveResults: preserve, isPeak: peak } = propsRef.current;
 
     if (preserve && !detected) return;
 

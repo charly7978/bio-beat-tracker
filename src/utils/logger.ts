@@ -18,7 +18,7 @@ const ORDER: Record<LogLevel, number> = {
 
 function resolveLevel(): LogLevel {
   try {
-    const env = (import.meta as any)?.env?.VITE_LOG_LEVEL as LogLevel | undefined;
+    const env = import.meta.env.VITE_LOG_LEVEL as LogLevel | undefined;
     if (env && env in ORDER) return env;
   } catch {}
   return 'info';

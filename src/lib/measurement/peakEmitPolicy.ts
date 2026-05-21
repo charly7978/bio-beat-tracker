@@ -45,7 +45,7 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     ens,
     lastEmittedPeakMs,
     minPeakConf,
-    consensusMin,
+    consensusMin: _consensusMin,
     allowSoloElgendi,
     sampleRateHz,
     windowSamples,

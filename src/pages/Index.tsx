@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, Brain, Loader2, Settings as SettingsIcon } from "lucide-react";
+import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, Brain, Loader2 } from "lucide-react";
 import { playCompletionSound } from "@/utils/soundUtils";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
 import { useSignalProcessor } from "@/hooks/useSignalProcessor";
@@ -8,7 +8,6 @@ import { useVitalSignsProcessor } from "@/hooks/useVitalSignsProcessor";
 import { useSaveMeasurement } from "@/hooks/useSaveMeasurement";
 import { useHealthAnalysis } from "@/hooks/useHealthAnalysis";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
-import { DebugTelemetryPanel } from "@/components/DebugTelemetryPanel";
 import { SignalQualityIndex } from "@/modules/signal-quality/SignalQualityIndex";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
 import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
@@ -29,11 +28,10 @@ import { VitalSignsResult } from "@/modules/vital-signs/VitalSignsProcessor";
 import type { ProcessedSignal, ContactState } from "@/types/signal";
 import { toast } from "@/components/ui/use-toast";
 import { ppgPerf } from "@/utils/logger";
-import { usePerfTelemetry, getPerfConsent, setPerfConsent } from "@/hooks/usePerfTelemetry";
+import { usePerfTelemetry } from "@/hooks/usePerfTelemetry";
 import type { BackpressureConfig } from "@/lib/perf/backpressureConfig";
 import { VitalsSanityChecker } from "@/lib/sanity/vitalsSanity";
 import {
-  SANITY_PROFILES,
   getActiveProfileId,
   setActiveProfileId,
   getCustomOverrides,
@@ -44,14 +42,8 @@ import {
   startSession as startAuditSession,
   setActiveProfile as setAuditProfile,
   recordVerdict as recordAuditVerdict,
-  clearLog as clearAuditLog,
-  downloadJSON as downloadAuditJSON,
-  downloadCSV as downloadAuditCSV,
-  getEntries as getAuditEntries,
   getNegativeCount as getAuditNegativeCount,
 } from "@/lib/sanity/sanityAuditLog";
-
-import { supabase } from "@/integrations/supabase/client";
 import { VITAL_THRESHOLDS } from "@/config/vitalThresholds";
 
 const Index = () => {
@@ -92,7 +84,7 @@ const Index = () => {
     const o = getCustomOverrides();
     return Object.keys(o).length ? JSON.stringify(o, null, 2) : "";
   });
-  const [auditNegativeCount, setAuditNegativeCount] = useState(0);
+  const [_auditNegativeCount, setAuditNegativeCount] = useState(0);
   const bpmSanityRef = useRef<VitalsSanityChecker>(
     new VitalsSanityChecker({
       ...resolveProfile(getActiveProfileId()).effective,
@@ -104,7 +96,7 @@ const Index = () => {
   );
   const sanityErrorRef = useRef<string | null>(null);
   const sanityToastAtRef = useRef<number>(0);
-  const [sanityError, setSanityError] = useState<string | null>(null);
+  const [_sanityError, setSanityError] = useState<string | null>(null);
 
   const rebuildSanityChecker = useCallback((profileId: string) => {
     const { effective } = resolveProfile(profileId);
@@ -118,13 +110,13 @@ const Index = () => {
     setAuditProfile(profileId);
   }, []);
 
-  const handleProfileChange = useCallback((id: string) => {
+  const _handleProfileChange = useCallback((id: string) => {
     setSanityProfileId(id);
     setActiveProfileId(id);
     rebuildSanityChecker(id);
   }, [rebuildSanityChecker]);
 
-  const handleCustomApply = useCallback(() => {
+  const _handleCustomApply = useCallback(() => {
     const txt = customJSON.trim();
     try {
       const parsed = txt ? JSON.parse(txt) : {};
@@ -140,18 +132,18 @@ const Index = () => {
     }
   }, [customJSON, sanityProfileId, rebuildSanityChecker]);
 
-  const handleCustomClear = useCallback(() => {
+  const _handleCustomClear = useCallback(() => {
     setCustomOverrides(null);
     setCustomJSON("");
     rebuildSanityChecker(sanityProfileId);
   }, [sanityProfileId, rebuildSanityChecker]);
   
-  const wakeLockRef = useRef<any>(null);
-
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+ 
   const requestWakeLock = useCallback(async () => {
-    if ('wakeLock' in navigator) {
+    if ('wakeLock' in navigator && navigator.wakeLock) {
       try {
-        wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+        wakeLockRef.current = await navigator.wakeLock.request('screen');
       } catch (err) {
         console.warn('Wake Lock error:', err);
       }
@@ -171,7 +163,7 @@ const Index = () => {
     stopProcessing, 
     lastSignal, 
     processFrame, 
-    isProcessing, 
+    isProcessing: _isProcessing, 
     getRGBStats,
     getBackpressureState,
     getBackpressureConfig,
@@ -216,10 +208,10 @@ const Index = () => {
 
   // ---- Telemetría de rendimiento (opt-in) ----
   const telemetryOn = false;
-  const [showSettings, setShowSettings] = useState(false);
-  const [bpCfg, setBpCfg] = useState<BackpressureConfig>(() => getBackpressureConfig());
+  const [_showSettings, _setShowSettings] = useState(false);
+  const [_bpCfg, setBpCfg] = useState<BackpressureConfig>(() => getBackpressureConfig());
 
-  const updateBp = useCallback((patch: Partial<BackpressureConfig>) => {
+  const _updateBp = useCallback((patch: Partial<BackpressureConfig>) => {
     const next = setBackpressureConfig(patch);
     setBpCfg(next);
   }, [setBackpressureConfig]);
@@ -692,7 +684,7 @@ const Index = () => {
 
   // Hot path: corre por cada frame de cámara SIN pasar por React.
   // Toda la lógica DSP vive en refs; sólo se emite a React con throttle.
-  const [currentDiagnostics, setCurrentDiagnostics] = useState<any>(null);
+  const [currentDiagnostics, setCurrentDiagnostics] = useState<Record<string, unknown> | null>(null);
   const lastDiagPushRef = useRef(0);
 
   const acquisitionStatusLabel = React.useMemo(() => {

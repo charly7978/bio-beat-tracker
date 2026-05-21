@@ -1,5 +1,5 @@
 import { createLogger } from '../../utils/logger';
-import { isPhysiologicalRR, calculateHRV, getMonotonicNow } from '../../utils/physio';
+import { calculateHRV, getMonotonicNow } from '../../utils/physio';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 
 const log = createLogger('ArrhythmiaProcessor');
@@ -143,12 +143,10 @@ export class ArrhythmiaProcessor {
       return;
     }
 
-    let sumSquaredDiff = 0;
     let abruptDiffCount = 0;
 
     for (let i = 1; i < validRRs.length; i++) {
       const diff = validRRs[i] - validRRs[i - 1];
-      sumSquaredDiff += diff * diff;
       if (Math.abs(diff) > Math.max(100, medianRR * this.A.ABRUPT_RR_FRAC)) {
         abruptDiffCount++;
       }
@@ -159,8 +157,6 @@ export class ArrhythmiaProcessor {
       this.arrhythmiaDetected = false;
       return;
     }
-
-    const avgRR = validRRs.reduce((a, b) => a + b, 0) / validRRs.length;
     const lastRR = validRRs[validRRs.length - 1];
 
     const hrv = calculateHRV(validRRs);

@@ -22,6 +22,23 @@ declare global {
   interface Screen {
     orientation?: ScreenOrientation;
   }
+
+  // WakeLock API
+  interface WakeLockSentinel {
+    readonly released: boolean;
+    readonly type: 'screen';
+    release(): Promise<void>;
+    onrelease: ((this: WakeLockSentinel, ev: Event) => unknown) | null;
+  }
+
+  interface WakeLock {
+    request(type: 'screen'): Promise<WakeLockSentinel>;
+  }
+
+  interface Navigator {
+    wakeLock?: WakeLock;
+    readonly deviceMemory?: number;
+  }
 }
 
 export {};
