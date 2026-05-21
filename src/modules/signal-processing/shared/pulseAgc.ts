@@ -64,10 +64,10 @@ export function applyPulseAgc(
 
   const rr = robustRange(state.tail);
   const periodGate = Math.max(
-    clamp((periodicity - 0.12) / 0.5, 0, 1),
-    contactStable ? 0.38 : 0,
+    clamp((periodicity - 0.08) / 0.5, 0, 1),
+    contactStable ? 0.45 : 0,
   );
-  const motionGate = clamp(1 - motionScore * 1.15, 0.25, 1);
+  const motionGate = clamp(1 - motionScore * 1.1, 0.35, 1);
   const _rangeGate = clamp(rr / cfg.minRobustRange, 0, 1);
 
   const desired =
@@ -75,7 +75,7 @@ export function applyPulseAgc(
       ? clamp((cfg.targetPeak / Math.max(rr * 0.55, cfg.minRobustRange * 0.4)) * periodGate * motionGate, cfg.minScale, cfg.maxScale)
       : cfg.minScale;
 
-  state.scale = state.scale * 0.78 + desired * 0.22;
+  state.scale = state.scale * 0.65 + desired * 0.35;
 
   const out = filtered * state.scale;
   const cap = cfg.targetPeak * cfg.maxScale;

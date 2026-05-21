@@ -67,8 +67,8 @@ const TREND_WINDOW_MS = 60_000;  // 60 s de tendencia BPM
 const TREND_MAX_POINTS = 240;
 const BEAT_HISTORY_MAX = 30;
 const VISUAL_DELAY_MS = 166;
-const AMP_ATTACK = 0.44;
-const AMP_RELEASE = 0.56;
+const AMP_ATTACK = 0.32;
+const AMP_RELEASE = 0.40;
 const RR_TACHO_H = 34;
 
 const COLORS = {
@@ -225,7 +225,7 @@ const PPGSignalMeter = ({
       4.2 *
       (pi < 0.0025 ? 2.1 : pi < 0.005 ? 1.65 : pi < 0.01 ? 1.35 : 1.08) *
       (q < 20 ? 1.4 : q < 40 ? 1.2 : 1);
-    waveGainRef.current = waveGainRef.current * 0.82 + weakTarget * 0.18;
+    waveGainRef.current = waveGainRef.current * 0.70 + weakTarget * 0.30;
 
     if (bpm > 30 && bpm < 220 && nowMs - lastBpmSampleRef.current > 500) {
       lastBpmSampleRef.current = nowMs;
