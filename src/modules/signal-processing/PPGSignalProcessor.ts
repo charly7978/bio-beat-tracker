@@ -1180,14 +1180,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.redAC = computeAC(redW, this.redDC);
     this.greenAC = computeAC(greenW, this.greenDC);
     this.blueAC = computeAC(blueW, this.blueDC);
-
-    const redPI = this.redAC / this.redDC;
-    const greenPI = this.greenAC / this.greenDC;
-
-    if (redPI < 0.0001 || greenPI < 0.0001) {
-      this.redAC = 0;
-      this.greenAC = 0;
-    }
   }
 
   /**
