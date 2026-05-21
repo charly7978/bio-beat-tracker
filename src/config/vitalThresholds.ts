@@ -25,9 +25,9 @@ export const VITAL_THRESHOLDS = {
      * Smartphone usa red+green (no red+IR como oxímetro médico). El ratio R sale ~2× más alto
      * porque la absorción del verde difiere del IR. Slope 5 compensa el factor ~2x.
      * SmartPhOx 2024 confirma: RR smartphone necesita calibración específica por dispositivo. */
-    R_MODEL_INTERCEPT: 101,
+    R_MODEL_INTERCEPT: 98,
     R_MODEL_SLOPE: 5,
-    DISPLAY_CAP: 99,
+    DISPLAY_CAP: 98,
     R_HISTORY_SAMPLES: 7,
     MIN_PI_PERCENT: 0.02,
     MIN_RED_DC: 10,
