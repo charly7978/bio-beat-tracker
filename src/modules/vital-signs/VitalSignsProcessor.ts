@@ -523,7 +523,6 @@ export class VitalSignsProcessor {
     const sp2 = this.spo2Processor.update(
       this.rgbData.redAC, this.rgbData.redDC,
       this.rgbData.greenAC, this.rgbData.greenDC,
-      this.measurements.signalQuality,
     );
     if (sp2.confidence !== 'INSUFFICIENT' && sp2.spo2 >= 70 && sp2.spo2 <= 100) {
       this.measurements.spo2 = sp2.spo2;

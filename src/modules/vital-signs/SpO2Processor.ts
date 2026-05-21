@@ -1,5 +1,8 @@
+import { createLogger } from '../../utils/logger';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { CalibrationManager } from './CalibrationManager';
+
+const log = createLogger('SpO2Processor');
 
 export interface SpO2Estimate {
   spo2: number;
@@ -21,11 +24,11 @@ export class SpO2Processor {
   private framesSinceLastEmit = 0;
   private lastSpO2 = 0;
   private lastRValue = 0;
-  private lastConfidence: SpO2Estimate['confidence'] = 'INSUFFICIENT';
   private staleFrames = 0;
   private estimateHistory: number[] = [];
   private intercept: number;
   private slope: number;
+  private frameCount = 0;
 
   constructor() {
     const cfg = VITAL_THRESHOLDS.SPO2;
@@ -38,31 +41,45 @@ export class SpO2Processor {
     redDC: number,
     greenAC: number,
     greenDC: number,
-    sqi: number = 100,
   ): SpO2Estimate {
+    this.frameCount++;
     const insufficient: SpO2Estimate = {
       spo2: 0, rValue: 0, confidence: 'INSUFFICIENT', samplesUsed: 0, pi: 0,
     };
 
     const cfg = VITAL_THRESHOLDS.SPO2;
 
-    if (sqi < 5) return this.staleOrInsufficient(insufficient);
-    if (redDC < cfg.MIN_RED_DC || greenDC < cfg.MIN_GREEN_DC) return this.staleOrInsufficient(insufficient);
+    if (redDC < cfg.MIN_RED_DC || greenDC < cfg.MIN_GREEN_DC) {
+      if (this.frameCount % 30 === 0) log.warn(`[SpO2] DC bajo: redDC=${redDC.toFixed(1)} greenDC=${greenDC.toFixed(1)} (min ${cfg.MIN_RED_DC}/${cfg.MIN_GREEN_DC})`);
+      return this.staleOrInsufficient(insufficient);
+    }
 
     const piRed = (redAC / redDC) * 100;
     const piGreen = (greenAC / greenDC) * 100;
-    if (piRed < cfg.MIN_PI_PERCENT || piGreen < cfg.MIN_PI_PERCENT) return this.staleOrInsufficient(insufficient);
+    const piPct = Math.max(piRed, piGreen);
+
+    if (piPct < 0.005) {
+      if (this.frameCount % 30 === 0) log.warn(`[SpO2] PI muy bajo: piRed=${piRed.toFixed(3)}% piGreen=${piGreen.toFixed(3)}% (< 0.005%)`);
+      return this.staleOrInsufficient(insufficient);
+    }
 
     const ratioRed = redAC / redDC;
     const ratioGreen = greenAC / greenDC;
     if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) {
+      if (this.frameCount % 30 === 0) log.warn(`[SpO2] ratio no finito: ratioRed=${ratioRed} ratioGreen=${ratioGreen}`);
       return this.staleOrInsufficient(insufficient);
     }
 
     const currentR = ratioRed / ratioGreen;
-    if (currentR < cfg.R_VALUE_MIN || currentR > cfg.R_VALUE_MAX) return this.staleOrInsufficient(insufficient);
 
-    const pi = Math.max(piRed, piGreen);
+    if (currentR < cfg.R_VALUE_MIN || currentR > cfg.R_VALUE_MAX) {
+      if (this.frameCount % 15 === 0) log.warn(`[SpO2] R fuera de rango [${cfg.R_VALUE_MIN},${cfg.R_VALUE_MAX}]: ${currentR.toFixed(4)} (ACr=${redAC.toFixed(2)} DCr=${redDC.toFixed(0)} ACg=${greenAC.toFixed(2)} DCg=${greenDC.toFixed(0)})`);
+      return this.staleOrInsufficient(insufficient);
+    }
+
+    if (this.frameCount % 15 === 0) {
+      log.info(`[SpO2] ACr=${redAC.toFixed(3)} DCr=${redDC.toFixed(0)} ACg=${greenAC.toFixed(3)} DCg=${greenDC.toFixed(0)} R=${currentR.toFixed(4)} pi=${piPct.toFixed(3)}%`);
+    }
 
     this.rBuffer.push(currentR);
     if (this.rBuffer.length > BUFFER_MAX) {
@@ -76,28 +93,28 @@ export class SpO2Processor {
 
     this.applyCalibration();
 
-    const rawSpO2 = Math.min(
-      cfg.DISPLAY_CAP,
-      Math.max(cfg.MIN_VALID, this.intercept - this.slope * medianR),
-    );
-
-    if (!isFinite(rawSpO2) || rawSpO2 < cfg.MIN_VALID) return insufficient;
-
-    let spo2 = rawSpO2;
-    if (this.lastSpO2 > 0) {
-      spo2 = this.lastSpO2 * (1 - EMA_ALPHA) + rawSpO2 * EMA_ALPHA;
+    const formulaSpO2 = this.intercept - this.slope * medianR;
+    if (!isFinite(formulaSpO2)) {
+      if (this.frameCount % 15 === 0) log.warn(`[SpO2] formulaSpO2 no finito (R_med=${medianR.toFixed(4)})`);
+      return this.staleOrInsufficient(insufficient);
     }
+
+    const clampedSpO2 = Math.max(cfg.MIN_VALID, Math.min(cfg.DISPLAY_CAP, formulaSpO2));
+
+    let spo2 = clampedSpO2;
+    if (this.lastSpO2 > 0) {
+      spo2 = this.lastSpO2 * (1 - EMA_ALPHA) + clampedSpO2 * EMA_ALPHA;
+    }
+
+    spo2 = Math.max(cfg.MIN_VALID, Math.min(cfg.DISPLAY_CAP, spo2));
 
     let confidence: SpO2Estimate['confidence'] = 'LOW';
     const bufCount = this.rBuffer.length;
-    if (bufCount >= 12 && pi > cfg.MIN_PI_PERCENT * 2) confidence = 'HIGH';
+    if (bufCount >= 12 && piPct > cfg.MIN_PI_PERCENT * 2) confidence = 'HIGH';
     else if (bufCount >= 6) confidence = 'MEDIUM';
-
-    if (spo2 < 70 || spo2 > 100) return insufficient;
 
     this.lastSpO2 = spo2;
     this.lastRValue = medianR;
-    this.lastConfidence = confidence;
     this.staleFrames = 0;
 
     this.estimateHistory.push(spo2);
@@ -109,18 +126,22 @@ export class SpO2Processor {
       confidence = 'LOW';
     }
 
+    if (this.frameCount % 30 === 0) {
+      log.info(`[SpO2] R_med=${medianR.toFixed(4)} formula=${formulaSpO2.toFixed(1)}% clamped=${clampedSpO2.toFixed(1)}% ema=${spo2.toFixed(1)}% conf=${confidence} n=${this.rBuffer.length}`);
+    }
+
     this.framesSinceLastEmit++;
     if (this.framesSinceLastEmit < EMIT_EVERY_N_FRAMES) {
-      return this.buildThrottledEmit(confidence, pi);
+      return this.buildThrottledEmit(confidence, piPct);
     }
     this.framesSinceLastEmit = 0;
 
     return {
-      spo2: Math.round(spo2),
+      spo2: Math.round(Math.min(cfg.DISPLAY_CAP, Math.max(cfg.MIN_VALID, spo2))),
       rValue: medianR,
       confidence,
       samplesUsed: this.rBuffer.length,
-      pi,
+      pi: piPct,
     };
   }
 
@@ -168,7 +189,6 @@ export class SpO2Processor {
       this.framesSinceLastEmit = 0;
       this.lastSpO2 = 0;
       this.lastRValue = 0;
-      this.lastConfidence = 'INSUFFICIENT';
       return insufficient;
     }
     return {
@@ -180,14 +200,16 @@ export class SpO2Processor {
     };
   }
 
+  getFrameCount(): number { return this.frameCount; }
+
   reset(): void {
     this.rBuffer = [];
     this.framesSinceLastEmit = 0;
     this.lastSpO2 = 0;
     this.lastRValue = 0;
-    this.lastConfidence = 'INSUFFICIENT';
     this.staleFrames = 0;
     this.estimateHistory = [];
+    this.frameCount = 0;
     const cfg = VITAL_THRESHOLDS.SPO2;
     this.intercept = cfg.R_MODEL_INTERCEPT;
     this.slope = cfg.R_MODEL_SLOPE;

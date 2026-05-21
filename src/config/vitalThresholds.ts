@@ -19,11 +19,11 @@ export const VITAL_THRESHOLDS = {
     MIN_VALID: 70,
     MAX_VALID: 100,
     CRITICAL_LOW: 90,
-    R_VALUE_MIN: 0.25,
-    R_VALUE_MAX: 2.0,
-    /** SpO2 = intercept − slope × R_mediana (calibración smartphone; literatura: ~105-15*R para red/green) */
-    R_MODEL_INTERCEPT: 105,
-    R_MODEL_SLOPE: 15,
+    R_VALUE_MIN: 0.05,
+    R_VALUE_MAX: 3.5,
+    /** SpO2 = intercept − slope × R_mediana (range amplio: smartphone RR es inherentemente inestable — SmartPhOx 2024) */
+    R_MODEL_INTERCEPT: 101,
+    R_MODEL_SLOPE: 10,
     DISPLAY_CAP: 99,
     R_HISTORY_SAMPLES: 7,
     MIN_PI_PERCENT: 0.02,
