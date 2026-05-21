@@ -1302,34 +1302,6 @@ const Index = () => {
         {/* MODAL DE AJUSTES REMOVIDO PARA PRODUCCIÓN */}
 
         <div className="relative z-10 h-full">
-          {import.meta.env.DEV && isMonitoring && (
-            <DebugTelemetryPanel
-              camera={{
-                ...(cameraRef.current?.getDiagnostics?.() as Record<string, unknown>),
-                constrained: cameraHintsRef.current.constrained,
-                tclLike: cameraHintsRef.current.tclLike,
-                motorolaLike: cameraHintsRef.current.motorolaLike,
-                torchReliable: cameraHintsRef.current.torchReliable,
-              }}
-              sqm={
-                (lastSignal?.diagnostics as { sqm?: Record<string, unknown> })?.sqm as {
-                  sqi?: number;
-                  perfusionIndex?: number;
-                  fpsEffective?: number;
-                  timestampJitterMs?: number;
-                  detectorAgreement?: number | null;
-                  elgendiConfidence?: number | null;
-                  panTompkinsConfidence?: number | null;
-                }
-              }
-              acquisitionStatus={acquisitionStatusLabel}
-              peakDetection={currentDiagnostics?.peakDetection as Record<string, unknown>}
-              contactState={
-                lastSignal?.contactState ??
-                (lastSignal?.fingerDetected ? "UNSTABLE_CONTACT" : "NO_CONTACT")
-              }
-            />
-          )}
           <div className="flex-1 h-full">
             <PPGSignalMeter 
               value={heartbeatSignal}
