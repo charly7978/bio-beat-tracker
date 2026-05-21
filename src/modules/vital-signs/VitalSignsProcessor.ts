@@ -363,7 +363,7 @@ export class VitalSignsProcessor {
       this.spo2DisplayFrames = 0;
     } else if (this.spo2DisplayHold > 0) {
       this.spo2DisplayFrames++;
-      if (this.spo2DisplayFrames >= 3) {
+      if (this.spo2DisplayFrames >= 10) {
         this.spo2DisplayHold = 0;
       }
     }

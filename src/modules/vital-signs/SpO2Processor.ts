@@ -137,7 +137,6 @@ export class SpO2Processor {
     if (this.staleFrames >= STALE_FRAMES_MAX) {
       this.lastSpO2 = 0;
       this.lastRValue = 0;
-      this.rBuffer = [];
       return insufficient;
     }
     return {
