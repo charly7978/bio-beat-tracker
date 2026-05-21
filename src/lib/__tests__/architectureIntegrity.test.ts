@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ElgendiPeakDetector } from '@/modules/signal-processing/detectors/ElgendiPeakDetector';
-import { PanTompkinsPPGDetector } from '@/modules/signal-processing/detectors/PanTompkinsPPGDetector';
 import { PeakDetectionEnsemble } from '@/modules/signal-processing/detectors/PeakDetectionEnsemble';
 import { SignalQualityIndex } from '@/modules/signal-quality/SignalQualityIndex';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
@@ -12,7 +11,6 @@ const ROOT = join(process.cwd());
 describe('architecture integrity', () => {
   it('expone detectores canónicos únicos', () => {
     expect(ElgendiPeakDetector).toBeDefined();
-    expect(PanTompkinsPPGDetector).toBeDefined();
     expect(PeakDetectionEnsemble.analyze).toBeTypeOf('function');
   });
 
@@ -21,8 +19,7 @@ describe('architecture integrity', () => {
       { sqi: 40, perfusionIndex: 0.02 },
       {
         elgendiConfidence: 0.9,
-        panTompkinsConfidence: 0.85,
-        agreement: { elgendi: 0.9, panTompkins: 0.85, spectral: 0.7 },
+        agreement: { elgendi: 0.9, spectral: 0.7 },
       },
     );
     expect(out.sqi).toBeGreaterThan(0);
@@ -51,11 +48,9 @@ describe('architecture integrity', () => {
     const diag = res.diagnostics as {
       fusedPeakTimes?: number[];
       elgendiPeakTimes?: number[];
-      panTompkinsPeakTimes?: number[];
     };
     expect(Array.isArray(diag.fusedPeakTimes)).toBe(true);
     expect(Array.isArray(diag.elgendiPeakTimes)).toBe(true);
-    expect(Array.isArray(diag.panTompkinsPeakTimes)).toBe(true);
   });
 
   it('umbrales RR viven en vitalThresholds', () => {

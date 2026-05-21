@@ -94,17 +94,14 @@ export class SignalQualityIndex {
     base: Partial<SignalQualityMetrics> & { sqi?: number },
     peak?: {
       elgendiConfidence?: number;
-      panTompkinsConfidence?: number;
-      agreement?: { elgendi?: number; panTompkins?: number; spectral?: number };
+      agreement?: { elgendi?: number; spectral?: number };
     },
   ): SignalQualityMetrics {
     const el = peak?.elgendiConfidence ?? base.elgendiConfidence ?? null;
-    const pan = peak?.panTompkinsConfidence ?? base.panTompkinsConfidence ?? null;
     const agreeRaw =
       peak?.agreement != null
-        ? (peak.agreement.elgendi ?? 0) * 0.45 +
-          (peak.agreement.panTompkins ?? 0) * 0.35 +
-          (peak.agreement.spectral ?? 0) * 0.2
+        ? (peak.agreement.elgendi ?? 0) * 0.6 +
+          (peak.agreement.spectral ?? 0) * 0.4
         : base.detectorAgreement ?? null;
 
     const merged: SignalQualityMetrics = {
@@ -119,7 +116,6 @@ export class SignalQualityIndex {
       fpsEffective: base.fpsEffective ?? 30,
       timestampJitterMs: base.timestampJitterMs ?? 0,
       elgendiConfidence: el,
-      panTompkinsConfidence: pan,
       detectorAgreement: agreeRaw,
     };
 

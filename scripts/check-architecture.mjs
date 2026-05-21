@@ -33,7 +33,6 @@ const REQUIRED_FILES = [
   'src/config/vitalThresholds.ts',
   'src/config/signalProcessing.ts',
   'src/modules/signal-processing/detectors/ElgendiPeakDetector.ts',
-  'src/modules/signal-processing/detectors/PanTompkinsPPGDetector.ts',
   'src/modules/signal-processing/detectors/PeakDetectionEnsemble.ts',
   'src/modules/signal-processing/shared/dsp.ts',
   'src/modules/signal-quality/SignalQualityIndex.ts',
@@ -44,7 +43,6 @@ const REQUIRED_FILES = [
 
 const SINGLETON_EXPORTS = [
   { file: 'src/modules/signal-processing/detectors/ElgendiPeakDetector.ts', symbol: 'ElgendiPeakDetector' },
-  { file: 'src/modules/signal-processing/detectors/PanTompkinsPPGDetector.ts', symbol: 'PanTompkinsPPGDetector' },
   { file: 'src/modules/signal-processing/detectors/PeakDetectionEnsemble.ts', symbol: 'PeakDetectionEnsemble' },
 ];
 

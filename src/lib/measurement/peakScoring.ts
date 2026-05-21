@@ -1,16 +1,15 @@
 /**
- * Ponderación única de candidatos a pico PPG (Elgendi + Pan + espectral + SQI/PI).
+ * Ponderación de candidatos a pico PPG (Elgendi + espectral + SQI/PI).
  */
 import { clamp } from '@/utils/math';
 import { median } from '@/utils/stats';
 
 /** Suma ≈ 1.0 — dual y acuerdo espectral pesan más (menos falsos positivos). */
 export const PEAK_SCORE_WEIGHTS = {
-  fusionDual: 0.34,
-  elgendi: 0.15,
-  panTompkins: 0.15,
-  ensemble: 0.12,
-  spectral: 0.12,
+  fusionDual: 0.38,
+  elgendi: 0.22,
+  ensemble: 0.14,
+  spectral: 0.14,
   sqi: 0.06,
   rrStability: 0.06,
 } as const;
@@ -23,9 +22,8 @@ export const PEAK_SCORE_THRESHOLDS = {
 } as const;
 
 export interface PeakScoreInput {
-  source: 'dual' | 'solo_elgendi' | 'solo_pan';
+  source: 'dual' | 'solo_elgendi';
   elConf: number;
-  panConf: number;
   ensConf: number;
   spectralAgreement: number;
   sqi: number;
@@ -36,13 +34,11 @@ export interface PeakScoreInput {
 
 export function scorePeakCandidate(input: PeakScoreInput): number {
   const w = PEAK_SCORE_WEIGHTS;
-  const fusionFactor =
-    input.source === 'dual' ? 1 : input.source === 'solo_elgendi' ? 0.48 : 0.42;
+  const fusionFactor = input.source === 'dual' ? 1 : 0.48;
 
   let score =
     w.fusionDual * fusionFactor +
     w.elgendi * clamp(input.elConf, 0, 1) +
-    w.panTompkins * clamp(input.panConf, 0, 1) +
     w.ensemble * clamp(input.ensConf, 0, 1) +
     w.spectral * clamp(input.spectralAgreement, 0, 1) +
     w.sqi * clamp(input.sqi / 100, 0, 1);

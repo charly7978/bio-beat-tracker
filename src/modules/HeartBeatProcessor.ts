@@ -1,5 +1,5 @@
 /**
- * HEARTBEAT PROCESSOR — ensemble Elgendi + Pan–Tompkins PPG.
+ * HEARTBEAT PROCESSOR — detección Elgendi con validación espectral.
  * BPM y hápticos solo desde picos emitidos (sin metrónomo ni autocorrelación como display).
  */
 import { clamp } from '../utils/math';

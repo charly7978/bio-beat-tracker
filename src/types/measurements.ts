@@ -35,9 +35,7 @@ export interface SignalQualityMetrics {
   timestampJitterMs: number;
   /** Confianza interna del detector Elgendi (0–1), si disponible */
   elgendiConfidence?: number | null;
-  /** Confianza interna del detector Pan–Tompkins PPG (0–1) */
-  panTompkinsConfidence?: number | null;
-  /** Acuerdo entre detectores de picos (0–1) */
+  /** Acuerdo espectral/estructural de picos (0–1) */
   detectorAgreement?: number | null;
 }
 
@@ -88,7 +86,7 @@ export interface PeakDetectionResult {
   peaks: number[];
   peakTimes: number[];
   /** Origen de cada pico fusionado (alineado con peakTimes). */
-  peakSources?: Array<'dual' | 'solo_elgendi' | 'solo_pan'>;
+  peakSources?: Array<'dual' | 'solo_elgendi'>;
   /** Puntuación ponderada 0–1 por pico (alineada con peakTimes). */
   peakScores?: number[];
   rrIntervalsMs: number[];
@@ -97,7 +95,6 @@ export interface PeakDetectionResult {
   confidence: number;
   agreement: {
     elgendi: number;
-    panTompkins: number;
     spectral: number;
     autocorrelation: number;
   };

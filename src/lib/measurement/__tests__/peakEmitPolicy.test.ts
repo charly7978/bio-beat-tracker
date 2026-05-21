@@ -4,7 +4,7 @@ import type { PeakDetectionResult } from '@/types/measurements';
 
 function buildTestPeakResult(
   peakTimes: number[],
-  sources: Array<'dual' | 'solo_elgendi' | 'solo_pan'>,
+  sources: Array<'dual' | 'solo_elgendi'>,
   peakScores?: number[],
 ): PeakDetectionResult {
   return {
@@ -18,9 +18,9 @@ function buildTestPeakResult(
     bpmInstant: 72,
     bpmStable: 72,
     confidence: 0.35,
-    agreement: { elgendi: 0.4, panTompkins: 0.35, spectral: 0.55, autocorrelation: 0.25 },
+    agreement: { elgendi: 0.4, spectral: 0.55, autocorrelation: 0.25 },
     rejectedPeaks: [],
-    diagnostics: { elgendiConfidence: 0.35, panTompkinsConfidence: 0.3 },
+    diagnostics: { elgendiConfidence: 0.35 },
   };
 }
 

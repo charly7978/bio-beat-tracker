@@ -70,16 +70,13 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
 
   const diag = ens.diagnostics as {
     elgendiConfidence?: number;
-    panTompkinsConfidence?: number;
     detectorCalibration?: DetectorCalibration;
   };
   const cal = diag.detectorCalibration;
   const elConf = diag.elgendiConfidence ?? 0;
-  const panConf = diag.panTompkinsConfidence ?? 0;
   const soloElMin =
     cal?.soloElgendiMinConf ??
     (placementMode === 'hybrid' ? 0.15 : 0.17);
-  const soloPanMin = cal?.soloPanMinConf ?? 0.19;
   const spectralAgreement = ens.agreement.spectral ?? 0;
   const prevRrMed = rrMedianMs(recentRrMs);
 
@@ -98,9 +95,8 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
       : PEAK_SCORE_THRESHOLDS.rrMedianMaxRelDev;
 
   const rankSource = (src: string | undefined): number => {
-    if (src === 'dual') return 3;
-    if (src === 'solo_elgendi') return 2;
-    if (src === 'solo_pan') return 1;
+    if (src === 'dual') return 2;
+    if (src === 'solo_elgendi') return 1;
     return 0;
   };
 
@@ -136,23 +132,14 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
       src === 'solo_elgendi' &&
       elConf >= soloElMin &&
       spectralAgreement >= (stallReacquire ? 0.08 : 0.12);
-    const soloPan =
-      fingerContactConfirmed &&
-      allowSoloElgendi &&
-      (emittedPeakCount >= 1 || stallReacquire) &&
-      src === 'solo_pan' &&
-      panConf >= soloPanMin &&
-      elConf >= soloElMin * 0.5 &&
-      spectralAgreement >= (stallReacquire ? 0.1 : 0.15);
 
-    if (!dual && !soloEl && !soloPan) continue;
+    if (!dual && !soloEl) continue;
 
     const weightedScore =
       ens.peakScores?.[i] ??
       scorePeakCandidate({
         source: src ?? 'solo_elgendi',
         elConf,
-        panConf,
         ensConf: ens.confidence,
         spectralAgreement,
         sqi,
@@ -166,7 +153,7 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
       : PEAK_SCORE_THRESHOLDS.soloMin * (stallReacquire ? 0.9 : 0.96);
     if (weightedScore < minScore) continue;
 
-    const reason = dual ? 'DUAL_FUSED' : src === 'solo_pan' ? 'SOLO_PAN' : 'SOLO_ELGENDI';
+    const reason = dual ? 'DUAL_FUSED' : 'SOLO_ELGENDI';
     const rank = rankSource(src);
 
     if (
@@ -204,13 +191,11 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
       scorePeakCandidate({
         source: src ?? 'solo_elgendi',
         elConf,
-        panConf,
         ensConf: ens.confidence,
         spectralAgreement,
         sqi,
         perfusionIndex,
       });
-    if (src === 'solo_pan' && emittedPeakCount < 1) continue;
     const fbMin =
       src === 'dual'
         ? PEAK_SCORE_THRESHOLDS.dualMin * 0.92
@@ -222,12 +207,7 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     if (t > fbT || (t === fbT && score > fbScore)) {
       fbT = t;
       fbScore = score;
-      fbReason =
-        src === 'dual'
-          ? 'DUAL_FUSED'
-          : src === 'solo_pan'
-            ? 'SOLO_PAN'
-            : 'SOLO_ELGENDI';
+      fbReason = src === 'dual' ? 'DUAL_FUSED' : 'SOLO_ELGENDI';
     }
   }
   if (fbT > 0) {

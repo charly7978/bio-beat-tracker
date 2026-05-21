@@ -10,7 +10,6 @@ describe('peakScoring', () => {
     const s = scorePeakCandidate({
       source: 'dual',
       elConf: 0.5,
-      panConf: 0.45,
       ensConf: 0.4,
       spectralAgreement: 0.7,
       sqi: 55,
@@ -25,16 +24,14 @@ describe('peakScoring', () => {
     const dual = scorePeakCandidate({
       source: 'dual',
       elConf: 0.35,
-      panConf: 0.3,
       ensConf: 0.3,
       spectralAgreement: 0.4,
       sqi: 40,
       perfusionIndex: 0.004,
     });
     const solo = scorePeakCandidate({
-      source: 'solo_pan',
+      source: 'solo_elgendi',
       elConf: 0.2,
-      panConf: 0.35,
       ensConf: 0.28,
       spectralAgreement: 0.35,
       sqi: 40,

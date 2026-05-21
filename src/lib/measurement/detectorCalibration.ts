@@ -1,5 +1,5 @@
 /**
- * Calibración adaptativa Elgendi + Pan–Tompkins por ventana de señal.
+ * Calibración adaptativa Elgendi por ventana de señal.
  * Escala umbrales desde dinámica PPG, SQI, PI y BPM espectral — sin valores fijos en mmHg.
  */
 import { PEAK_DETECTION_DEFAULTS } from '@/config/signalProcessing';
@@ -10,17 +10,14 @@ import { robustDynamicRange } from '@/utils/stats';
 export interface DetectorCalibration {
   elgendiMinProminence: number;
   elgendiOffsetWeight: number;
-  panThresholdFactor: number;
-  panSearchbackFactor: number;
   fusionToleranceMs: number;
   soloElgendiMinConf: number;
-  soloPanMinConf: number;
   estimatedBpm: number | null;
   spectralScore: number;
   signalDynamicRange: number;
 }
 
-/** Calibra detectores para la ventana actual. */
+/** Calibra detector Elgendi para la ventana actual. */
 export function computeDetectorCalibration(
   signal: number[],
   samplingRateHz: number,
@@ -54,14 +51,6 @@ export function computeDetectorCalibration(
     cal.OFFSET_WEIGHT_MAX,
   );
 
-  const panThresholdFactor = clamp(
-    cal.PAN_THRESHOLD_BASE *
-      (0.9 + (1 - qualityBlend) * 0.14) *
-      (promScale < 0.8 ? 0.9 : 1),
-    cal.PAN_THRESHOLD_MIN,
-    cal.PAN_THRESHOLD_MAX,
-  );
-
   const spec = bpmFromAutocorr(signal, samplingRateHz);
   const estimatedBpm = spec.bpm > 0 ? spec.bpm : null;
   const rrMs =
@@ -81,20 +70,11 @@ export function computeDetectorCalibration(
     cal.SOLO_ELGENDI_MAX,
   );
 
-  const soloPanMinConf = clamp(
-    cal.SOLO_PAN_BASE + (1 - qualityBlend) * 0.04 - (spec.score > 0.4 ? 0.025 : 0),
-    cal.SOLO_PAN_MIN,
-    cal.SOLO_PAN_MAX,
-  );
-
   return {
     elgendiMinProminence,
     elgendiOffsetWeight,
-    panThresholdFactor,
-    panSearchbackFactor: panThresholdFactor * cal.PAN_SEARCHBACK_RELAXED_FRAC,
     fusionToleranceMs,
     soloElgendiMinConf,
-    soloPanMinConf,
     estimatedBpm,
     spectralScore: spec.score,
     signalDynamicRange: dyn,

@@ -30,12 +30,11 @@ describe('detectorCalibration', () => {
     }
   });
 
-  it('señal débil → prominencia Elgendi y umbral Pan más sensibles', () => {
+  it('señal débil → prominencia Elgendi más baja (mayor sensibilidad)', () => {
     const weak = Array(200).fill(0).map((_, i) => 0.02 + 0.01 * Math.sin(i * 0.2));
     const strong = sinePpg(30, 8, 72);
     const calWeak = computeDetectorCalibration(weak, 30, 25, 0.001);
     const calStrong = computeDetectorCalibration(strong, 30, 55, 0.006);
     expect(calWeak.elgendiMinProminence).toBeLessThan(calStrong.elgendiMinProminence);
-    expect(calWeak.panThresholdFactor).toBeLessThanOrEqual(calStrong.panThresholdFactor);
   });
 });

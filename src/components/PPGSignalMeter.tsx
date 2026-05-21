@@ -51,10 +51,9 @@ interface PPGSignalMeterProps {
     /** Telemetría del ensemble Elgendi + Pan–Tompkins (desde HeartBeatProcessor) */
     peakDetection?: {
       confidence?: number;
-      agreement?: { elgendi?: number; panTompkins?: number; spectral?: number };
+      agreement?: { elgendi?: number; spectral?: number };
       fusedPeakTimes?: number[];
       elgendiPeakTimes?: number[];
-      panTompkinsPeakTimes?: number[];
       fusedPeakCount?: number;
       rejectedPeaks?: Array<{ index: number; reason: string; detector: string }>;
     };
@@ -669,7 +668,7 @@ const PPGSignalMeter = ({
     const fps = propsRef.current.diagnostics?.sqm?.fpsEffective || 0;
     const jitter = propsRef.current.diagnostics?.sqm?.timestampJitterMs || 0;
     const pd = propsRef.current.diagnostics?.peakDetection as
-      | { confidence?: number; agreement?: { elgendi?: number; panTompkins?: number } }
+      | { confidence?: number; agreement?: { elgendi?: number } }
       | undefined;
     if (fps > 0) {
       ctx.font = `8px ${FONT_MONO}`;
@@ -679,12 +678,11 @@ const PPGSignalMeter = ({
     }
     if (pd && typeof pd.confidence === 'number' && pd.confidence > 0) {
       const ae = pd.agreement?.elgendi ?? 0;
-      const ap = pd.agreement?.panTompkins ?? 0;
       ctx.font = `8px ${FONT_MONO}`;
       ctx.fillStyle = COLORS.TEXT_INFO;
       ctx.textAlign = 'right';
       ctx.fillText(
-        `Picos ensemble ${(pd.confidence * 100).toFixed(0)}% · E${(ae * 100).toFixed(0)}/PT${(ap * 100).toFixed(0)}`,
+        `Picos ensemble ${(pd.confidence * 100).toFixed(0)}% · E${(ae * 100).toFixed(0)}`,
         metrics.w - 12,
         metrics.y + (fps > 0 ? 24 : 12)
       );
@@ -1034,8 +1032,8 @@ const PPGSignalMeter = ({
     if (pdOverlay?.elgendiPeakTimes) {
       for (const t of pdOverlay.elgendiPeakTimes) mapPeakTime(t, 'elgendi');
     }
-    if (pdOverlay?.panTompkinsPeakTimes) {
-      for (const t of pdOverlay.panTompkinsPeakTimes) mapPeakTime(t, 'pan');
+    if (pdOverlay?.elgendiPeakTimes) {
+      for (const t of pdOverlay.elgendiPeakTimes) mapPeakTime(t, 'elgendi');
     }
     if (pdOverlay?.fusedPeakTimes) {
       for (const t of pdOverlay.fusedPeakTimes) mapPeakTime(t, 'fused');

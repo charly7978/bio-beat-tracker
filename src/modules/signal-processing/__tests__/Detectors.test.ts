@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { ElgendiPeakDetector } from '../detectors/ElgendiPeakDetector';
-import { PanTompkinsPPGDetector } from '../detectors/PanTompkinsPPGDetector';
 import { PeakDetectionEnsemble } from '../detectors/PeakDetectionEnsemble';
 
 function makeSinePeaks(fs: number, durationSec: number, bpm: number, noise = 0): { y: number[]; t: number[] } {
@@ -58,35 +57,6 @@ describe('ElgendiPeakDetector', () => {
       sqi: 35,
     });
     expect(r.peaks.length).toBeGreaterThanOrEqual(4);
-  });
-});
-
-describe('PanTompkinsPPGDetector', () => {
-  it('detecta pulsos en señal con pendiente marcada', () => {
-    const fs = 30;
-    const { y, t } = makeSinePeaks(fs, 12, 70, 0.04);
-    const r = PanTompkinsPPGDetector.detect({
-      signal: y,
-      timestampsMs: t,
-      samplingRateHz: fs,
-      sqi: 38,
-    });
-    expect(r.peaks.length).toBeGreaterThanOrEqual(6);
-    expect(r.integratedSignal.length).toBe(y.length);
-  });
-
-  it('señal plana → pocos o ningún pico', () => {
-    const fs = 30;
-    const n = 180;
-    const y = Array(n).fill(0.001);
-    const t = y.map((_, i) => (i / fs) * 1000);
-    const r = PanTompkinsPPGDetector.detect({
-      signal: y,
-      timestampsMs: t,
-      samplingRateHz: fs,
-      sqi: 40,
-    });
-    expect(r.peaks.length).toBeLessThanOrEqual(3);
   });
 });
 

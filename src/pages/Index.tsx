@@ -1079,7 +1079,7 @@ const Index = () => {
       }
 
       const peakDiag = heartBeatResult.ensembleDiagnostics as
-        | { agreement?: { elgendi?: number; panTompkins?: number; spectral?: number }; confidence?: number }
+        | { agreement?: { elgendi?: number; spectral?: number }; confidence?: number }
         | undefined;
       const sqmRaw = diag?.sqm && typeof diag.sqm === "object" ? diag.sqm : {};
       const enrichedSqm = SignalQualityIndex.enrichMetrics(
@@ -1091,7 +1091,6 @@ const Index = () => {
         {
           agreement: peakDiag?.agreement,
           elgendiConfidence: peakDiag?.agreement?.elgendi,
-          panTompkinsConfidence: peakDiag?.agreement?.panTompkins,
         },
       );
 

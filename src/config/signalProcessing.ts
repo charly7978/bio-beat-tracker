@@ -28,7 +28,7 @@ export const PEAK_DETECTION_DEFAULTS = {
   spectralAgreementMin: 0.26,
   /** Mínimo de muestras en ventana para correr ensemble */
   minSamplesEnsemble: 72,
-  /** Integración Pan–Tompkins PPG (~180 ms de pulso sistólico típico a 30 Hz) */
+  /** Ventana de integración para detección (~180 ms de pulso sistólico típico a 30 Hz) */
   integrationWindowMs: 180,
   /** Refractario máximo derivado de maxBpm */
   refractoryMsFromMaxBpm: 60000 / VITAL_THRESHOLDS.HR.MAX,
@@ -54,19 +54,12 @@ export const PEAK_DETECTION_DEFAULTS = {
     PROMINENCE_SCALE_MAX: 1.45,
     OFFSET_WEIGHT_MIN: 0.14,
     OFFSET_WEIGHT_MAX: 0.32,
-    PAN_THRESHOLD_BASE: 0.46,
-    PAN_THRESHOLD_MIN: 0.32,
-    PAN_THRESHOLD_MAX: 0.58,
-    PAN_SEARCHBACK_RELAXED_FRAC: 0.78,
     FUSION_TOLERANCE_RR_FRAC: 0.34,
     FUSION_TOLERANCE_MS_MIN: 180,
     FUSION_TOLERANCE_MS_MAX: 420,
     SOLO_ELGENDI_BASE: 0.14,
     SOLO_ELGENDI_MIN: 0.1,
     SOLO_ELGENDI_MAX: 0.22,
-    SOLO_PAN_BASE: 0.18,
-    SOLO_PAN_MIN: 0.14,
-    SOLO_PAN_MAX: 0.28,
     TARGET_PI: 0.0045,
     SQI_REFERENCE: 48,
   },
