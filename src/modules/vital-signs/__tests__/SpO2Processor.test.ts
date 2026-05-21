@@ -9,12 +9,21 @@ function injectR(proc: SpO2Processor, r: number) {
   return proc.update(rAc, rDc, gAc, gDc);
 }
 
+function injectPi(proc: SpO2Processor, piRed: number, piGreen: number) {
+  const dc = 50000;
+  return proc.update(piRed * dc, dc, piGreen * dc, dc);
+}
+
 function feedFrames(proc: SpO2Processor, rValues: number[], count: number) {
   for (const r of rValues) {
     for (let i = 0; i < count; i++) {
       injectR(proc, r);
     }
   }
+}
+
+function warmup(proc: SpO2Processor, r = 0.5) {
+  feedFrames(proc, [r], 80);
 }
 
 describe('SpO2Processor', () => {
@@ -31,32 +40,32 @@ describe('SpO2Processor', () => {
     expect(est.confidence).toBe('INSUFFICIENT');
   });
 
-  it('acepta amplitud extremadamente baja (sin gate PI)', () => {
+  it('retorna INSUFFICIENT con PI extremadamente baja', () => {
     const proc = new SpO2Processor();
-    feedFrames(proc, [1.0], 10);
-    const est = injectR(proc, 1.0);
-    expect(est.confidence).not.toBe('INSUFFICIENT');
-    expect(est.spo2).toBeGreaterThanOrEqual(70);
+    const est = injectPi(proc, 0.0001, 0.01);
+    expect(est.confidence).toBe('INSUFFICIENT');
   });
 
-  it('produce valores fisiológicos con R estable (~0.5 → 97%)', () => {
+  it('produce valores fisiológicos con R estable (~0.5 → 97-98%)', () => {
     const proc = new SpO2Processor();
-    feedFrames(proc, [0.5], 20);
+    warmup(proc, 0.5);
     const est = injectR(proc, 0.5);
     if (est.confidence !== 'INSUFFICIENT') {
       expect(est.spo2).toBeGreaterThanOrEqual(90);
       expect(est.spo2).toBeLessThanOrEqual(100);
       expect(est.rValue).toBeGreaterThan(0);
-      expect(est.samplesUsed).toBeGreaterThanOrEqual(3);
+      expect(est.samplesUsed).toBeGreaterThanOrEqual(6);
     }
   });
 
   it('responde a desaturación (R alto → SpO2 más bajo)', () => {
     const proc = new SpO2Processor();
-    feedFrames(proc, [0.5], 20);
+    warmup(proc, 0.5);
     const normEst = injectR(proc, 0.5);
-    feedFrames(proc, [1.2], 20);
+
+    warmup(proc, 1.2);
     const lowEst = injectR(proc, 1.2);
+
     if (normEst.confidence !== 'INSUFFICIENT' && lowEst.confidence !== 'INSUFFICIENT') {
       expect(lowEst.spo2).toBeLessThan(normEst.spo2);
     }
@@ -64,7 +73,7 @@ describe('SpO2Processor', () => {
 
   it('mantiene último valor tras pérdida de señal (stale hold)', () => {
     const proc = new SpO2Processor();
-    feedFrames(proc, [0.6], 20);
+    warmup(proc, 0.6);
     const goodEst = injectR(proc, 0.6);
     if (goodEst.confidence === 'INSUFFICIENT') return;
     const staleEst = proc.update(0, 50000, 0, 50000);
@@ -74,11 +83,11 @@ describe('SpO2Processor', () => {
 
   it('retorna INSUFFICIENT tras STALE_FRAMES_MAX pérdidas consecutivas', () => {
     const proc = new SpO2Processor();
-    feedFrames(proc, [0.6], 20);
+    warmup(proc, 0.6);
     injectR(proc, 0.6);
     for (let i = 0; i < 20; i++) {
       const est = proc.update(0, 50000, 0, 50000);
-      if (i >= 3) {
+      if (i >= 2) {
         expect(est.confidence).toBe('INSUFFICIENT');
       }
     }
@@ -86,15 +95,29 @@ describe('SpO2Processor', () => {
 
   it('produce mismo valor para mismo R consecutivo (EMA convergido)', () => {
     const proc = new SpO2Processor();
-    feedFrames(proc, [0.5], 20);
+    warmup(proc, 0.5);
     const est1 = injectR(proc, 0.5);
     const est2 = injectR(proc, 0.5);
     expect(est1.spo2).toBe(est2.spo2);
   });
 
+  it('rechaza outlier de R repentino y expira tras stale', () => {
+    const proc = new SpO2Processor();
+    warmup(proc, 0.5);
+
+    // Primer outlier: stale hold con LOW
+    const firstOut = injectR(proc, 2.0);
+    expect(firstOut.confidence).toBe('LOW');
+
+    // Segundo outlier: staleFrames >= 2 → INSUFFICIENT
+    const secondOut = injectR(proc, 2.0);
+    expect(secondOut.confidence).toBe('INSUFFICIENT');
+    expect(secondOut.spo2).toBe(0);
+  });
+
   it('reset limpia buffer y estado', () => {
     const proc = new SpO2Processor();
-    feedFrames(proc, [0.5], 20);
+    warmup(proc, 0.5);
     injectR(proc, 0.5);
     proc.reset();
     const est = proc.update(0, 50000, 0, 50000);

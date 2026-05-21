@@ -12,9 +12,14 @@ export interface SpO2Estimate {
   pi: number;
 }
 
-const BUFFER_MAX = 7;
-const STALE_FRAMES_MAX = 3;
-const EMA_ALPHA = 0.4;
+const BUFFER_MAX = 12;
+const MIN_BUFFER_FOR_ESTIMATE = 6;
+const MIN_WARMUP_FRAMES = 60;
+const STALE_FRAMES_MAX = 2;
+const EMA_ALPHA = 0.3;
+const R_REJECT_THRESHOLD = 0.30;
+const MAX_CONSECUTIVE_REJECTIONS = 5;
+const MIN_PI = 0.0005;
 
 export class SpO2Processor {
   private rBuffer: number[] = [];
@@ -24,6 +29,7 @@ export class SpO2Processor {
   private intercept: number;
   private slope: number;
   private frameCount = 0;
+  private consecutiveRejections = 0;
 
   constructor() {
     const cfg = VITAL_THRESHOLDS.SPO2;
@@ -44,37 +50,56 @@ export class SpO2Processor {
 
     const cfg = VITAL_THRESHOLDS.SPO2;
 
-    // Solo gates duros: DC insuficiente o R imposible
     if (redDC < cfg.MIN_RED_DC || greenDC < cfg.MIN_GREEN_DC) {
-      if (this.frameCount % 30 === 0) log.warn(`[SpO2] DC bajo: redDC=${redDC.toFixed(1)} greenDC=${greenDC.toFixed(1)}`);
       return this.staleOrInsufficient(insufficient);
     }
 
-    const ratioRed = redAC / redDC;
-    const ratioGreen = greenAC / greenDC;
-    if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) {
-      if (this.frameCount % 30 === 0) log.warn(`[SpO2] ratio no finito: ${ratioRed} / ${ratioGreen}`);
+    const piRed = redAC / redDC;
+    const piGreen = greenAC / greenDC;
+
+    if (!isFinite(piRed) || !isFinite(piGreen) || piRed <= 0 || piGreen <= 0) {
       return this.staleOrInsufficient(insufficient);
     }
 
-    const currentR = ratioRed / ratioGreen;
+    if (piRed < MIN_PI || piGreen < MIN_PI) {
+      return this.staleOrInsufficient(insufficient);
+    }
+
+    const currentR = piRed / piGreen;
 
     if (currentR < cfg.R_VALUE_MIN || currentR > cfg.R_VALUE_MAX) {
-      if (this.frameCount % 30 === 0) log.warn(`[SpO2] R fuera: ${currentR.toFixed(4)} [${cfg.R_VALUE_MIN},${cfg.R_VALUE_MAX}]`);
+      if (this.frameCount % 30 === 0) log.warn(`[SpO2] R fuera: ${currentR.toFixed(4)}`);
       return this.staleOrInsufficient(insufficient);
     }
 
-    // Debug log cada 15 frames
-    if (this.frameCount % 15 === 0) {
-      log.info(`[SpO2] ACr=${redAC.toFixed(3)} DCr=${redDC.toFixed(0)} ACg=${greenAC.toFixed(3)} DCg=${greenDC.toFixed(0)} R=${currentR.toFixed(4)}`);
+    // RECHAZO DE OUTLIERS: si R difiere >30% de la mediana del buffer
+    if (this.rBuffer.length >= 3) {
+      const sorted = [...this.rBuffer].sort((a, b) => a - b);
+      const medianR = sorted[Math.floor(sorted.length / 2)];
+      const relDiff = Math.abs(currentR - medianR) / Math.max(medianR, 1e-8);
+      if (relDiff > R_REJECT_THRESHOLD) {
+        this.consecutiveRejections++;
+        if (this.consecutiveRejections >= MAX_CONSECUTIVE_REJECTIONS) {
+          this.rBuffer = [];
+          this.consecutiveRejections = 0;
+        }
+        if (this.frameCount % 15 === 0) {
+          log.warn(`[SpO2] Outlier R: ${currentR.toFixed(4)} vs mediana ${medianR.toFixed(4)} (diff ${(relDiff*100).toFixed(0)}%)`);
+        }
+        return this.staleOrInsufficient(insufficient);
+      }
     }
 
+    this.consecutiveRejections = 0;
     this.rBuffer.push(currentR);
     if (this.rBuffer.length > BUFFER_MAX) {
       this.rBuffer = this.rBuffer.slice(-BUFFER_MAX);
     }
 
-    if (this.rBuffer.length < 3) return insufficient;
+    // No estimar hasta tener warmup suficiente y buffer mínimo
+    if (this.frameCount < MIN_WARMUP_FRAMES || this.rBuffer.length < MIN_BUFFER_FOR_ESTIMATE) {
+      return insufficient;
+    }
 
     const sortedR = [...this.rBuffer].sort((a, b) => a - b);
     const medianR = sortedR[Math.floor(sortedR.length / 2)] ?? 0;
@@ -86,7 +111,6 @@ export class SpO2Processor {
 
     const clampedSpO2 = Math.max(cfg.MIN_VALID, Math.min(cfg.DISPLAY_CAP, rawSpO2));
 
-    // EMA responsivo
     let spo2 = clampedSpO2;
     if (this.lastSpO2 > 0) {
       spo2 = this.lastSpO2 * (1 - EMA_ALPHA) + clampedSpO2 * EMA_ALPHA;
@@ -94,10 +118,9 @@ export class SpO2Processor {
 
     spo2 = Math.max(cfg.MIN_VALID, Math.min(cfg.DISPLAY_CAP, spo2));
 
-    // Confianza según cantidad de muestras
     let confidence: SpO2Estimate['confidence'] = 'LOW';
     if (this.rBuffer.length >= BUFFER_MAX) confidence = 'MEDIUM';
-    if (this.rBuffer.length >= BUFFER_MAX && this.frameCount > 60) confidence = 'HIGH';
+    if (this.rBuffer.length >= BUFFER_MAX && this.frameCount > 120) confidence = 'HIGH';
 
     this.lastSpO2 = spo2;
     this.lastRValue = medianR;
@@ -112,7 +135,7 @@ export class SpO2Processor {
       rValue: medianR,
       confidence,
       samplesUsed: this.rBuffer.length,
-      pi: Math.max(ratioRed, ratioGreen) * 100,
+      pi: Math.max(piRed, piGreen) * 100,
     };
   }
 
@@ -154,6 +177,7 @@ export class SpO2Processor {
     this.lastRValue = 0;
     this.staleFrames = 0;
     this.frameCount = 0;
+    this.consecutiveRejections = 0;
     const cfg = VITAL_THRESHOLDS.SPO2;
     this.intercept = cfg.R_MODEL_INTERCEPT;
     this.slope = cfg.R_MODEL_SLOPE;

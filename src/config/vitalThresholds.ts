@@ -15,21 +15,20 @@ export const VITAL_THRESHOLDS = {
   },
   
   // BLOOD OXYGEN (SpO2) — modelo ratio-of-ratios cámara+flash (verde como proxy IR)
+  // Smartphone SpO2 con red+green es inherentemente sensible a la posición del dedo porque
+  // el canal verde no equivale a IR. Los coeficientes asumen calibración por dispositivo.
+  // Sin calibración: SpO2 = 100 - 5*R, cap 98%, rango R [0.1, 3.0]
   SPO2: {
     MIN_VALID: 70,
     MAX_VALID: 100,
     CRITICAL_LOW: 90,
-    R_VALUE_MIN: 0.05,
-    R_VALUE_MAX: 3.5,
-    /** SpO2 = intercept − slope × R_mediana.
-     * Smartphone usa red+green (no red+IR como oxímetro médico). El ratio R sale ~2× más alto
-     * porque la absorción del verde difiere del IR. Slope 5 compensa el factor ~2x.
-     * SmartPhOx 2024 confirma: RR smartphone necesita calibración específica por dispositivo. */
-    R_MODEL_INTERCEPT: 98,
-    R_MODEL_SLOPE: 4,
+    R_VALUE_MIN: 0.1,
+    R_VALUE_MAX: 3.0,
+    R_MODEL_INTERCEPT: 100,
+    R_MODEL_SLOPE: 5,
     DISPLAY_CAP: 98,
-    R_HISTORY_SAMPLES: 7,
-    MIN_PI_PERCENT: 0.02,
+    R_HISTORY_SAMPLES: 12,
+    MIN_PI_PERCENT: 0.03,
     MIN_RED_DC: 10,
     MIN_GREEN_DC: 5,
   },
