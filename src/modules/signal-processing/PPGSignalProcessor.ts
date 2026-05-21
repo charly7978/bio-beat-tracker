@@ -611,9 +611,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   /** STABLE solo con PI real ya calculado en este frame (no en updateContactState). */
   private reconcileStableContact(): void {
+    const prevState = this.contactState;
     if (!this.fingerDetected || !this.lastInstantFinger) {
       if (this.contactState === 'STABLE_CONTACT') {
         this.contactState = 'UNSTABLE_CONTACT';
+      }
+      if (prevState === 'STABLE_CONTACT' && this.contactState === 'UNSTABLE_CONTACT') {
+        this.resetACDC();
       }
       return;
     }
@@ -633,6 +637,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       (piOk || pulseOk) &&
       this.smoothedCoverage >= F.MIN_COVERAGE * (padLike ? 0.82 : 0.88);
     this.contactState = stable ? 'STABLE_CONTACT' : 'UNSTABLE_CONTACT';
+    if (prevState === 'STABLE_CONTACT' && this.contactState === 'UNSTABLE_CONTACT') {
+      this.resetACDC();
+    }
   }
 
   /** Pérdida de contacto; en modo tolerante evita reset de buffers hasta racha larga. */
@@ -1238,6 +1245,16 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (cv < VITAL_THRESHOLDS.FINGER.ROI_RED_CV_MIN * 0.75) return 0;
     if (!hasFingerHemoglobinSignature(snap)) return 0;
     return clamp(cv * 0.016, 0.00012, 0.01);
+  }
+
+  /** Resetea SOLO buffers de AC/DC (no afecta BPM ni source ranking). */
+  private resetACDC(): void {
+    this.redBuffer.reset();
+    this.greenBuffer.reset();
+    this.blueBuffer.reset();
+    this.redDC = 0; this.redAC = 0;
+    this.greenDC = 0; this.greenAC = 0;
+    this.blueDC = 0; this.blueAC = 0;
   }
 
   private resetBaselines(): void {

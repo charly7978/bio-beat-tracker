@@ -673,6 +673,7 @@ export class VitalSignsProcessor {
     this.measurements.arrhythmiaStatus = "SIN ARRITMIAS|0";
     this.measurements.lastArrhythmiaData = null;
     this.lastPpgPerfusionIndex = 0;
+    this.rgbDataReady = false;
     this.spo2Processor.reset();
     return result;
   }
@@ -698,6 +699,7 @@ export class VitalSignsProcessor {
     this.displayHold = { systolic: 0, diastolic: 0, missedFrames: 0 };
     this.spo2DisplayHold = 0;
     this.spo2DisplayFrames = 0;
+    this.rgbDataReady = false;
     this.isCalibrating = false;
     this.calibrationSamples = 0;
     this.arrhythmiaProcessor.reset();
