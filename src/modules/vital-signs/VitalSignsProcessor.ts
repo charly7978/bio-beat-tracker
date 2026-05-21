@@ -228,16 +228,18 @@ export class VitalSignsProcessor {
     // Validar pulso real (BP y arritmias)
     this.validateRealPulse(rrData);
 
-    // SpO2: siempre corre el procesador (buffer caliente para recuperacion instantanea),
-    // pero solo muestra valor cuando hay pulso detectado (evita lecturas sin dedo).
-    const sp2 = this.spo2Processor.update(
-      this.rgbData.redAC, this.rgbData.redDC,
-      this.rgbData.greenAC, this.rgbData.greenDC,
-    );
+    // SpO2: solo alimenta el buffer cuando hay pulso valido.
+    // Sin pulso, no entra basura al buffer → recuperacion instantanea al re-colocar el dedo.
     this.measurements.spo2 = 0;
-    if (this.validPulseCount >= 1 && sp2.confidence !== 'INSUFFICIENT' && sp2.spo2 >= 70 && sp2.spo2 <= 100) {
-      this.measurements.spo2 = sp2.spo2;
-      this.lastSpO2RValue = sp2.rValue;
+    if (this.validPulseCount >= 1) {
+      const sp2 = this.spo2Processor.update(
+        this.rgbData.redAC, this.rgbData.redDC,
+        this.rgbData.greenAC, this.rgbData.greenDC,
+      );
+      if (sp2.confidence !== 'INSUFFICIENT' && sp2.spo2 >= 70 && sp2.spo2 <= 100) {
+        this.measurements.spo2 = sp2.spo2;
+        this.lastSpO2RValue = sp2.rValue;
+      }
     }
 
     this.calculateVitalSigns(signalValue, effectiveSqi, currentBPM, rrData);
