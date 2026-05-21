@@ -66,9 +66,9 @@ const BUFFER_SIZE = 2500;        // Incrementar buffer para soportar hasta 300 F
 const TREND_WINDOW_MS = 60_000;  // 60 s de tendencia BPM
 const TREND_MAX_POINTS = 240;
 const BEAT_HISTORY_MAX = 30;
-const VISUAL_DELAY_MS = 166;
-const AMP_ATTACK = 0.15;
-const AMP_RELEASE = 0.18;
+const VISUAL_DELAY_MS = 0;
+const AMP_ATTACK = 0.03;
+const AMP_RELEASE = 0.04;
 const RR_TACHO_H = 34;
 
 const COLORS = {
@@ -922,20 +922,16 @@ const PPGSignalMeter = ({
       fi = fj;
     }
 
-    // Stroke segments — Smooth electric curve
+    // Stroke segments — línea directa (morfología PPG fiel)
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
-    // Función auxiliar para dibujar un segmento suave
-    const drawSmoothSegment = (startIdx: number, endIdx: number) => {
+    const drawDirectSegment = (startIdx: number, endIdx: number) => {
       ctx.beginPath();
       ctx.moveTo(coords[startIdx].x, coords[startIdx].y);
-      for (let k = startIdx; k < endIdx - 1; k++) {
-        const xc = (coords[k].x + coords[k + 1].x) / 2;
-        const yc = (coords[k].y + coords[k + 1].y) / 2;
-        ctx.quadraticCurveTo(coords[k].x, coords[k].y, xc, yc);
+      for (let k = startIdx + 1; k < endIdx; k++) {
+        ctx.lineTo(coords[k].x, coords[k].y);
       }
-      ctx.lineTo(coords[endIdx - 1].x, coords[endIdx - 1].y);
     };
 
     let i = 0;
@@ -947,7 +943,7 @@ const PPGSignalMeter = ({
       }
       
       // 1. Primary Neon Glow (Outer)
-      drawSmoothSegment(i, j + 1 > coords.length ? j : j + 1);
+      drawDirectSegment(i, j + 1 > coords.length ? j : j + 1);
       ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.35)' : 'rgba(34, 197, 94, 0.35)';
       ctx.lineWidth = 6;
       ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
