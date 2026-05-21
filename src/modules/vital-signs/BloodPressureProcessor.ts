@@ -1,9 +1,3 @@
-/**
- * Procesador de presión arterial por PWA (Pulse Wave Analysis).
- * Cálculo desde morfología PPG + modelo Windkessel; rangos en vitalThresholds.
- * Calibración opcional con tensiómetro vía CalibrationManager (VitalSignsProcessor).
- */
-
 import { PPGFeatureExtractor, CycleFeatures } from './PPGFeatureExtractor';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { isPhysiologicalRR } from '../../utils/physio';
@@ -28,14 +22,21 @@ export interface BPEstimate {
   featureQuality: number;
 }
 
+const MIN_CONFIDENCE_SEEN = 3;
+const BUFFER_MAX = 30;
+const EMIT_THROTTLE_FRAMES = 15;
+
 export class BloodPressureProcessor {
   private readonly MIN_CYCLES = VITAL_THRESHOLDS.BP.MIN_CYCLES;
   private placementMode: FingerPlacementMode = 'hybrid';
-  private readonly MAX_CYCLES = 25;
+
+  private cycleBuffer: CycleFeatures[] = [];
+  private framesSinceLastEmit = 0;
 
   private lastSBP = 0;
   private lastDBP = 0;
-  private readonly EMA_ALPHA = 0.18;
+  private lastConfidence: BPEstimate['confidence'] = 'INSUFFICIENT';
+  private confidenceStreak = 0;
 
   private anthropometric: AnthropometricProfile | null = null;
 
@@ -64,25 +65,19 @@ export class BloodPressureProcessor {
     sampleRate: number = 30,
   ): BPEstimate {
     const insufficient: BPEstimate = {
-      systolic: 0,
-      diastolic: 0,
-      map: 0,
-      pulsePressure: 0,
-      confidence: 'INSUFFICIENT',
-      cyclesUsed: 0,
-      featureQuality: 0,
+      systolic: 0, diastolic: 0, map: 0, pulsePressure: 0,
+      confidence: 'INSUFFICIENT', cyclesUsed: 0, featureQuality: 0,
     };
 
-    if (
-      signalBuffer.length < VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES ||
-      rrIntervals.length < 2
-    ) {
-      return insufficient;
+    if (signalBuffer.length < VITAL_THRESHOLDS.BP.MIN_BUFFER_SAMPLES || rrIntervals.length < 2) {
+      return this.staleOrInsufficient(insufficient);
     }
 
+    // 1. Detect cycles from this frame's buffer
     const cycles = PPGFeatureExtractor.detectCardiacCycles(signalBuffer, sampleRate);
-    if (cycles.length < this.MIN_CYCLES) return insufficient;
+    if (cycles.length < this.MIN_CYCLES) return this.staleOrInsufficient(insufficient);
 
+    // 2. Extract features for each detected cycle
     const validCycles: CycleFeatures[] = [];
     for (const cycle of cycles) {
       const features = PPGFeatureExtractor.extractCycleFeatures(signalBuffer, cycle, sampleRate);
@@ -91,18 +86,38 @@ export class BloodPressureProcessor {
       }
     }
 
-    if (validCycles.length < this.MIN_CYCLES) return insufficient;
-    const useCycles = validCycles.slice(-this.MAX_CYCLES);
-    const mf = this.medianFeatures(useCycles);
+    if (validCycles.length < this.MIN_CYCLES) return this.staleOrInsufficient(insufficient);
+
+    // 3. Add new cycles to persistent buffer, avoid duplicates by time proximity
+    for (const vc of validCycles) {
+      const isDuplicate = this.cycleBuffer.some(
+        (existing) => Math.abs(existing.sutMs - vc.sutMs) < 5 && Math.abs(existing.pw50Ms - vc.pw50Ms) < 10,
+      );
+      if (!isDuplicate) {
+        this.cycleBuffer.push(vc);
+      }
+    }
+
+    // 4. Trim buffer to max size, keep most recent
+    if (this.cycleBuffer.length > BUFFER_MAX) {
+      this.cycleBuffer = this.cycleBuffer.slice(-BUFFER_MAX);
+    }
+
+    // 5. Need minimum cycles accumulated
+    if (this.cycleBuffer.length < this.MIN_CYCLES) return this.staleOrInsufficient(insufficient);
+
+    // 6. Compute median features from persistent buffer
+    const mf = this.medianFeatures(this.cycleBuffer);
 
     const validRR = rrIntervals.filter((i) => isPhysiologicalRR(i) && i <= 1800);
-    if (validRR.length < 2) return insufficient;
+    if (validRR.length < 2) return this.staleOrInsufficient(insufficient);
 
     const avgRR = validRR.reduce((a, b) => a + b, 0) / validRR.length;
     const hr = 60000 / avgRR;
     const rrVar = PPGFeatureExtractor.extractRRVariability(validRR);
     const cyclePeriodMs = Math.max(280, mf.sutMs + mf.diastolicPhaseMs);
 
+    // 7. Compute BP from buffer features
     const raw = estimatePhysiologicalBp(mf, { hr, rmssd: rrVar.rmssd, cyclePeriodMs });
     const coherent = enforceHemodynamicCoherence(raw.systolic, raw.diastolic);
 
@@ -113,7 +128,7 @@ export class BloodPressureProcessor {
     let sbp = coherent.sbp;
     let dbp = coherent.dbp;
 
-    const fq = this.assessFeatureQuality(mf, useCycles.length);
+    const fq = this.assessFeatureQuality(mf, this.cycleBuffer.length);
     let confidence: BPEstimate['confidence'] = 'LOW';
     if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_HIGH) confidence = 'HIGH';
     else if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_MEDIUM) confidence = 'MEDIUM';
@@ -124,17 +139,39 @@ export class BloodPressureProcessor {
       dbp = adj.dbp;
     }
 
+    // 8. EMA smoothing with persistent state
     if (this.lastSBP > 0) {
-      sbp = this.lastSBP * (1 - this.EMA_ALPHA) + sbp * this.EMA_ALPHA;
-      dbp = this.lastDBP * (1 - this.EMA_ALPHA) + dbp * this.EMA_ALPHA;
+      const alpha = 0.12;
+      sbp = this.lastSBP * (1 - alpha) + sbp * alpha;
+      dbp = this.lastDBP * (1 - alpha) + dbp * alpha;
     }
 
     if (!isPhysiologicalBp(sbp, dbp)) {
       return insufficient;
     }
 
+    // 9. Confidence streak gate — require multiple frames of consistent confidence
+    this.confidenceStreak = confidence === this.lastConfidence && this.lastSBP > 0
+      ? this.confidenceStreak + 1
+      : 0;
+    this.lastConfidence = confidence;
     this.lastSBP = sbp;
     this.lastDBP = dbp;
+
+    // Throttle: only emit every N frames to reduce UI jitter
+    this.framesSinceLastEmit++;
+    if (this.framesSinceLastEmit < EMIT_THROTTLE_FRAMES && this.lastSBP > 0) {
+      return {
+        systolic: Math.round(this.lastSBP),
+        diastolic: Math.round(this.lastDBP),
+        map: Math.round(this.lastDBP + (this.lastSBP - this.lastDBP) / 3),
+        pulsePressure: Math.round(this.lastSBP - this.lastDBP),
+        confidence,
+        cyclesUsed: this.cycleBuffer.length,
+        featureQuality: fq,
+      };
+    }
+    this.framesSinceLastEmit = 0;
 
     const map = dbp + (sbp - dbp) / 3;
 
@@ -144,44 +181,64 @@ export class BloodPressureProcessor {
       map: Math.round(map),
       pulsePressure: Math.round(sbp - dbp),
       confidence,
-      cyclesUsed: useCycles.length,
+      cyclesUsed: this.cycleBuffer.length,
       featureQuality: fq,
     };
   }
 
+  private staleOrInsufficient(insufficient: BPEstimate): BPEstimate {
+    // Return last known values if available (graceful degradation)
+    if (this.lastSBP > 0 && this.lastDBP > 0) {
+      return {
+        systolic: Math.round(this.lastSBP),
+        diastolic: Math.round(this.lastDBP),
+        map: Math.round(this.lastDBP + (this.lastSBP - this.lastDBP) / 3),
+        pulsePressure: Math.round(this.lastSBP - this.lastDBP),
+        confidence: 'LOW',
+        cyclesUsed: this.cycleBuffer.length,
+        featureQuality: 0,
+      };
+    }
+    return insufficient;
+  }
+
   private medianFeatures(cycles: CycleFeatures[]): PwaMedianFeatures {
+    const take = cycles.slice(-BUFFER_MAX);
     return {
-      bDivA: median(cycles.map((c) => c.apg.bDivA)),
-      dDivA: median(cycles.map((c) => c.apg.dDivA)),
-      agi: median(cycles.map((c) => c.apg.agi)),
-      sutMs: median(cycles.map((c) => c.sutMs)),
-      diastolicPhaseMs: median(cycles.map((c) => c.diastolicPhaseMs)),
-      stiffnessIndex: median(cycles.map((c) => c.stiffnessIndex)),
-      augmentationIndex: median(cycles.map((c) => c.augmentationIndex)),
-      dicroticDepth: median(cycles.map((c) => c.dicroticDepth)),
-      areaRatio: median(cycles.map((c) => c.areaRatio)),
-      pw50Ms: median(cycles.map((c) => c.pw50Ms)),
-      kValue: median(cycles.map((c) => c.kValue)),
-      vMax: median(cycles.map((c) => c.vMax)),
+      bDivA: median(take.map((c) => c.apg.bDivA)),
+      dDivA: median(take.map((c) => c.apg.dDivA)),
+      agi: median(take.map((c) => c.apg.agi)),
+      sutMs: median(take.map((c) => c.sutMs)),
+      diastolicPhaseMs: median(take.map((c) => c.diastolicPhaseMs)),
+      stiffnessIndex: median(take.map((c) => c.stiffnessIndex)),
+      augmentationIndex: median(take.map((c) => c.augmentationIndex)),
+      dicroticDepth: median(take.map((c) => c.dicroticDepth)),
+      areaRatio: median(take.map((c) => c.areaRatio)),
+      pw50Ms: median(take.map((c) => c.pw50Ms)),
+      kValue: median(take.map((c) => c.kValue)),
+      vMax: median(take.map((c) => c.vMax)),
     };
   }
 
   private assessFeatureQuality(f: PwaMedianFeatures, cycleCount: number): number {
     let score = 0;
-    score += Math.min(30, cycleCount * 3);
-    if (f.bDivA !== 0) score += 12;
-    if (f.dDivA !== 0) score += 13;
-    if (f.sutMs > 30 && f.sutMs < 500) score += 10;
-    if (f.diastolicPhaseMs > 40 && f.diastolicPhaseMs < 900) score += 10;
-    if (f.stiffnessIndex > 0) score += 8;
-    if (f.areaRatio > 0) score += 9;
-    if (f.dicroticDepth > 0) score += 8;
+    score += Math.min(30, cycleCount * 2);
+    if (f.sutMs > 40 && f.sutMs < 400) score += 18;
+    if (f.diastolicPhaseMs > 50 && f.diastolicPhaseMs < 800) score += 15;
+    if (f.stiffnessIndex > 0.5 && f.stiffnessIndex < 25) score += 12;
+    if (f.augmentationIndex > 2 && f.augmentationIndex < 45) score += 10;
+    if (f.dicroticDepth > 0 && f.dicroticDepth < 0.8) score += 8;
+    if (f.pw50Ms > 60 && f.pw50Ms < 600) score += 7;
     return Math.min(100, score);
   }
 
   reset(): void {
     this.lastSBP = 0;
     this.lastDBP = 0;
+    this.cycleBuffer = [];
+    this.framesSinceLastEmit = 0;
+    this.confidenceStreak = 0;
+    this.lastConfidence = 'INSUFFICIENT';
   }
 
   fullReset(): void {

@@ -414,6 +414,8 @@ export class PPGFeatureExtractor {
     const extrema: { idx: number; val: number; type: 'peak' | 'valley' }[] = [];
 
     for (let i = 2; i < apg.length - 2; i++) {
+      if (!Number.isFinite(apg[i])) continue;
+      if (Math.abs(apg[i]) > 100) continue; // reject numerical artifacts
       if (apg[i] > apg[i - 1] && apg[i] > apg[i + 1] &&
           apg[i] > apg[i - 2] && apg[i] > apg[i + 2]) {
         extrema.push({ idx: i, val: apg[i], type: 'peak' });
@@ -430,17 +432,17 @@ export class PPGFeatureExtractor {
     const peaks = extrema.filter(e => e.type === 'peak');
     const valleys = extrema.filter(e => e.type === 'valley');
 
-    const a = peaks.length > 0 ? peaks[0].val : 0;
-    const b = valleys.length > 0 ? valleys[0].val : 0;
-    const c = peaks.length > 1 ? peaks[1].val : 0;
-    const d = valleys.length > 1 ? valleys[1].val : 0;
-    const e = peaks.length > 2 ? peaks[2].val : 0;
+    const a = peaks.length > 0 && Math.abs(peaks[0].val) < 100 ? peaks[0].val : 0;
+    const b = valleys.length > 0 && Math.abs(valleys[0].val) < 100 ? valleys[0].val : 0;
+    const c = peaks.length > 1 && Math.abs(peaks[1].val) < 100 ? peaks[1].val : 0;
+    const d = valleys.length > 1 && Math.abs(valleys[1].val) < 100 ? valleys[1].val : 0;
+    const e = peaks.length > 2 && Math.abs(peaks[2].val) < 100 ? peaks[2].val : 0;
 
-    const bDivA = a !== 0 ? b / a : 0;
-    const cDivA = a !== 0 ? c / a : 0;
-    const dDivA = a !== 0 ? d / a : 0;
-    const eDivA = a !== 0 ? e / a : 0;
-    const agi = a !== 0 ? (b - c - d - e) / a : 0;
+    const bDivA = Math.abs(a) > 1e-10 ? b / a : 0;
+    const cDivA = Math.abs(a) > 1e-10 ? c / a : 0;
+    const dDivA = Math.abs(a) > 1e-10 ? d / a : 0;
+    const eDivA = Math.abs(a) > 1e-10 ? e / a : 0;
+    const agi = Math.abs(a) > 1e-10 ? (b - c - d - e) / a : 0;
 
     return { a, b, c, d, e, bDivA, cDivA, dDivA, eDivA, agi };
   }

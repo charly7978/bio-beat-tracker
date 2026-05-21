@@ -86,7 +86,9 @@ export function computePhysiologicalIndices(
   const wRef = VITAL_THRESHOLDS.BP.WEIGHTS.REFLECTION;
   const reflectionIndex = clamp(
     wRef.dDivA * norm01(-f.dDivA, N.D_DIV_A[0], N.D_DIV_A[1]) +
-      wRef.agi * norm01(f.agi, N.AGI[0], N.AGI[1]),
+      wRef.agi * norm01(f.agi, N.AGI[0], N.AGI[1]) +
+      wRef.dicroticDepth * norm01(f.dicroticDepth, N.DICROTIC_DEPTH[0], N.DICROTIC_DEPTH[1]) +
+      wRef.stiffnessIndex * norm01(f.stiffnessIndex, N.STIFFNESS_INDEX[0], N.STIFFNESS_INDEX[1]),
     0,
     1,
   );
@@ -119,7 +121,7 @@ function morphologyPressures(
   const sbpUnit =
     M.sbp.sut * (1 - sutScore) +
     M.sbp.stiff * norm01(-f.bDivA, N.B_DIV_A[0], N.B_DIV_A[1]) +
-    M.sbp.reflection * norm01(-f.dDivA, N.D_DIV_A[0], N.D_DIV_A[1]) +
+    M.sbp.dicrotic * norm01(f.dicroticDepth, N.DICROTIC_DEPTH[0], N.DICROTIC_DEPTH[1]) +
     M.sbp.aix * norm01(f.augmentationIndex, N.AUGMENTATION_INDEX[0], N.AUGMENTATION_INDEX[1]) +
     M.sbp.hr * hrScore;
 

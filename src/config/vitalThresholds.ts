@@ -85,13 +85,13 @@ export const VITAL_THRESHOLDS = {
       RMSSD: [8, 120] as const,
     },
     WEIGHTS: {
-      RESISTANCE: { k: 0.32, ipa: 0.33, decay: 0.35 },
-      COMPLIANCE: { stiff: 0.28, si: 0.26, aix: 0.24, vMax: 0.12, sutRatio: 0.1 },
-      REFLECTION: { dDivA: 0.55, agi: 0.45 },
+      RESISTANCE: { k: 0.15, ipa: 0.40, decay: 0.45 },
+      COMPLIANCE: { stiff: 0.10, si: 0.30, aix: 0.28, vMax: 0.02, sutRatio: 0.30 },
+      REFLECTION: { dDivA: 0.30, agi: 0.20, dicroticDepth: 0.30, stiffnessIndex: 0.20 },
       FUSION: { hemodynamic: 0.52, morphology: 0.48 },
       MORPHOLOGY: {
-        sbp: { sut: 0.28, stiff: 0.26, reflection: 0.22, aix: 0.14, hr: 0.1 },
-        dbp: { pw50: 0.24, diaPhase: 0.22, decay: 0.2, dicrotic: 0.14, hrv: 0.1, ipa: 0.1 },
+        sbp: { sut: 0.30, stiff: 0.28, dicrotic: 0.22, aix: 0.12, hr: 0.08 },
+        dbp: { pw50: 0.26, diaPhase: 0.24, decay: 0.20, dicrotic: 0.12, hrv: 0.08, ipa: 0.10 },
       },
     },
   },
