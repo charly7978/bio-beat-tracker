@@ -205,6 +205,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private sourceScores: { [key: string]: number } = { R: 0, G: 0, RG: 0 };
   private lastSourceSwitch = 0;
   private readonly SOURCE_HYSTERESIS_MS = 2000;
+  private readonly MIN_ACDC_RESET_GAP = 180;
+  private lastACDCResetFrame = -999;
 
   constructor(
     public onSignalReady?: (signal: ProcessedSignal) => void,
@@ -616,9 +618,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       if (this.contactState === 'STABLE_CONTACT') {
         this.contactState = 'UNSTABLE_CONTACT';
       }
-      if (prevState === 'STABLE_CONTACT' && this.contactState === 'UNSTABLE_CONTACT') {
-        this.resetACDC();
-      }
       return;
     }
     const minPi = VITAL_THRESHOLDS.QUALITY.MIN_PI;
@@ -638,7 +637,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.smoothedCoverage >= F.MIN_COVERAGE * (padLike ? 0.82 : 0.88);
     this.contactState = stable ? 'STABLE_CONTACT' : 'UNSTABLE_CONTACT';
     if (prevState === 'STABLE_CONTACT' && this.contactState === 'UNSTABLE_CONTACT') {
-      this.resetACDC();
+      if (this.frameCount - this.lastACDCResetFrame >= this.MIN_ACDC_RESET_GAP) {
+        this.resetACDC();
+        this.lastACDCResetFrame = this.frameCount;
+      }
     }
   }
 
