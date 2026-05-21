@@ -230,6 +230,9 @@ export class VitalSignsProcessor {
 
     // SpO2: solo alimenta el buffer cuando hay pulso valido.
     // Sin pulso, no entra basura al buffer → recuperacion instantanea al re-colocar el dedo.
+    if (this.rgbData.redDC === 0 && this.rgbData.greenDC === 0) {
+      this.spo2Processor.reset();
+    }
     this.measurements.spo2 = 0;
     if (this.validPulseCount >= 1) {
       const sp2 = this.spo2Processor.update(
@@ -365,7 +368,7 @@ export class VitalSignsProcessor {
       this.spo2DisplayFrames = 0;
     } else if (this.spo2DisplayHold > 0) {
       this.spo2DisplayFrames++;
-      if (this.spo2DisplayFrames >= 10) {
+      if (this.spo2DisplayFrames >= 45) {
         this.spo2DisplayHold = 0;
       }
     }
@@ -435,7 +438,7 @@ export class VitalSignsProcessor {
       },
       spo2: {
         name: "SpO2",
-        value: spo2HasDisplay ? Math.round(this.measurements.spo2) : null,
+        value: spo2HasDisplay ? Math.round(spo2Shown) : null,
         unit: "%",
         timestamp: now,
         confidence: !spo2HasDisplay

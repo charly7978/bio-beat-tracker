@@ -135,8 +135,6 @@ export class SpO2Processor {
     this.staleFrames++;
     if (this.lastSpO2 <= 0) return insufficient;
     if (this.staleFrames >= STALE_FRAMES_MAX) {
-      this.lastSpO2 = 0;
-      this.lastRValue = 0;
       return insufficient;
     }
     return {
