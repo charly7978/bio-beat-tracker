@@ -904,11 +904,11 @@ const PPGSignalMeter = ({
       ctx.closePath();
       const fillGrad = ctx.createLinearGradient(0, plot.y + wavePadTop, 0, waveBaseY);
       if (arrhythmia) {
-        fillGrad.addColorStop(0, 'rgba(248, 113, 113, 0.22)');
-        fillGrad.addColorStop(1, 'rgba(127, 29, 29, 0.04)');
+        fillGrad.addColorStop(0, 'rgba(248, 113, 113, 0.08)');
+        fillGrad.addColorStop(1, 'rgba(127, 29, 29, 0.01)');
       } else {
-        fillGrad.addColorStop(0, 'rgba(34, 197, 94, 0.16)');
-        fillGrad.addColorStop(1, 'rgba(34, 197, 94, 0.02)');
+        fillGrad.addColorStop(0, 'rgba(34, 197, 94, 0.05)');
+        fillGrad.addColorStop(1, 'rgba(34, 197, 94, 0.005)');
       }
       ctx.fillStyle = fillGrad;
       ctx.fill();
@@ -940,7 +940,7 @@ const PPGSignalMeter = ({
     const recentCut = Math.max(0, totalLen - Math.floor(totalLen * 0.35));
     const leadingCut = Math.max(0, totalLen - Math.floor(totalLen * 0.10));
 
-    // 1. Estela trasera (fosforescencia) — toda la onda muy tenue
+    // 1. Contorno base — toda la onda visible (persistencia fosforo CRT)
     ctx.shadowBlur = 0;
     let segIdx = 0;
     while (segIdx < totalLen - 1) {
@@ -949,16 +949,16 @@ const PPGSignalMeter = ({
       while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
       const segEndClamped = segEnd + 1 > totalLen ? segEnd : segEnd + 1;
       drawDirectSegment(segIdx, segEndClamped);
-      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.09)' : 'rgba(34, 197, 94, 0.10)';
-      ctx.lineWidth = 5;
+      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.35)' : 'rgba(34, 197, 94, 0.38)';
+      ctx.lineWidth = 3.5;
       ctx.shadowBlur = 0;
       ctx.stroke();
       segIdx = segEnd;
     }
 
-    // 2. Actividad reciente (35% derecho) — brillo medio
+    // 2. Actividad reciente (35% derecho) — brillo medio con glow
     ctx.shadowColor = COLORS.SIGNAL_GLOW;
-    ctx.shadowBlur = 8;
+    ctx.shadowBlur = 6;
     segIdx = Math.max(recentCut, 0);
     while (segIdx < totalLen - 1) {
       const isArr = coords[segIdx].isArr;
@@ -966,14 +966,14 @@ const PPGSignalMeter = ({
       while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
       const segEndClamped = segEnd + 1 > totalLen ? segEnd : segEnd + 1;
       drawDirectSegment(segIdx, segEndClamped);
-      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.30)' : 'rgba(34, 197, 94, 0.32)';
-      ctx.lineWidth = 4;
+      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.55)' : 'rgba(34, 197, 94, 0.58)';
+      ctx.lineWidth = 3;
       ctx.stroke();
       segIdx = segEnd;
     }
 
     // 3. Frente de onda (10% derecho) — brillo máximo, trazo grueso ("relámpago")
-    ctx.shadowBlur = 14;
+    ctx.shadowBlur = 12;
     segIdx = Math.max(leadingCut, 0);
     while (segIdx < totalLen - 1) {
       const isArr = coords[segIdx].isArr;
