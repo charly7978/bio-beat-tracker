@@ -371,9 +371,8 @@ const PPGSignalMeter = ({
   const drawBackground = useCallback((ctx: CanvasRenderingContext2D) => {
     const { width: W, height: H } = layoutRef.current;
     
-    // 1. Fade persistente (fósforo CRT): oscurece 2.5% por frame
-    // Los latidos viejos persisten en su posición original desvaneciéndose
-    ctx.fillStyle = 'rgba(2, 4, 9, 0.025)';
+    // 1. Fondo negro limpio (sin persistencia borrosa)
+    ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, W, H);
 
     // 2. Scanline overlay (CRT effect)
