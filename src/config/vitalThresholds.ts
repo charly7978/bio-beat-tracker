@@ -26,7 +26,7 @@ export const VITAL_THRESHOLDS = {
      * porque la absorción del verde difiere del IR. Slope 5 compensa el factor ~2x.
      * SmartPhOx 2024 confirma: RR smartphone necesita calibración específica por dispositivo. */
     R_MODEL_INTERCEPT: 98,
-    R_MODEL_SLOPE: 5,
+    R_MODEL_SLOPE: 4,
     DISPLAY_CAP: 98,
     R_HISTORY_SAMPLES: 7,
     MIN_PI_PERCENT: 0.02,
