@@ -922,7 +922,8 @@ const PPGSignalMeter = ({
       fi = fj;
     }
 
-    // Stroke segments — línea directa (morfología PPG fiel)
+    // Stroke con efecto fosforescente tipo monitor cardíaco real
+    // Las muestras más nuevas son más brillantes (efecto "relámpago")
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
@@ -934,51 +935,87 @@ const PPGSignalMeter = ({
       }
     };
 
-    let i = 0;
-    while (i < coords.length - 1) {
-      const isArr = coords[i].isArr;
-      let j = i;
-      while (j < coords.length - 1 && coords[j].isArr === isArr) {
-        j++;
-      }
-      
-      // 1. Primary Neon Glow (Outer)
-      drawDirectSegment(i, j + 1 > coords.length ? j : j + 1);
-      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.35)' : 'rgba(34, 197, 94, 0.35)';
-      ctx.lineWidth = 6;
-      ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
-      ctx.shadowBlur = 15;
-      ctx.stroke();
+    const totalLen = coords.length;
+    const recentCut = Math.max(0, totalLen - Math.floor(totalLen * 0.35));
+    const leadingCut = Math.max(0, totalLen - Math.floor(totalLen * 0.10));
 
-      // 2. High-Intensity Core (Inner)
-      ctx.strokeStyle = isArr ? '#fecaca' : '#bbf7d0'; 
-      ctx.lineWidth = 2.2;
-      ctx.shadowBlur = 3;
+    // 1. Estela trasera (fosforescencia) — toda la onda muy tenue
+    ctx.shadowBlur = 0;
+    let segIdx = 0;
+    while (segIdx < totalLen - 1) {
+      const isArr = coords[segIdx].isArr;
+      let segEnd = segIdx;
+      while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
+      const segEndClamped = segEnd + 1 > totalLen ? segEnd : segEnd + 1;
+      drawDirectSegment(segIdx, segEndClamped);
+      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.09)' : 'rgba(34, 197, 94, 0.10)';
+      ctx.lineWidth = 5;
+      ctx.shadowBlur = 0;
       ctx.stroke();
-      
-      i = j;
+      segIdx = segEnd;
     }
 
-    sweepPulseRef.current *= 0.9;
+    // 2. Actividad reciente (35% derecho) — brillo medio
+    ctx.shadowColor = COLORS.SIGNAL_GLOW;
+    ctx.shadowBlur = 8;
+    segIdx = Math.max(recentCut, 0);
+    while (segIdx < totalLen - 1) {
+      const isArr = coords[segIdx].isArr;
+      let segEnd = segIdx;
+      while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
+      const segEndClamped = segEnd + 1 > totalLen ? segEnd : segEnd + 1;
+      drawDirectSegment(segIdx, segEndClamped);
+      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.30)' : 'rgba(34, 197, 94, 0.32)';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+      segIdx = segEnd;
+    }
+
+    // 3. Frente de onda (10% derecho) — brillo máximo, trazo grueso ("relámpago")
+    ctx.shadowBlur = 14;
+    segIdx = Math.max(leadingCut, 0);
+    while (segIdx < totalLen - 1) {
+      const isArr = coords[segIdx].isArr;
+      let segEnd = segIdx;
+      while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
+      const segEndClamped = segEnd + 1 > totalLen ? segEnd : segEnd + 1;
+      drawDirectSegment(segIdx, segEndClamped);
+      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.75)' : '#4ade80';
+      ctx.lineWidth = 2.8;
+      ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
+      ctx.stroke();
+      segIdx = segEnd;
+    }
+
+    // 4. Punto de barrido ("relámpago") — destello en la cabeza de la onda
+    sweepPulseRef.current *= 0.75;
     const head = coords[coords.length - 1];
     if (head) {
-      const pulse = Math.max(sweepPulseRef.current, 0.08);
-      ctx.strokeStyle = head.isArr ? 'rgba(248, 113, 113, 0.55)' : 'rgba(34, 197, 94, 0.45)';
-      ctx.lineWidth = 1.5;
+      const pulse = Math.max(sweepPulseRef.current, 0.04);
+      ctx.shadowBlur = 6;
+
+      // Línea de barrido vertical
+      ctx.strokeStyle = head.isArr ? 'rgba(248, 113, 113, 0.50)' : 'rgba(34, 197, 94, 0.5)';
+      ctx.lineWidth = 1.2;
+      ctx.shadowBlur = 0;
       ctx.beginPath();
       ctx.moveTo(head.x, plot.y + wavePadTop);
       ctx.lineTo(head.x, plot.y + plot.h - wavePadBot + 8);
       ctx.stroke();
 
+      // Halo exterior del punto
       ctx.beginPath();
-      ctx.arc(head.x, head.y, 4 + pulse * 6, 0, Math.PI * 2);
-      ctx.fillStyle = head.isArr ? 'rgba(248, 113, 113, 0.2)' : 'rgba(34, 197, 94, 0.2)';
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(head.x, head.y, 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
+      ctx.arc(head.x, head.y, 5 + pulse * 8, 0, Math.PI * 2);
+      ctx.fillStyle = head.isArr ? 'rgba(248, 113, 113, 0.25)' : 'rgba(34, 197, 94, 0.25)';
+      ctx.shadowBlur = 20 + pulse * 15;
       ctx.shadowColor = head.isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
-      ctx.shadowBlur = 8 + pulse * 10;
+      ctx.fill();
+
+      // Núcleo blanco brillante
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, 2.8, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowBlur = 10 + pulse * 12;
       ctx.fill();
     }
     ctx.shadowBlur = 0;
