@@ -22,8 +22,12 @@ export interface BPEstimate {
   featureQuality: number;
 }
 
-const BUFFER_MAX = 30;
-const EMIT_THROTTLE_FRAMES = 15;
+const BUFFER_MAX = 18;
+const EMIT_EVERY_N_FRAMES = 8;
+const STALE_FRAMES_MAX = 15;
+const EMA_ALPHA = 0.25;
+const VARIANCE_WINDOW = 5;
+const STALE_VARIANCE_THRESHOLD = 1.5;
 
 export class BloodPressureProcessor {
   private readonly MIN_CYCLES = VITAL_THRESHOLDS.BP.MIN_CYCLES;
@@ -35,7 +39,8 @@ export class BloodPressureProcessor {
   private lastSBP = 0;
   private lastDBP = 0;
   private lastConfidence: BPEstimate['confidence'] = 'INSUFFICIENT';
-  private confidenceStreak = 0;
+  private staleFrames = 0;
+  private estimateHistory: number[] = [];
 
   private anthropometric: AnthropometricProfile | null = null;
 
@@ -72,11 +77,9 @@ export class BloodPressureProcessor {
       return this.staleOrInsufficient(insufficient);
     }
 
-    // 1. Detect cycles from this frame's buffer
     const cycles = PPGFeatureExtractor.detectCardiacCycles(signalBuffer, sampleRate);
     if (cycles.length < this.MIN_CYCLES) return this.staleOrInsufficient(insufficient);
 
-    // 2. Extract features for each detected cycle
     const validCycles: CycleFeatures[] = [];
     for (const cycle of cycles) {
       const features = PPGFeatureExtractor.extractCycleFeatures(signalBuffer, cycle, sampleRate);
@@ -87,25 +90,16 @@ export class BloodPressureProcessor {
 
     if (validCycles.length < this.MIN_CYCLES) return this.staleOrInsufficient(insufficient);
 
-    // 3. Add new cycles to persistent buffer, avoid duplicates by time proximity
     for (const vc of validCycles) {
-      const isDuplicate = this.cycleBuffer.some(
-        (existing) => Math.abs(existing.sutMs - vc.sutMs) < 5 && Math.abs(existing.pw50Ms - vc.pw50Ms) < 10,
-      );
-      if (!isDuplicate) {
-        this.cycleBuffer.push(vc);
-      }
+      this.cycleBuffer.push(vc);
     }
 
-    // 4. Trim buffer to max size, keep most recent
     if (this.cycleBuffer.length > BUFFER_MAX) {
       this.cycleBuffer = this.cycleBuffer.slice(-BUFFER_MAX);
     }
 
-    // 5. Need minimum cycles accumulated
     if (this.cycleBuffer.length < this.MIN_CYCLES) return this.staleOrInsufficient(insufficient);
 
-    // 6. Compute median features from persistent buffer
     const mf = this.medianFeatures(this.cycleBuffer);
 
     const validRR = rrIntervals.filter((i) => isPhysiologicalRR(i) && i <= 1800);
@@ -116,7 +110,6 @@ export class BloodPressureProcessor {
     const rrVar = PPGFeatureExtractor.extractRRVariability(validRR);
     const cyclePeriodMs = Math.max(280, mf.sutMs + mf.diastolicPhaseMs);
 
-    // 7. Compute BP from buffer features
     const raw = estimatePhysiologicalBp(mf, { hr, rmssd: rrVar.rmssd, cyclePeriodMs });
     const coherent = enforceHemodynamicCoherence(raw.systolic, raw.diastolic);
 
@@ -138,37 +131,32 @@ export class BloodPressureProcessor {
       dbp = adj.dbp;
     }
 
-    // 8. EMA smoothing with persistent state
     if (this.lastSBP > 0) {
-      const alpha = 0.12;
-      sbp = this.lastSBP * (1 - alpha) + sbp * alpha;
-      dbp = this.lastDBP * (1 - alpha) + dbp * alpha;
+      sbp = this.lastSBP * (1 - EMA_ALPHA) + sbp * EMA_ALPHA;
+      dbp = this.lastDBP * (1 - EMA_ALPHA) + dbp * EMA_ALPHA;
     }
 
     if (!isPhysiologicalBp(sbp, dbp)) {
       return insufficient;
     }
 
-    // 9. Confidence streak gate — require multiple frames of consistent confidence
-    this.confidenceStreak = confidence === this.lastConfidence && this.lastSBP > 0
-      ? this.confidenceStreak + 1
-      : 0;
-    this.lastConfidence = confidence;
     this.lastSBP = sbp;
     this.lastDBP = dbp;
+    this.lastConfidence = confidence;
+    this.staleFrames = 0;
 
-    // Throttle: only emit every N frames to reduce UI jitter
+    this.estimateHistory.push(sbp);
+    if (this.estimateHistory.length > VARIANCE_WINDOW) {
+      this.estimateHistory.shift();
+    }
+
+    if (this.isEstimateStale(confidence)) {
+      confidence = 'LOW';
+    }
+
     this.framesSinceLastEmit++;
-    if (this.framesSinceLastEmit < EMIT_THROTTLE_FRAMES && this.lastSBP > 0) {
-      return {
-        systolic: Math.round(this.lastSBP),
-        diastolic: Math.round(this.lastDBP),
-        map: Math.round(this.lastDBP + (this.lastSBP - this.lastDBP) / 3),
-        pulsePressure: Math.round(this.lastSBP - this.lastDBP),
-        confidence,
-        cyclesUsed: this.cycleBuffer.length,
-        featureQuality: fq,
-      };
+    if (this.framesSinceLastEmit < EMIT_EVERY_N_FRAMES) {
+      return this.buildThrottledEmit(confidence, fq);
     }
     this.framesSinceLastEmit = 0;
 
@@ -185,20 +173,52 @@ export class BloodPressureProcessor {
     };
   }
 
+  private isEstimateStale(confidence: BPEstimate['confidence']): boolean {
+    if (this.estimateHistory.length < VARIANCE_WINDOW) return false;
+    const mean = this.estimateHistory.reduce((a, b) => a + b, 0) / this.estimateHistory.length;
+    const variance = Math.sqrt(
+      this.estimateHistory.reduce((sum, v) => sum + (v - mean) ** 2, 0) / this.estimateHistory.length,
+    );
+    return variance < STALE_VARIANCE_THRESHOLD && confidence === 'LOW';
+  }
+
+  private buildThrottledEmit(confidence: BPEstimate['confidence'], fq: number): BPEstimate {
+    return {
+      systolic: Math.round(this.lastSBP),
+      diastolic: Math.round(this.lastDBP),
+      map: Math.round(this.lastDBP + (this.lastSBP - this.lastDBP) / 3),
+      pulsePressure: Math.round(this.lastSBP - this.lastDBP),
+      confidence,
+      cyclesUsed: this.cycleBuffer.length,
+      featureQuality: fq,
+    };
+  }
+
   private staleOrInsufficient(insufficient: BPEstimate): BPEstimate {
-    // Return last known values if available (graceful degradation)
-    if (this.lastSBP > 0 && this.lastDBP > 0) {
-      return {
-        systolic: Math.round(this.lastSBP),
-        diastolic: Math.round(this.lastDBP),
-        map: Math.round(this.lastDBP + (this.lastSBP - this.lastDBP) / 3),
-        pulsePressure: Math.round(this.lastSBP - this.lastDBP),
-        confidence: 'LOW',
-        cyclesUsed: this.cycleBuffer.length,
-        featureQuality: 0,
-      };
+    this.staleFrames++;
+
+    if (this.lastSBP <= 0 || this.lastDBP <= 0) {
+      this.framesSinceLastEmit = 0;
+      return insufficient;
     }
-    return insufficient;
+
+    if (this.staleFrames >= STALE_FRAMES_MAX) {
+      this.framesSinceLastEmit = 0;
+      this.lastSBP = 0;
+      this.lastDBP = 0;
+      this.lastConfidence = 'INSUFFICIENT';
+      return insufficient;
+    }
+
+    return {
+      systolic: Math.round(this.lastSBP),
+      diastolic: Math.round(this.lastDBP),
+      map: Math.round(this.lastDBP + (this.lastSBP - this.lastDBP) / 3),
+      pulsePressure: Math.round(this.lastSBP - this.lastDBP),
+      confidence: 'LOW',
+      cyclesUsed: this.cycleBuffer.length,
+      featureQuality: 0,
+    };
   }
 
   private medianFeatures(cycles: CycleFeatures[]): PwaMedianFeatures {
@@ -236,8 +256,9 @@ export class BloodPressureProcessor {
     this.lastDBP = 0;
     this.cycleBuffer = [];
     this.framesSinceLastEmit = 0;
-    this.confidenceStreak = 0;
     this.lastConfidence = 'INSUFFICIENT';
+    this.staleFrames = 0;
+    this.estimateHistory = [];
   }
 
   fullReset(): void {
