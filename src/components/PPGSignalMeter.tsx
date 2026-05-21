@@ -61,7 +61,7 @@ interface PPGSignalMeterProps {
 }
 
 const TARGET_FPS = 60;            // (ANTES 30)
-const WINDOW_MS = 7000;          // 7.0s persistencia tipo CRT (antes 2000)
+const WINDOW_MS = 2000;          // 2.0s ondas aún más holgadas (antes 3600)
 const BUFFER_SIZE = 2500;        // Incrementar buffer para soportar hasta 300 FPS sin perder la cola
 const TREND_WINDOW_MS = 60_000;  // 60 s de tendencia BPM
 const TREND_MAX_POINTS = 240;
@@ -936,11 +936,10 @@ const PPGSignalMeter = ({
     };
 
     const totalLen = coords.length;
-    // Capas de persistencia basadas en posición (no tiempo) dentro de la ventana
-    const recentCut = Math.max(0, totalLen - Math.floor(totalLen * 0.28));
-    const leadingCut = Math.max(0, totalLen - Math.floor(totalLen * 0.08));
+    const recentCut = Math.max(0, totalLen - Math.floor(totalLen * 0.35));
+    const leadingCut = Math.max(0, totalLen - Math.floor(totalLen * 0.10));
 
-    // 1. Estela trasera (fosforescencia) — toda la onda, persistencia larga
+    // 1. Estela trasera (fosforescencia) — toda la onda muy tenue
     ctx.shadowBlur = 0;
     let segIdx = 0;
     while (segIdx < totalLen - 1) {
@@ -949,16 +948,16 @@ const PPGSignalMeter = ({
       while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
       const segEndClamped = segEnd + 1 > totalLen ? segEnd : segEnd + 1;
       drawDirectSegment(segIdx, segEndClamped);
-      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.14)' : 'rgba(34, 197, 94, 0.16)';
+      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.09)' : 'rgba(34, 197, 94, 0.10)';
       ctx.lineWidth = 5;
       ctx.shadowBlur = 0;
       ctx.stroke();
       segIdx = segEnd;
     }
 
-    // 2. Actividad reciente (28% derecho) — brillo medio, trazo más vivo
+    // 2. Actividad reciente (35% derecho) — brillo medio
     ctx.shadowColor = COLORS.SIGNAL_GLOW;
-    ctx.shadowBlur = 6;
+    ctx.shadowBlur = 8;
     segIdx = Math.max(recentCut, 0);
     while (segIdx < totalLen - 1) {
       const isArr = coords[segIdx].isArr;
@@ -966,14 +965,14 @@ const PPGSignalMeter = ({
       while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
       const segEndClamped = segEnd + 1 > totalLen ? segEnd : segEnd + 1;
       drawDirectSegment(segIdx, segEndClamped);
-      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.38)' : 'rgba(34, 197, 94, 0.42)';
-      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.30)' : 'rgba(34, 197, 94, 0.32)';
+      ctx.lineWidth = 4;
       ctx.stroke();
       segIdx = segEnd;
     }
 
-    // 3. Frente de onda (8% derecho) — brillo máximo, trazo grueso ("relámpago")
-    ctx.shadowBlur = 12;
+    // 3. Frente de onda (10% derecho) — brillo máximo, trazo grueso ("relámpago")
+    ctx.shadowBlur = 14;
     segIdx = Math.max(leadingCut, 0);
     while (segIdx < totalLen - 1) {
       const isArr = coords[segIdx].isArr;
@@ -981,7 +980,7 @@ const PPGSignalMeter = ({
       while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
       const segEndClamped = segEnd + 1 > totalLen ? segEnd : segEnd + 1;
       drawDirectSegment(segIdx, segEndClamped);
-      ctx.strokeStyle = isArr ? 'rgba(248, 113, 113, 0.80)' : '#4ade80';
+      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.75)' : '#4ade80';
       ctx.lineWidth = 2.8;
       ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
       ctx.stroke();
