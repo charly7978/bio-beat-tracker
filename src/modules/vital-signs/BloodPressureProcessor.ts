@@ -22,7 +22,6 @@ export interface BPEstimate {
   featureQuality: number;
 }
 
-const MIN_CONFIDENCE_SEEN = 3;
 const BUFFER_MAX = 30;
 const EMIT_THROTTLE_FRAMES = 15;
 
