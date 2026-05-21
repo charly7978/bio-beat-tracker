@@ -10,9 +10,11 @@ import { isPhysiologicalRR } from '../../utils/physio';
 import { median } from '../../utils/stats';
 import type { FingerPlacementMode } from '../../types/signal';
 import {
+  applyAnthropometricAdjustment,
   enforceHemodynamicCoherence,
   estimatePhysiologicalBp,
   isPhysiologicalBp,
+  type AnthropometricProfile,
   type PwaMedianFeatures,
 } from '@/lib/vitals/pwaPhysiologicalBpEngine';
 
@@ -35,8 +37,18 @@ export class BloodPressureProcessor {
   private lastDBP = 0;
   private readonly EMA_ALPHA = 0.18;
 
+  private anthropometric: AnthropometricProfile | null = null;
+
   setPlacementMode(mode: FingerPlacementMode): void {
     this.placementMode = mode;
+  }
+
+  setAnthropometric(profile: AnthropometricProfile | null): void {
+    this.anthropometric = profile;
+  }
+
+  getAnthropometric(): AnthropometricProfile | null {
+    return this.anthropometric;
   }
 
   private minCycleQuality(): number {
@@ -105,6 +117,12 @@ export class BloodPressureProcessor {
     let confidence: BPEstimate['confidence'] = 'LOW';
     if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_HIGH) confidence = 'HIGH';
     else if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_MEDIUM) confidence = 'MEDIUM';
+
+    if (this.anthropometric) {
+      const adj = applyAnthropometricAdjustment(sbp, dbp, this.anthropometric);
+      sbp = adj.sbp;
+      dbp = adj.dbp;
+    }
 
     if (this.lastSBP > 0) {
       sbp = this.lastSBP * (1 - this.EMA_ALPHA) + sbp * this.EMA_ALPHA;

@@ -14,13 +14,22 @@ export interface CalibrationProfile {
   method: string;
 }
 
+export interface AnthropometricProfile {
+  heightCm: number;
+  weightKg: number;
+  ageYears: number;
+  isMale: boolean;
+}
+
 export class CalibrationManager {
   private static instance: CalibrationManager;
   private profiles: Map<string, CalibrationProfile> = new Map();
   private activeProfileId: string | null = null;
+  private anthropometric: AnthropometricProfile | null = null;
 
   private constructor() {
     this.loadFromStorage();
+    this.loadAnthropometric();
   }
 
   public static getInstance(): CalibrationManager {
@@ -58,6 +67,32 @@ export class CalibrationManager {
     } catch (e) {
       console.error('Error saving calibrations:', e);
     }
+  }
+
+  private loadAnthropometric(): void {
+    try {
+      const stored = localStorage.getItem('anthropometric_profile');
+      if (stored) {
+        this.anthropometric = JSON.parse(stored);
+      }
+    } catch { /* ignore */ }
+  }
+
+  private saveAnthropometric(): void {
+    try {
+      if (this.anthropometric) {
+        localStorage.setItem('anthropometric_profile', JSON.stringify(this.anthropometric));
+      }
+    } catch { /* ignore */ }
+  }
+
+  public setAnthropometric(profile: AnthropometricProfile): void {
+    this.anthropometric = profile;
+    this.saveAnthropometric();
+  }
+
+  public getAnthropometric(): AnthropometricProfile | null {
+    return this.anthropometric;
   }
 
   public addProfile(profile: CalibrationProfile): void {
@@ -128,7 +163,9 @@ export class CalibrationManager {
   public reset(): void {
     this.profiles.clear();
     this.activeProfileId = null;
+    this.anthropometric = null;
     localStorage.removeItem('calibration_profiles');
     localStorage.removeItem('active_calibration_id');
+    localStorage.removeItem('anthropometric_profile');
   }
 }

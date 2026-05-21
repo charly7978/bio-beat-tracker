@@ -127,6 +127,15 @@ export class VitalSignsProcessor {
     this.arrhythmiaProcessor.setArrhythmiaDetectionCallback((detected) => {
       log.info(`Estado arritmia → ${detected ? 'ARRITMIA' : 'NORMAL'}`);
     });
+    this.syncAnthropometric();
+  }
+
+  private syncAnthropometric(): void {
+    const cal = CalibrationManager.getInstance();
+    const anthrop = cal.getAnthropometric();
+    if (anthrop) {
+      this.bloodPressureProcessor.setAnthropometric(anthrop);
+    }
   }
 
   /** Calentamiento in-sesión (muestras internas), no crea perfiles en `CalibrationManager`. */
@@ -183,6 +192,8 @@ export class VitalSignsProcessor {
     ) {
       this.lastPpgPerfusionIndex = perfusionIndexFromPpg;
     }
+
+    this.syncAnthropometric();
 
     const morphSample =
       typeof morphologyValue === 'number' && Number.isFinite(morphologyValue)

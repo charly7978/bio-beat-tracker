@@ -204,6 +204,33 @@ export function enforceHemodynamicCoherence(
 }
 
 /** Valida contra rangos fisiológicos; no sustituye valores inválidos por pisos. */
+export interface AnthropometricProfile {
+  heightCm: number;
+  weightKg: number;
+  ageYears: number;
+  isMale: boolean;
+}
+
+export function applyAnthropometricAdjustment(
+  sbp: number,
+  dbp: number,
+  profile: AnthropometricProfile,
+): { sbp: number; dbp: number } {
+  const cfg = VITAL_THRESHOLDS.BP;
+  const bmi = profile.weightKg / ((profile.heightCm / 100) ** 2);
+  const ageFactor = (profile.ageYears - 30) / 30;
+  const bmiFactor = (bmi - 22) / 13;
+  const genderFactor = profile.isMale ? 1.0 : 0.92;
+
+  const sbpAdj = sbp + ageFactor * 3.5 + bmiFactor * 2.8;
+  const dbpAdj = dbp + ageFactor * 2.1 + bmiFactor * 1.8;
+
+  return {
+    sbp: clamp(sbpAdj * genderFactor, cfg.SYSTOLIC_MIN, cfg.SYSTOLIC_MAX),
+    dbp: clamp(dbpAdj, cfg.DIASTOLIC_MIN, cfg.DIASTOLIC_MAX),
+  };
+}
+
 export function isPhysiologicalBp(sbp: number, dbp: number): boolean {
   const cfg = VITAL_THRESHOLDS.BP;
   if (!Number.isFinite(sbp) || !Number.isFinite(dbp)) return false;
