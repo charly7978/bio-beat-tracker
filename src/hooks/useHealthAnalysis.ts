@@ -41,9 +41,9 @@ export const useHealthAnalysis = () => {
     // Solo enviar datos que realmente se midieron — sin valores ficticios de relleno
     const bodyPayload: Record<string, unknown> = {
       quality,
-      arrhythmiaCount: vitalSigns.arrhythmia.value.count,
+      arrhythmiaCount: vitalSigns.arrhythmia.value?.count ?? 0,
     };
-    if (hr > 0) bodyPayload.heartRate = hr;
+    if (hr != null && hr > 0) bodyPayload.heartRate = hr;
     if (vitalSigns.spo2.value != null && vitalSigns.spo2.value > 0) bodyPayload.spo2 = vitalSigns.spo2.value;
     const bpVal = vitalSigns.bloodPressure.value;
     if (bpVal && bpVal.systolic > 0) bodyPayload.systolic = bpVal.systolic;

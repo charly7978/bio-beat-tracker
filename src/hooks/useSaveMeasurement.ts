@@ -79,7 +79,7 @@ export const useSaveMeasurement = () => {
         spo2,
         systolic: sys,
         diastolic: dia,
-        arrhythmia_count: vs.arrhythmia.value.count || 0,
+        arrhythmia_count: vs.arrhythmia.value?.count ?? 0,
         quality: sq,
         measured_at: new Date().toISOString(),
       };

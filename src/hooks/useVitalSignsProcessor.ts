@@ -71,8 +71,8 @@ export const useVitalSignsProcessor = () => {
     if (
       result.heartRate.status === 'VALID' ||
       result.bloodPressure.status === 'VALID' ||
-      result.spo2.value > 0 ||
-      result.arrhythmia.value.count > 0
+      (result.spo2.value ?? 0) > 0 ||
+      (result.arrhythmia.value?.count ?? 0) > 0
     ) {
       setLastValidResults(result);
     }

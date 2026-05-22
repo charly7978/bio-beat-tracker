@@ -1064,7 +1064,7 @@ const Index = () => {
 
     if (emittedPeak) {
       totalBeatsRef.current++;
-      const currentArrCount = vitalSignsRef.current.arrhythmia.value.count || 0;
+      const currentArrCount = vitalSignsRef.current.arrhythmia.value?.count ?? 0;
       if (currentArrCount > lastArrhythmiaCountForBeatsRef.current) {
         arrhythmiaBeatsRef.current++;
         lastArrhythmiaCountForBeatsRef.current = currentArrCount;
@@ -1169,7 +1169,7 @@ const Index = () => {
         heartBeatResult.confidence > 0.15 &&
         vitals.heartRate.status === 'VALID'
       ) {
-        const arrhythmiaStatus = vitals.arrhythmia.value.status;
+        const arrhythmiaStatus = vitals.arrhythmia.value?.status ?? '';
         if (arrhythmiaStatus) {
           lastArrhythmiaData.current = vitals.lastArrhythmiaData || null;
 
@@ -1183,7 +1183,7 @@ const Index = () => {
               }
               toast({
                 title: "⚠️ Arritmia detectada",
-                description: `Latido irregular #${vitals.arrhythmia.value.count}`,
+                description: `Latido irregular #${vitals.arrhythmia.value?.count ?? 0}`,
                 variant: "destructive",
                 duration: 4000
               });
@@ -1350,13 +1350,13 @@ const Index = () => {
               onStartMeasurement={handleToggleMonitoring}
               onReset={handleReset}
               isMonitoring={isMonitoring}
-              arrhythmiaStatus={vitalSigns.arrhythmia.value.status}
+              arrhythmiaStatus={vitalSigns.arrhythmia.value?.status ?? ''}
               rawArrhythmiaData={lastArrhythmiaData.current}
               preserveResults={showResults}
               isPeak={beatMarker === 1}
               bpm={vitalSigns.heartRate.value ?? null}
               spo2={vitalSigns.spo2.value || 0}
-              arrhythmiaCount={vitalSigns.arrhythmia.value.count}
+              arrhythmiaCount={vitalSigns.arrhythmia.value?.count ?? 0}
               rrIntervals={rrIntervals}
               elapsedTime={elapsedTime}
               perfusionIndex={lastSignal?.perfusionIndex || 0}
@@ -1374,7 +1374,7 @@ const Index = () => {
                 (lastSignal?.fingerDetected ? 'UNSTABLE_CONTACT' : 'NO_CONTACT')
               }
               acquisitionStatus={acquisitionStatusLabel}
-              diagnostics={currentDiagnostics}
+              diagnostics={currentDiagnostics as any}
             />
           </div>
 
@@ -1382,7 +1382,7 @@ const Index = () => {
           {showResults && measurementSummary && (() => {
             const { totalBeats, arrhythmiaBeats, normalPercent } = measurementSummary;
             const normalBeats = totalBeats - arrhythmiaBeats;
-            const avgBpm = vitalSigns.heartRate.value > 0 ? Math.round(vitalSigns.heartRate.value) : '--';
+            const avgBpm = (vitalSigns.heartRate.value ?? 0) > 0 ? Math.round(vitalSigns.heartRate.value!) : '--';
             const statusColor = normalPercent >= 95 ? 'emerald' : normalPercent >= 80 ? 'yellow' : 'red';
             const statusText = normalPercent >= 95 ? 'RITMO NORMAL' : normalPercent >= 80 ? 'LEVE IRREGULARIDAD' : 'IRREGULARIDAD DETECTADA';
             const statusIcon = normalPercent >= 95 ? CheckCircle2 : normalPercent >= 80 ? AlertTriangle : XCircle;
