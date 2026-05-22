@@ -1,6 +1,5 @@
 import { ArrhythmiaProcessor } from './arrhythmia-processor';
 import { BloodPressureProcessor } from './BloodPressureProcessor';
-import { SpO2Processor } from './SpO2Processor';
 import { createLogger } from '../../utils/logger';
 import { isPhysiologicalRR, getMonotonicNow } from '../../utils/physio';
 import { VitalMeasurement, MeasurementStatus, SignalQualityMetrics } from '../../types/measurements';
@@ -39,8 +38,6 @@ export interface RGBData {
   redDC: number;
   greenAC: number;
   greenDC: number;
-  blueAC: number;
-  blueDC: number;
 }
 
 interface RRData {
@@ -66,10 +63,8 @@ interface RRData {
 export class VitalSignsProcessor {
   private arrhythmiaProcessor: ArrhythmiaProcessor;
   private bloodPressureProcessor: BloodPressureProcessor;
-  private spo2Processor: SpO2Processor;
   private lastBPConfidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT' = 'INSUFFICIENT';
   private lastBPFeatureQuality: number = 0;
-  private lastSpO2RValue: number = 0;
   private calibrationSamples: number = 0;
   private readonly CALIBRATION_REQUIRED = 25;
   private isCalibrating: boolean = false;
@@ -97,10 +92,13 @@ export class VitalSignsProcessor {
   private frameCount = 0;  // Contador continuo para logging/diagnóstico
   
   // RGB para SpO2
-  private rgbData: RGBData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0, blueAC: 0, blueDC: 0 };
+  private rgbData: RGBData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
   
   // Gating de estabilidad (Consistencia)
   private stableFramesCount: number = 0;
+  private readonly STABILITY_SPO2_FRAMES = 45;  // ~1.5s para SpO2 (actualización rápida)
+  private readonly STABILITY_BP_FRAMES = VITAL_THRESHOLDS.BP.STABILITY_FRAMES_HIGH;
+  private lastCoherentSpO2: number = 0;
   
   // Suavizado adaptativo para estabilidad SIN perder respuesta
   // Alpha más bajo = más suavizado = lecturas más estables
@@ -114,12 +112,9 @@ export class VitalSignsProcessor {
   /** PI del pipeline PPG (AC/DC canónico); evita que `isClinicallyValid` dependa solo del ratio RGB usado en SpO2 */
   private lastPpgPerfusionIndex = 0;
   private lastSqmBundle: SignalQualityMetrics | null = null;
-  private spo2DisplayHold = 0;
-  private spo2DisplayFrames = 0;
-  private lastValidPulseCount = -1;
-  private rgbDataReady = false;
-  /** Evita que BP desaparezca por un frame de gate bajo */
+  /** Evita que SpO2/PA desaparezcan por un frame de gate bajo */
   private displayHold = {
+    spo2: 0,
     systolic: 0,
     diastolic: 0,
     missedFrames: 0,
@@ -129,7 +124,6 @@ export class VitalSignsProcessor {
   constructor() {
     this.arrhythmiaProcessor = new ArrhythmiaProcessor();
     this.bloodPressureProcessor = new BloodPressureProcessor();
-    this.spo2Processor = new SpO2Processor();
     this.arrhythmiaProcessor.setArrhythmiaDetectionCallback((detected) => {
       log.info(`Estado arritmia → ${detected ? 'ARRITMIA' : 'NORMAL'}`);
     });
@@ -162,8 +156,8 @@ export class VitalSignsProcessor {
     this.morphologyHistory.reset();
     this.respirationHistory.reset();
     this.stableFramesCount = 0;
+    this.lastCoherentSpO2 = 0;
     this.lastPpgPerfusionIndex = 0;
-    this.spo2Processor.reset();
   }
 
   forceCalibrationCompletion(): void {
@@ -173,7 +167,6 @@ export class VitalSignsProcessor {
   
   setRGBData(data: RGBData): void {
     this.rgbData = data;
-    this.rgbDataReady = true;
   }
 
   setPlacementMode(mode: FingerPlacementMode): void {
@@ -230,30 +223,8 @@ export class VitalSignsProcessor {
       );
     }
 
-    // Validar pulso real (BP y arritmias)
+    // Validar pulso real (BP y arritmias; SpO2 usa ratio RGB y no depende de RR)
     this.validateRealPulse(rrData);
-
-    // SpO2: detectar transicion sin-pulso → con-pulso para resetear estado.
-    if (this.lastValidPulseCount === 0 && this.validPulseCount >= 1) {
-      this.spo2Processor.reset();
-      this.rgbDataReady = false;
-    }
-    this.lastValidPulseCount = this.validPulseCount;
-
-    this.measurements.spo2 = 0;
-    // Solo alimentar cuando hay pulso valido Y datos RGB frescos.
-    // Sin rgbDataReady, los AC/DC viejos (pre-reset) contaminarian el buffer.
-    if (this.validPulseCount >= 1 && this.rgbDataReady) {
-      const sp2 = this.spo2Processor.update(
-        this.rgbData.redAC, this.rgbData.redDC,
-        this.rgbData.greenAC, this.rgbData.greenDC,
-        this.rgbData.blueAC, this.rgbData.blueDC,
-      );
-      if (sp2.confidence !== 'INSUFFICIENT' && sp2.spo2 >= 70 && sp2.spo2 <= 100) {
-        this.measurements.spo2 = sp2.spo2;
-        this.lastSpO2RValue = sp2.rValue;
-      }
-    }
 
     this.calculateVitalSigns(signalValue, effectiveSqi, currentBPM, rrData);
 
@@ -301,6 +272,18 @@ export class VitalSignsProcessor {
     return 'INVALID';
   }
 
+  /** SpO2 ratio-of-ratios: no requiere ventana RR, solo RGB + perfusión mínima */
+  private getSpo2Confidence(): 'LOW' | 'INVALID' {
+    const sq = this.measurements.signalQuality;
+    const piRgb = this.rgbData.greenDC > 0 ? this.rgbData.greenAC / this.rgbData.greenDC : 0;
+    const pi = Math.max(piRgb, this.lastPpgPerfusionIndex);
+    if (SignalQualityIndex.isAdequateForLiveVitals(sq, pi)) return 'LOW';
+    if (sq >= 8 && pi >= 0.00015 && this.rgbData.redDC >= 10 && this.rgbData.greenDC >= 5) {
+      return 'LOW';
+    }
+    return 'INVALID';
+  }
+
   private currentPerfusionIndex(): number {
     const piRgb = this.rgbData.greenDC > 0 ? this.rgbData.greenAC / this.rgbData.greenDC : 0;
     return Math.max(piRgb, this.lastPpgPerfusionIndex);
@@ -323,6 +306,7 @@ export class VitalSignsProcessor {
     const isClinicallyValid = SignalQualityIndex.isClinicallyValid(sqi, pi);
     const vitalUiGate =
       isClinicallyValid || SignalQualityIndex.isAdequateForLiveVitals(sqi, pi);
+    const spo2UiReady = this.getSpo2Confidence() !== 'INVALID';
     const spo2Calib = calib.getCalibrationInfo('SPO2');
     const bpCalib = calib.getCalibrationInfo('BP');
 
@@ -350,6 +334,27 @@ export class VitalSignsProcessor {
       vitalUiGate || (this.validPulseCount >= 2 && sqi >= 12);
 
     if (
+      spo2UiReady &&
+      this.measurements.spo2 > 0 &&
+      this.measurements.spo2 >= 70 &&
+      this.measurements.spo2 <= 100
+    ) {
+      this.displayHold.spo2 = this.measurements.spo2;
+      this.displayHold.missedFrames = 0;
+    } else if (this.displayHold.spo2 > 0) {
+      this.displayHold.missedFrames++;
+      if (
+        this.measurements.spo2 > 0 &&
+        Math.abs(this.measurements.spo2 - this.displayHold.spo2) /
+          Math.max(1, this.displayHold.spo2) >
+          0.015
+      ) {
+        this.displayHold.spo2 = this.measurements.spo2;
+        this.displayHold.missedFrames = 0;
+      }
+    }
+
+    if (
       bpUiReady &&
       this.measurements.systolicPressure > 0 &&
       this.measurements.diastolicPressure > 0
@@ -373,28 +378,25 @@ export class VitalSignsProcessor {
 
     const holdActive =
       this.displayHold.missedFrames < this.DISPLAY_HOLD_MAX_FRAMES;
-    if (this.measurements.spo2 >= 70 && this.measurements.spo2 <= 100) {
-      this.spo2DisplayHold = this.measurements.spo2;
-      this.spo2DisplayFrames = 0;
-    } else if (this.spo2DisplayHold > 0) {
-      this.spo2DisplayFrames++;
-      if (this.spo2DisplayFrames >= 45) {
-        this.spo2DisplayHold = 0;
-      }
-    }
-    const spo2Shown = this.measurements.spo2 > 0
-      ? this.measurements.spo2
-      : this.spo2DisplayHold;
+    const spo2Shown =
+      spo2UiReady &&
+      this.measurements.spo2 > 0
+        ? this.measurements.spo2
+        : holdActive && this.displayHold.spo2 > 0
+          ? this.displayHold.spo2
+          : 0;
     const spo2HasDisplay =
       spo2Shown >= 70 && spo2Shown <= 100;
 
-    const spo2Status: MeasurementStatus = !spo2HasDisplay
+    const spo2Status: MeasurementStatus = !spo2UiReady && !holdActive
       ? "LOW_SIGNAL_QUALITY"
-      : spo2Calib.expired
-        ? "CALIBRATION_EXPIRED"
-        : spo2Calib.available
-          ? "VALID"
-          : "REQUIRES_CALIBRATION";
+      : !spo2HasDisplay
+        ? "NO_VALID_SIGNAL"
+        : spo2Calib.expired
+          ? "CALIBRATION_EXPIRED"
+          : spo2Calib.available
+            ? "VALID"
+            : "REQUIRES_CALIBRATION";
     const bpSysShown =
       bpUiReady && this.measurements.systolicPressure > 0
         ? this.measurements.systolicPressure
@@ -448,7 +450,7 @@ export class VitalSignsProcessor {
       },
       spo2: {
         name: "SpO2",
-        value: spo2HasDisplay ? Math.round(spo2Shown) : null,
+        value: spo2HasDisplay ? Math.round(this.measurements.spo2) : null,
         unit: "%",
         timestamp: now,
         confidence: !spo2HasDisplay
@@ -464,7 +466,7 @@ export class VitalSignsProcessor {
             ? "Beer–Lambert ratio-of-ratios con perfil de referencia vigente"
             : "Estimación ratio-of-ratios cámara+flash (no sustituye oxímetro certificado); calibre con oxímetro para uso clínico",
         signalQuality: { ...commonSQM },
-        diagnostics: { rValue: this.lastSpO2RValue },
+        diagnostics: { rValue: this.rValueHistory[this.rValueHistory.length - 1] },
         calibration: spo2Calib
       },
       bloodPressure: {
@@ -560,6 +562,19 @@ export class VitalSignsProcessor {
       log.info(`[Stability] ${this.stableFramesCount} frames | ${confidence} | SQI:${this.measurements.signalQuality}`);
     }
     
+    // === SpO2 — Basado en física (Beer-Lambert), no estadística ===
+    // SpO2 usa ratios ópticos AC/DC directamente de la cámara.
+    // Solo necesita datos RGB válidos y confidence no-INVALID.
+    const spo2 = this.calculateSpO2Raw();
+    const spo2Conf = this.getSpo2Confidence();
+    if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && spo2Conf !== 'INVALID') {
+      const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 5;
+      if (isCoherent || this.frameCount > 300) {
+        this.lastCoherentSpO2 = spo2;
+        this.measurements.spo2 = this.smoothValue(this.measurements.spo2, spo2, 'stable');
+      }
+    }
+
     this.lastBPM = currentBPM > 0 ? currentBPM : 0;
     const hr = this.lastBPM;
 
@@ -625,6 +640,78 @@ export class VitalSignsProcessor {
   }
 
   /**
+   * SpO2 - FÓRMULA RATIO-OF-RATIOS
+   * 
+   * Basado en Beer-Lambert / TI SLAA655, calibrado para cámara smartphone:
+   * R = (AC_red/DC_red) / (AC_green/DC_green)
+   * SpO2 = 112 - 28 * R   (coeficientes empíricos para green como proxy IR)
+   * 
+   * Verde se usa como proxy de IR porque ofrece mejor SNR en la yema del dedo
+   * con LED flash blanco que el canal azul.
+   * 
+   * Mejoras implementadas:
+   * - Filtrado de mediana sobre ventana de R para estabilidad
+   * - Gating por PI mínimo (perfusión) antes de calcular
+   * - Validación del rango físico de R (0.2-2.5 para tejido humano)
+   */
+  // Buffer para valores R (Ratio-of-Ratios) para filtrado de mediana
+  private rValueHistory: number[] = [];
+  private calculateSpO2Raw(): number {
+    const spoCfg = VITAL_THRESHOLDS.SPO2;
+    const { redAC, redDC, greenAC, greenDC } = this.rgbData;
+
+    if (redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC) return 0;
+    
+    const piRed = (redAC / redDC) * 100;   // como %
+    const piGreen = (greenAC / greenDC) * 100;
+
+    // Log de depuración (~cada 0.3s)
+    if (this.frameCount % 10 === 0) {
+      log.info(`[SpO2 Debug] ACr:${redAC.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${greenAC.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}%`);
+    }
+    
+    if (piRed < spoCfg.MIN_PI_PERCENT || piGreen < spoCfg.MIN_PI_PERCENT) return 0;
+    
+    const ratioRed = redAC / redDC;
+    const ratioGreen = greenAC / greenDC;
+    if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) return 0;
+    
+    const currentR = ratioRed / ratioGreen;
+    
+    // Rango físico de R para tejido humano con cámara+flash:
+    // Con dedo en flash blanco, rojo está cerca de saturación → R puede ser bajo (0.1+)
+    if (currentR < spoCfg.R_VALUE_MIN || currentR > spoCfg.R_VALUE_MAX) {
+      if (this.frameCount % 15 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
+      return 0;
+    }
+
+    // Acumular R para filtrado de mediana
+    this.rValueHistory.push(currentR);
+    if (this.rValueHistory.length > spoCfg.R_HISTORY_SAMPLES) {
+      this.rValueHistory.shift();
+    }
+
+    if (this.rValueHistory.length < 3) return 0;
+
+    const sortedR = [...this.rValueHistory].sort((a, b) => a - b);
+    const medianR = sortedR[Math.floor(sortedR.length / 2)] ?? 0;
+
+    const spo2 = Math.min(
+      spoCfg.DISPLAY_CAP,
+      Math.max(
+        spoCfg.MIN_VALID,
+        spoCfg.R_MODEL_INTERCEPT - spoCfg.R_MODEL_SLOPE * medianR,
+      ),
+    );
+    
+    if (this.frameCount % 30 === 0) {
+      log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}% (n=${this.rValueHistory.length})`);
+    }
+
+    return Number.isFinite(spo2) ? spo2 : 0;
+  }
+
+  /**
    * Suavizado EMA adaptativo con detección de outliers
    * type: 'stable' para valores que cambian lentamente (SpO2, PA)
    *       'dynamic' para valores más variables (Glucosa)
@@ -675,9 +762,8 @@ export class VitalSignsProcessor {
     this.measurements.arrhythmiaCount = 0;
     this.measurements.arrhythmiaStatus = "SIN ARRITMIAS|0";
     this.measurements.lastArrhythmiaData = null;
+    this.rValueHistory = [];
     this.lastPpgPerfusionIndex = 0;
-    this.rgbDataReady = false;
-    this.spo2Processor.reset();
     return result;
   }
 
@@ -686,8 +772,10 @@ export class VitalSignsProcessor {
     this.morphologyHistory.reset();
     this.respirationHistory.reset();
     this.validPulseCount = 0;
+    this.rValueHistory = [];
     this.frameCount = 0;
     this.stableFramesCount = 0;
+    this.lastCoherentSpO2 = 0;
     this.measurements = {
       spo2: 0,
       systolicPressure: 0,
@@ -697,17 +785,13 @@ export class VitalSignsProcessor {
       lastArrhythmiaData: null,
       signalQuality: 0
     };
-    this.rgbData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0, blueAC: 0, blueDC: 0 };
+    this.rgbData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
     this.lastPpgPerfusionIndex = 0;
-    this.displayHold = { systolic: 0, diastolic: 0, missedFrames: 0 };
-    this.spo2DisplayHold = 0;
-    this.spo2DisplayFrames = 0;
-    this.rgbDataReady = false;
+    this.displayHold = { spo2: 0, systolic: 0, diastolic: 0, missedFrames: 0 };
     this.isCalibrating = false;
     this.calibrationSamples = 0;
     this.arrhythmiaProcessor.reset();
     this.bloodPressureProcessor.fullReset();
-    this.spo2Processor.reset();
   }
 }
 

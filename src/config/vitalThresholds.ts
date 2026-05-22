@@ -14,23 +14,19 @@ export const VITAL_THRESHOLDS = {
     PHYSIOLOGICAL_RR_MAX_MS: 2200,
   },
   
-  // BLOOD OXYGEN (SpO2) — smartphone camera red+green ratio-of-ratios + MLR
-  // Smartphone SpO2 es inherentemente sensible a la posición del dedo porque
-  // el canal verde usa banda ancha (500-600nm) sin IR. Los coeficientes de calibración
-  // son específicos por dispositivo. Sin calibración se usa RoR: SpO2 = 100 - 5*R
-  // Con calibración (CalibrationManager) se usa MLR con pesos w0, wR, wDcRed, wDcGreen.
-  // offset adaptativo vía calibrate(referenceSpO2) permite ajuste en sesión.
+  // BLOOD OXYGEN (SpO2) — modelo ratio-of-ratios cámara+flash (verde como proxy IR)
   SPO2: {
     MIN_VALID: 70,
     MAX_VALID: 100,
     CRITICAL_LOW: 90,
     R_VALUE_MIN: 0.1,
-    R_VALUE_MAX: 3.0,
-    R_MODEL_INTERCEPT: 100,
-    R_MODEL_SLOPE: 5,
-    DISPLAY_CAP: 98,
-    R_HISTORY_SAMPLES: 12,
-    MIN_PI_PERCENT: 0.03,
+    R_VALUE_MAX: 2.5,
+    /** SpO2 = intercept − slope × R_mediana (calibración smartphone) */
+    R_MODEL_INTERCEPT: 101,
+    R_MODEL_SLOPE: 10,
+    DISPLAY_CAP: 99,
+    R_HISTORY_SAMPLES: 7,
+    MIN_PI_PERCENT: 0.02,
     MIN_RED_DC: 10,
     MIN_GREEN_DC: 5,
   },
