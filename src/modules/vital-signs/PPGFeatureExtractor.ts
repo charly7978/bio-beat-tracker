@@ -296,8 +296,8 @@ export class PPGFeatureExtractor {
   }
 
   private static findSystolicPeak(buffer: number[], onset: number, nextOnset: number): number {
-    // Peak must be in first 60% of cycle
-    const searchEnd = onset + Math.round((nextOnset - onset) * 0.6);
+    // Peak must be in first 70% of cycle
+    const searchEnd = onset + Math.round((nextOnset - onset) * 0.7);
     let maxIdx = onset;
     let maxVal = buffer[onset];
 
@@ -460,21 +460,22 @@ export class PPGFeatureExtractor {
     let q = 0;
 
     // Amplitude — lower threshold for weak but real signals
-    if (amplitude > 0.3) q += 0.15;
-    if (amplitude > 1.0) q += 0.1;
-    if (amplitude > 2.5) q += 0.05;
+    if (amplitude > 0.2) q += 0.20;
+    if (amplitude > 0.8) q += 0.10;
+    if (amplitude > 2.0) q += 0.05;
 
     // SUT in physiological range (wider)
-    if (sutMs > 40 && sutMs < 350) q += 0.2;
+    if (sutMs > 40 && sutMs < 400) q += 0.25;
 
     // Diastolic time
-    if (diastolicTimeMs > sutMs * 0.7) q += 0.15;
+    if (diastolicTimeMs > sutMs * 0.6) q += 0.15;
 
     // PW50 in range (wider)
-    if (pw50Ms > 80 && pw50Ms < 800) q += 0.1;
+    if (pw50Ms > 60 && pw50Ms < 900) q += 0.15;
 
-    // Dicrotic notch bonus
-    if (hasDicroticNotch) q += 0.25;
+    // Dicrotic notch bonus — menor peso porque notch es difícil de detectar
+    // en PPG de smartphone y se desvanece con edad (Dawber class 3-4)
+    if (hasDicroticNotch) q += 0.10;
 
     return Math.min(1, q);
   }

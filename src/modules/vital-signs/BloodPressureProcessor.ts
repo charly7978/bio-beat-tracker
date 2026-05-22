@@ -22,12 +22,12 @@ export interface BPEstimate {
   featureQuality: number;
 }
 
-const BUFFER_MAX = 18;
-const EMIT_EVERY_N_FRAMES = 8;
-const STALE_FRAMES_MAX = 15;
-const EMA_ALPHA = 0.25;
+const BUFFER_MAX = 24;
+const EMIT_EVERY_N_FRAMES = 6;
+const STALE_FRAMES_MAX = 30;
+const EMA_ALPHA = 0.20;
 const VARIANCE_WINDOW = 5;
-const STALE_VARIANCE_THRESHOLD = 1.5;
+const STALE_VARIANCE_THRESHOLD = 3.0;
 
 export class BloodPressureProcessor {
   private readonly MIN_CYCLES = VITAL_THRESHOLDS.BP.MIN_CYCLES;
@@ -202,12 +202,10 @@ export class BloodPressureProcessor {
     this.staleFrames++;
 
     if (this.lastSBP <= 0 || this.lastDBP <= 0) {
-      this.framesSinceLastEmit = 0;
       return insufficient;
     }
 
     if (this.staleFrames >= STALE_FRAMES_MAX) {
-      this.framesSinceLastEmit = 0;
       this.lastSBP = 0;
       this.lastDBP = 0;
       this.lastConfidence = 'INSUFFICIENT';

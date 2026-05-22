@@ -102,8 +102,8 @@ export class VitalSignsProcessor {
   
   // Suavizado adaptativo para estabilidad SIN perder respuesta
   // Alpha más bajo = más suavizado = lecturas más estables
-  private readonly EMA_ALPHA_STABLE = 0.20;
-  private readonly EMA_ALPHA_DYNAMIC = 0.30;
+  private readonly EMA_ALPHA_STABLE = 0.15;
+  private readonly EMA_ALPHA_DYNAMIC = 0.25;
 
   // Contador de pulsos válidos
   private validPulseCount: number = 0;
@@ -119,7 +119,7 @@ export class VitalSignsProcessor {
     diastolic: 0,
     missedFrames: 0,
   };
-  private readonly DISPLAY_HOLD_MAX_FRAMES = 120;
+  private readonly DISPLAY_HOLD_MAX_FRAMES = 240;
 
   constructor() {
     this.arrhythmiaProcessor = new ArrhythmiaProcessor();
@@ -411,7 +411,7 @@ export class VitalSignsProcessor {
           : 0;
     const bpHasMorph =
       bpUiReady &&
-      this.lastBPConfidence !== 'INSUFFICIENT' &&
+      (this.lastBPConfidence !== 'INSUFFICIENT' || holdActive) &&
       bpSysShown > 0 &&
       bpDiaShown > 0;
 
