@@ -111,8 +111,6 @@ export class VitalSignsProcessor {
   private lastBPM: number = 0;
 
   // Acumuladores ponderados por confianza para resultado final
-  private bpmWeightedSum = 0;
-  private bpmTotalWeight = 0;
   private bpSysWeightedSum = 0;
   private bpDiaWeightedSum = 0;
   private bpTotalWeight = 0;
@@ -165,8 +163,6 @@ export class VitalSignsProcessor {
     this.stableFramesCount = 0;
     this.lastCoherentSpO2 = 0;
     this.lastPpgPerfusionIndex = 0;
-    this.bpmWeightedSum = 0;
-    this.bpmTotalWeight = 0;
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
@@ -351,10 +347,7 @@ export class VitalSignsProcessor {
     };
 
     const hrMinSqi = VITAL_THRESHOLDS.QUALITY.MIN_FOR_HR;
-    const weightedBpm = this.bpmTotalWeight > 0
-      ? Math.round(this.bpmWeightedSum / this.bpmTotalWeight)
-      : 0;
-    const hrOk = (this.lastBPM > 0 || weightedBpm > 0) && sqi >= hrMinSqi;
+    const hrOk = this.lastBPM > 0 && sqi >= hrMinSqi;
     const bpUiReady =
       vitalUiGate || (this.validPulseCount >= 2 && sqi >= 12);
 
@@ -465,13 +458,10 @@ export class VitalSignsProcessor {
           ? "VALID"
           : "NO_VALID_SIGNAL";
 
-    const bpmDisplay = hrOk
-      ? (weightedBpm > 0 ? weightedBpm : Math.round(this.lastBPM))
-      : null;
     const res: VitalSignsResult = {
       heartRate: {
         name: "Heart Rate",
-        value: bpmDisplay,
+        value: hrOk ? Math.round(this.lastBPM) : null,
         unit: "bpm",
         timestamp: now,
         confidence: hrOk ? Math.min(0.98, 0.45 + sqi / 200) : (sqi >= hrMinSqi ? 0.35 : 0.12),
@@ -610,14 +600,6 @@ export class VitalSignsProcessor {
     }
 
     this.lastBPM = currentBPM > 0 ? currentBPM : 0;
-
-    // Acumular BPM ponderado por confianza × SQI
-    if (currentBPM > 0 && signalQuality >= minQualityForCalculation) {
-      const cw = this.confidenceToWeight(confidence) * clamp(signalQuality / 60, 0.1, 1.0);
-      this.bpmWeightedSum += currentBPM * cw;
-      this.bpmTotalWeight += cw;
-    }
-
     const hr = this.lastBPM;
 
     // === BP y Arritmias — requieren rrData válido ===
@@ -813,8 +795,6 @@ export class VitalSignsProcessor {
     this.measurements.lastArrhythmiaData = null;
     this.rValueHistory = [];
     this.lastPpgPerfusionIndex = 0;
-    this.bpmWeightedSum = 0;
-    this.bpmTotalWeight = 0;
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
@@ -846,8 +826,6 @@ export class VitalSignsProcessor {
     this.calibrationSamples = 0;
     this.arrhythmiaProcessor.reset();
     this.bloodPressureProcessor.fullReset();
-    this.bpmWeightedSum = 0;
-    this.bpmTotalWeight = 0;
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;

@@ -276,7 +276,9 @@ export class HeartBeatProcessor {
             } else {
               const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
               const trust = clamp(0.14 + wScore * 0.24, 0.14, 0.36);
-              const alpha = rel > 0.22 ? trust * 0.7 : rel > 0.12 ? trust : trust * 1.2;
+              // A menor desviación, más suavizado (alpha bajo)
+              // A mayor desviación, más seguimiento (alpha alto)
+              const alpha = rel > 0.22 ? trust * 0.7 : rel > 0.12 ? trust : trust * 0.6;
               this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
             }
           }
@@ -316,7 +318,7 @@ export class HeartBeatProcessor {
       peakAgeMs > this.BPM_PUBLISH_HOLD_MS * 1.15
     ) {
       this.consecutivePeaks = 0;
-      if (!this.fingerContactConfirmed) {
+      if (peakAgeMs > this.BPM_PUBLISH_HOLD_MS * 3) {
         this.smoothBPM = 0;
       }
     }
@@ -327,8 +329,14 @@ export class HeartBeatProcessor {
       this.fingerContactConfirmed &&
       peakAgeMs < this.BPM_PUBLISH_HOLD_MS
     ) {
-      if (rrBpm > 0) publishBpm = Math.round(rrBpm);
-      else if (this.smoothBPM > 0) publishBpm = Math.round(this.smoothBPM);
+      if (this.smoothBPM > 0 && rrBpm > 0) {
+        const agree = Math.abs(this.smoothBPM - rrBpm) / Math.max(1, rrBpm) < 0.08;
+        publishBpm = Math.round(agree ? this.smoothBPM : rrBpm);
+      } else if (this.smoothBPM > 0) {
+        publishBpm = Math.round(this.smoothBPM);
+      } else if (rrBpm > 0) {
+        publishBpm = Math.round(rrBpm);
+      }
     }
 
     const confidence = this.calculateConfidence(ensembleConf, isPeak);
