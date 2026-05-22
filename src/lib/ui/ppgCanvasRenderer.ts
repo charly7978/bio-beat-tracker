@@ -1,5 +1,5 @@
 import { CircularBuffer, PPGDataPoint } from '../../utils/CircularBuffer';
-import { calculateHRV, isPhysiologicalRR } from '../../utils/physio';
+import { isPhysiologicalRR } from '../../utils/physio';
 import {
   buildRhythmPanel,
   formatContactState,
@@ -259,7 +259,6 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.moveTo(colW * 2, metrics.y + 8); ctx.lineTo(colW * 2, metrics.y + metrics.h - 8);
   ctx.stroke();
 
-  const { isFingerDetected: fingerOn, preserveResults: preserve } = state.props;
   const dispBpm = state.displayBpm;
   const dispSpo2 = state.displaySpo2;
   const dispSys = state.displaySys;

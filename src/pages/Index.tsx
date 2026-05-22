@@ -1374,7 +1374,7 @@ const Index = () => {
                 (lastSignal?.fingerDetected ? 'UNSTABLE_CONTACT' : 'NO_CONTACT')
               }
               acquisitionStatus={acquisitionStatusLabel}
-              diagnostics={currentDiagnostics as any}
+              diagnostics={currentDiagnostics as unknown as import('@/components/PPGSignalMeter').PPGSignalMeterProps['diagnostics']}
             />
           </div>
 

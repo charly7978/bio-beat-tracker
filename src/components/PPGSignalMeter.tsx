@@ -6,18 +6,10 @@ import {
   lerpDisplayValue,
 } from '@/lib/measurement/displaySmoothing';
 import {
-  COLORS,
-  FONT_MONO,
   TARGET_FPS,
-  WINDOW_MS,
   BUFFER_SIZE,
   TREND_WINDOW_MS,
   TREND_MAX_POINTS,
-  BEAT_HISTORY_MAX,
-  VISUAL_DELAY_MS,
-  AMP_ATTACK,
-  AMP_RELEASE,
-  RR_TACHO_H,
   PpgLayout,
   PpgRenderState,
   drawBackground,
@@ -31,7 +23,7 @@ import {
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
 
-interface PPGSignalMeterProps {
+export interface PPGSignalMeterProps {
   value: number;
   quality: number;
   isFingerDetected: boolean;
@@ -117,7 +109,6 @@ const PPGSignalMeter = ({
   const lastPeakTimeRef = useRef(0);
   const [showPulse, setShowPulse] = useState(false);
 
-  const beatArrhythmiaRef = useRef(false);
   const lastArrhythmiaCountRef = useRef(0);
   const beatHistoryRef = useRef<{ isArrhythmia: boolean; time: number; rr: number }[]>([]);
 
