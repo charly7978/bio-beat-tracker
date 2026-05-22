@@ -6,7 +6,7 @@ import { clamp } from '@/utils/math';
 
 /** Pesos de suavizado por vital (solo UI, no afecta guardado clínico). */
 export const DISPLAY_SMOOTH_ALPHAS = {
-  hr: 0.08,
+  hr: 0.12,
   spo2: 0.14,
   bp: 0.12,
 } as const;

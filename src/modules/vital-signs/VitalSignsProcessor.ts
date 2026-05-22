@@ -415,21 +415,15 @@ export class VitalSignsProcessor {
           : spo2Calib.available
             ? "VALID"
             : "REQUIRES_CALIBRATION";
-    const weightedBpSys = this.bpTotalWeight > 0
-      ? Math.round(this.bpSysWeightedSum / this.bpTotalWeight)
-      : this.measurements.systolicPressure;
-    const weightedBpDia = this.bpTotalWeight > 0
-      ? Math.round(this.bpDiaWeightedSum / this.bpTotalWeight)
-      : this.measurements.diastolicPressure;
     const bpSysShown =
-      bpUiReady && weightedBpSys > 0
-        ? weightedBpSys
+      bpUiReady && this.measurements.systolicPressure > 0
+        ? this.measurements.systolicPressure
         : holdActive && this.displayHold.systolic > 0
           ? this.displayHold.systolic
           : 0;
     const bpDiaShown =
-      bpUiReady && weightedBpDia > 0
-        ? weightedBpDia
+      bpUiReady && this.measurements.diastolicPressure > 0
+        ? this.measurements.diastolicPressure
         : holdActive && this.displayHold.diastolic > 0
           ? this.displayHold.diastolic
           : 0;
