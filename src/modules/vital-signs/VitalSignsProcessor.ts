@@ -109,6 +109,13 @@ export class VitalSignsProcessor {
   private validPulseCount: number = 0;
   private readonly MIN_PULSES_REQUIRED = 2;
   private lastBPM: number = 0;
+
+  // Acumuladores ponderados por confianza para resultado final
+  private bpmWeightedSum = 0;
+  private bpmTotalWeight = 0;
+  private bpSysWeightedSum = 0;
+  private bpDiaWeightedSum = 0;
+  private bpTotalWeight = 0;
   /** PI del pipeline PPG (AC/DC canónico); evita que `isClinicallyValid` dependa solo del ratio RGB usado en SpO2 */
   private lastPpgPerfusionIndex = 0;
   private lastSqmBundle: SignalQualityMetrics | null = null;
@@ -158,6 +165,11 @@ export class VitalSignsProcessor {
     this.stableFramesCount = 0;
     this.lastCoherentSpO2 = 0;
     this.lastPpgPerfusionIndex = 0;
+    this.bpmWeightedSum = 0;
+    this.bpmTotalWeight = 0;
+    this.bpSysWeightedSum = 0;
+    this.bpDiaWeightedSum = 0;
+    this.bpTotalWeight = 0;
   }
 
   forceCalibrationCompletion(): void {
@@ -272,6 +284,16 @@ export class VitalSignsProcessor {
     return 'INVALID';
   }
 
+  /** Convierte nivel de confianza a peso numérico para acumulación ponderada */
+  private confidenceToWeight(confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INVALID'): number {
+    switch (confidence) {
+      case 'HIGH': return 1.0;
+      case 'MEDIUM': return 0.7;
+      case 'LOW': return 0.4;
+      default: return 0;
+    }
+  }
+
   /** SpO2 ratio-of-ratios: no requiere ventana RR, solo RGB + perfusión mínima */
   private getSpo2Confidence(): 'LOW' | 'INVALID' {
     const sq = this.measurements.signalQuality;
@@ -329,7 +351,10 @@ export class VitalSignsProcessor {
     };
 
     const hrMinSqi = VITAL_THRESHOLDS.QUALITY.MIN_FOR_HR;
-    const hrOk = this.lastBPM > 0 && sqi >= hrMinSqi;
+    const weightedBpm = this.bpmTotalWeight > 0
+      ? Math.round(this.bpmWeightedSum / this.bpmTotalWeight)
+      : 0;
+    const hrOk = (this.lastBPM > 0 || weightedBpm > 0) && sqi >= hrMinSqi;
     const bpUiReady =
       vitalUiGate || (this.validPulseCount >= 2 && sqi >= 12);
 
@@ -397,15 +422,21 @@ export class VitalSignsProcessor {
           : spo2Calib.available
             ? "VALID"
             : "REQUIRES_CALIBRATION";
+    const weightedBpSys = this.bpTotalWeight > 0
+      ? Math.round(this.bpSysWeightedSum / this.bpTotalWeight)
+      : this.measurements.systolicPressure;
+    const weightedBpDia = this.bpTotalWeight > 0
+      ? Math.round(this.bpDiaWeightedSum / this.bpTotalWeight)
+      : this.measurements.diastolicPressure;
     const bpSysShown =
-      bpUiReady && this.measurements.systolicPressure > 0
-        ? this.measurements.systolicPressure
+      bpUiReady && weightedBpSys > 0
+        ? weightedBpSys
         : holdActive && this.displayHold.systolic > 0
           ? this.displayHold.systolic
           : 0;
     const bpDiaShown =
-      bpUiReady && this.measurements.diastolicPressure > 0
-        ? this.measurements.diastolicPressure
+      bpUiReady && weightedBpDia > 0
+        ? weightedBpDia
         : holdActive && this.displayHold.diastolic > 0
           ? this.displayHold.diastolic
           : 0;
@@ -434,10 +465,13 @@ export class VitalSignsProcessor {
           ? "VALID"
           : "NO_VALID_SIGNAL";
 
+    const bpmDisplay = hrOk
+      ? (weightedBpm > 0 ? weightedBpm : Math.round(this.lastBPM))
+      : null;
     const res: VitalSignsResult = {
       heartRate: {
         name: "Heart Rate",
-        value: hrOk ? Math.round(this.lastBPM) : null,
+        value: bpmDisplay,
         unit: "bpm",
         timestamp: now,
         confidence: hrOk ? Math.min(0.98, 0.45 + sqi / 200) : (sqi >= hrMinSqi ? 0.35 : 0.12),
@@ -576,6 +610,14 @@ export class VitalSignsProcessor {
     }
 
     this.lastBPM = currentBPM > 0 ? currentBPM : 0;
+
+    // Acumular BPM ponderado por confianza × SQI
+    if (currentBPM > 0 && signalQuality >= minQualityForCalculation) {
+      const cw = this.confidenceToWeight(confidence) * clamp(signalQuality / 60, 0.1, 1.0);
+      this.bpmWeightedSum += currentBPM * cw;
+      this.bpmTotalWeight += cw;
+    }
+
     const hr = this.lastBPM;
 
     // === BP y Arritmias — requieren rrData válido ===
@@ -617,6 +659,12 @@ export class VitalSignsProcessor {
             adjusted.diastolic,
             'stable',
           );
+          // Acumular BP ponderado por confianza × calidad de feature
+          const cw = this.confidenceToWeight(bpEstimate.confidence)
+            * clamp(bpEstimate.featureQuality / 60, 0.1, 1.0);
+          this.bpSysWeightedSum += adjusted.systolic * cw;
+          this.bpDiaWeightedSum += adjusted.diastolic * cw;
+          this.bpTotalWeight += cw;
         }
       }
     }
@@ -765,6 +813,11 @@ export class VitalSignsProcessor {
     this.measurements.lastArrhythmiaData = null;
     this.rValueHistory = [];
     this.lastPpgPerfusionIndex = 0;
+    this.bpmWeightedSum = 0;
+    this.bpmTotalWeight = 0;
+    this.bpSysWeightedSum = 0;
+    this.bpDiaWeightedSum = 0;
+    this.bpTotalWeight = 0;
     return result;
   }
 
@@ -793,6 +846,11 @@ export class VitalSignsProcessor {
     this.calibrationSamples = 0;
     this.arrhythmiaProcessor.reset();
     this.bloodPressureProcessor.fullReset();
+    this.bpmWeightedSum = 0;
+    this.bpmTotalWeight = 0;
+    this.bpSysWeightedSum = 0;
+    this.bpDiaWeightedSum = 0;
+    this.bpTotalWeight = 0;
   }
 }
 
