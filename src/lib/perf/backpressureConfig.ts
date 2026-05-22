@@ -26,9 +26,9 @@ export interface BackpressureConfig {
 
 export const DEFAULT_BACKPRESSURE_CONFIG: BackpressureConfig = {
   enabled: true,
-  lowFpsThreshold: 35,    // Umbral para 60fps (35fps indica retraso notable)
-  highFpsThreshold: 52,   // Umbral de recuperación a fluidez casi total
-  sustainMs: 3000,
+  lowFpsThreshold: 28,    // Umbral reducido para evitar cambios de stride prematuros
+  highFpsThreshold: 48,   // Umbral de recuperación ajustado con lowFps
+  sustainMs: 5000,        // Más tiempo sostenido antes de cambiar stride (menos oscilaciones)
   maxStride: 5,           // Stride máximo (1/25 de píxeles) para mantener precisión
 };
 

@@ -168,8 +168,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private smoothedBlue = 0;
   private smoothedCoverage = 0;
   private smoothedFingerScore = 0;
-  private readonly RGB_SMOOTH_ALPHA = 0.12;
-  private readonly COVERAGE_SMOOTH_ALPHA = 0.14;
+  private readonly RGB_SMOOTH_ALPHA = 0.08;
+  private readonly COVERAGE_SMOOTH_ALPHA = 0.10;
 
   /** Ventana corta de R medio en ROI — CV temporal para distinguir tejido pulsátil vs. rojo estático */
   private readonly roiRedPulseRing = new RingF32(VITAL_THRESHOLDS.FINGER.ROI_PULSE_BUFFER);

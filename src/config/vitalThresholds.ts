@@ -112,8 +112,8 @@ export const VITAL_THRESHOLDS = {
     MIN_PI: 0.0009,
     MAX_MOTION: 0.75,
     MAX_JITTER_MS: 55,
-    /** Frames con dedo candidato antes de STABLE (≈0,4 s @ 30 fps) */
-    STABLE_FRAMES_REQ: 12,
+    /** Frames con dedo candidato antes de STABLE (≈0,53 s @ 30 fps) */
+    STABLE_FRAMES_REQ: 16,
     /** EMA del SQI mostrado en UI (0–1 por frame) */
     DISPLAY_SQI_EMA_ALPHA: 0.2,
     /** Solo vaciar buffers DSP tras este tiempo en NO_CONTACT (evita “todo/nada”) */
@@ -146,8 +146,8 @@ export const VITAL_THRESHOLDS = {
   // NOTA: umbrales relajados para tolerar dedo no perfectamente centrado
   // (ROI más grande, centerBias más plano, tiles más permisivos)
   FINGER: {
-    /** Fracción del lado corto del frame usada como ROI cuadrado central (0.98 = más dedo visible) */
-    ROI_SIZE_FRACTION: 0.98,
+    /** Fracción del lado corto del frame usada como ROI cuadrado central (0.99 = máximo dedo visible, mayor estabilidad espacial) */
+    ROI_SIZE_FRACTION: 0.99,
     /** Penalización radial en tiles: menor = más tolerante si el dedo no está perfectamente centrado */
     ROI_CENTER_BIAS_MULT: 0.50,
     ROI_CENTER_BIAS_MIN: 0.50,
