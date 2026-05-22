@@ -15,9 +15,7 @@ export interface CameraRuntimeHints {
   instantLostToUnstable: number;
   instantLostToNoContact: number;
   bufferResetAfterNoContact: number;
-  allowSoloElgendiFusion: boolean;
   gateRangeScale: number;
-  peakConsensusMin: number;
 }
 
 const TCL_UA = /\bTCL\b|TCL[_\s-]|T671|6156|LE7|LF7/i;
@@ -39,9 +37,7 @@ const TOLERANT_DEFAULT: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 't
   instantLostToUnstable: 14,
   instantLostToNoContact: 48,
   bufferResetAfterNoContact: 55,
-  allowSoloElgendiFusion: true,
   gateRangeScale: 0.65,
-  peakConsensusMin: 0.12,
 };
 
 const STRICT_TCL: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 'torchReliable' | 'constrained'> = {
@@ -52,9 +48,7 @@ const STRICT_TCL: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 'torchRe
   instantLostToUnstable: 3,
   instantLostToNoContact: 6,
   bufferResetAfterNoContact: 8,
-  allowSoloElgendiFusion: true,
   gateRangeScale: 0.85,
-  peakConsensusMin: 0.14,
 };
 
 export function inferCameraRuntimeHints(

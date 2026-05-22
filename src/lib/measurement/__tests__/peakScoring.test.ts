@@ -6,38 +6,26 @@ import {
 } from '../peakScoring';
 
 describe('peakScoring', () => {
-  it('dual ponderado supera umbral mínimo con buena señal', () => {
+  it('pico con buena señal supera umbral mínimo', () => {
     const s = scorePeakCandidate({
-      source: 'dual',
-      elConf: 0.5,
-      ensConf: 0.4,
-      spectralAgreement: 0.7,
-      sqi: 55,
-      perfusionIndex: 0.006,
+      elConf: 0.65,
+      ensConf: 0.5,
+      sqi: 60,
+      perfusionIndex: 0.007,
       rrMs: 820,
       prevRrMedianMs: 810,
     });
-    expect(s).toBeGreaterThanOrEqual(PEAK_SCORE_THRESHOLDS.dualMin);
+    expect(s).toBeGreaterThanOrEqual(PEAK_SCORE_THRESHOLDS.minScore);
   });
 
-  it('solo exige puntuación más alta que dual', () => {
-    const dual = scorePeakCandidate({
-      source: 'dual',
-      elConf: 0.35,
-      ensConf: 0.3,
-      spectralAgreement: 0.4,
-      sqi: 40,
-      perfusionIndex: 0.004,
-    });
-    const solo = scorePeakCandidate({
-      source: 'solo_elgendi',
+  it('pico con señal débil obtiene puntuación baja', () => {
+    const s = scorePeakCandidate({
       elConf: 0.2,
-      ensConf: 0.28,
-      spectralAgreement: 0.35,
-      sqi: 40,
-      perfusionIndex: 0.004,
+      ensConf: 0.2,
+      sqi: 20,
+      perfusionIndex: 0.002,
     });
-    expect(solo).toBeLessThan(dual);
+    expect(s).toBeLessThan(PEAK_SCORE_THRESHOLDS.minScore);
   });
 
   it('rechaza RR muy alejado de la mediana previa', () => {

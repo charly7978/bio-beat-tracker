@@ -1,6 +1,6 @@
 /**
- * HEARTBEAT PROCESSOR — detección Elgendi con validación espectral.
- * BPM y hápticos solo desde picos emitidos (sin metrónomo ni autocorrelación como display).
+ * HEARTBEAT PROCESSOR — detección Elgendi optimizada.
+ * BPM y hápticos solo desde picos emitidos.
  */
 import { clamp } from '../utils/math';
 import { robustBounds } from '../utils/stats';
@@ -219,7 +219,6 @@ export class HeartBeatProcessor {
         samplingRateHz: sampleRate,
         sqi: ensSqi,
         perfusionIndex: this.ppgPerfusionIndex,
-        allowSoloElgendiFusion: this.cameraHints.allowSoloElgendiFusion,
       });
       ensembleConf = ens.confidence;
 
@@ -231,11 +230,8 @@ export class HeartBeatProcessor {
         ens,
         lastEmittedPeakMs: this.lastEmittedPeakTime,
         minPeakConf,
-        consensusMin: this.cameraHints.peakConsensusMin,
-        allowSoloElgendi: this.cameraHints.allowSoloElgendiFusion,
         sampleRateHz: sampleRate,
         windowSamples: win,
-        placementMode: this.placementMode,
         fingerContactConfirmed: this.fingerContactConfirmed,
         nowMs: now,
         emittedPeakCount: this.emittedPeakCount,
@@ -271,12 +267,9 @@ export class HeartBeatProcessor {
         this.consecutivePeaks += 1;
 
         if (instantBpm > 0) {
-          const soloEmit =
-            decision.reason.includes('SOLO');
-          const maxJump = soloEmit ? 0.28 : 0.4;
           const acceptOutlier =
             this.smoothBPM <= 0 ||
-            Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= maxJump;
+            Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= 0.4;
           if (acceptOutlier) {
             if (this.smoothBPM === 0) {
               this.smoothBPM = instantBpm;
@@ -289,10 +282,7 @@ export class HeartBeatProcessor {
           }
         }
 
-        if (
-          decision.reason.includes('DUAL') ||
-          (wScore >= 0.5 && this.rrIntervals.length >= 2)
-        ) {
+        if (wScore >= 0.5 && this.rrIntervals.length >= 2) {
           this.vibrate();
           this.playBeep();
         }

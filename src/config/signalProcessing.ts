@@ -19,13 +19,9 @@ export const PEAK_DETECTION_DEFAULTS = {
   offsetWeight: 0.22,
   /** Factor mínimo del RR fisiológico entre emisiones de pico (anti-doble latido) */
   peakEmitRefractoryFactor: 0.80,
-  /** Tolerancia de fusión por defecto si no hay BPM espectral (~⅓ RR a 72 bpm) */
-  fusionToleranceMs: 300,
   minSQI: 10,
   /** Ventana para emitir pico respecto al frame actual (ms) — ~½ RR @ 45 BPM */
   peakEmitWindowMs: 720,
-  /** Acuerdo espectral mínimo antes de penalizar BPM instantáneo */
-  spectralAgreementMin: 0.26,
   /** Mínimo de muestras en ventana para correr ensemble */
   minSamplesEnsemble: 72,
   /** Ventana de integración para detección (~180 ms de pulso sistólico típico a 30 Hz) */
@@ -54,12 +50,6 @@ export const PEAK_DETECTION_DEFAULTS = {
     PROMINENCE_SCALE_MAX: 1.45,
     OFFSET_WEIGHT_MIN: 0.14,
     OFFSET_WEIGHT_MAX: 0.32,
-    FUSION_TOLERANCE_RR_FRAC: 0.34,
-    FUSION_TOLERANCE_MS_MIN: 180,
-    FUSION_TOLERANCE_MS_MAX: 420,
-    SOLO_ELGENDI_BASE: 0.15,
-    SOLO_ELGENDI_MIN: 0.1,
-    SOLO_ELGENDI_MAX: 0.22,
     TARGET_PI: 0.0045,
     SQI_REFERENCE: 48,
   },

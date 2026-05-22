@@ -42,8 +42,6 @@ function runSession(stride: 3 | 4): { bpms: number[]; confidences: number[]; sig
   hb.setRuntimeHints({
     ...inferCameraRuntimeHints(),
     gateRangeScale: 0.55,
-    peakConsensusMin: 0.12,
-    allowSoloElgendiFusion: true,
   });
   hb.setFingerContactConfirmed(true);
   const bpms: number[] = [];

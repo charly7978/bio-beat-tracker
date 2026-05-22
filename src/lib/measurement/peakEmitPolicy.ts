@@ -4,13 +4,11 @@
 import type { PeakDetectionResult } from '@/types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '@/config/signalProcessing';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import type { FingerPlacementMode } from '@/types/signal';
 import {
   PEAK_SCORE_THRESHOLDS,
   rrMedianMs,
   scorePeakCandidate,
 } from './peakScoring';
-import type { DetectorCalibration } from './detectorCalibration';
 
 export interface PeakEmitDecision {
   emit: boolean;
@@ -23,11 +21,8 @@ export interface PeakEmitPolicyInput {
   ens: PeakDetectionResult;
   lastEmittedPeakMs: number;
   minPeakConf: number;
-  consensusMin: number;
-  allowSoloElgendi: boolean;
   sampleRateHz: number;
   windowSamples: number;
-  placementMode?: FingerPlacementMode;
   fingerContactConfirmed?: boolean;
   nowMs?: number;
   emittedPeakCount?: number;
@@ -45,11 +40,8 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     ens,
     lastEmittedPeakMs,
     minPeakConf,
-    consensusMin: _consensusMin,
-    allowSoloElgendi,
     sampleRateHz,
     windowSamples,
-    placementMode = 'hybrid',
     fingerContactConfirmed = true,
     nowMs,
     emittedPeakCount = 0,
@@ -68,21 +60,11 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS *
     PEAK_DETECTION_DEFAULTS.peakEmitRefractoryFactor;
 
-  const diag = ens.diagnostics as {
-    elgendiConfidence?: number;
-    detectorCalibration?: DetectorCalibration;
-  };
-  const cal = diag.detectorCalibration;
-  const elConf = diag.elgendiConfidence ?? 0;
-  const soloElMin =
-    cal?.soloElgendiMinConf ??
-    (placementMode === 'hybrid' ? 0.15 : 0.17);
-  const spectralAgreement = ens.agreement.spectral ?? 0;
+  const elConf = (ens.diagnostics as { elgendiConfidence?: number }).elgendiConfidence ?? 0;
   const prevRrMed = rrMedianMs(recentRrMs);
 
   let bestT = 0;
   let bestReason = '';
-  let bestRank = 0;
   let bestScore = 0;
 
   const liveEdgeMs = stallReacquire
@@ -93,12 +75,6 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     emittedPeakCount < 4
       ? PEAK_SCORE_THRESHOLDS.rrMedianMaxRelDev * 1.25
       : PEAK_SCORE_THRESHOLDS.rrMedianMaxRelDev;
-
-  const rankSource = (src: string | undefined): number => {
-    if (src === 'dual') return 2;
-    if (src === 'solo_elgendi') return 1;
-    return 0;
-  };
 
   for (let i = 0; i < ens.peakTimes.length; i++) {
     const t = ens.peakTimes[i] ?? 0;
@@ -112,8 +88,6 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
       if (samplesFromLive > liveEdgeSamples) continue;
     }
 
-    const src = ens.peakSources?.[i];
-
     const rrMs = lastEmittedPeakMs > 0 ? t - lastEmittedPeakMs : undefined;
     if (
       rrMs != null &&
@@ -123,47 +97,31 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
       continue;
     }
 
-    const dual =
-      src === 'dual' &&
-      ens.confidence >= minPeakConf * 0.65;
-    const soloEl =
-      fingerContactConfirmed &&
-      allowSoloElgendi &&
-      src === 'solo_elgendi' &&
-      elConf >= soloElMin &&
-      spectralAgreement >= (stallReacquire ? 0.08 : 0.12);
+    if (!fingerContactConfirmed) continue;
 
-    if (!dual && !soloEl) continue;
+    if (ens.confidence < minPeakConf) continue;
 
     const weightedScore =
       ens.peakScores?.[i] ??
       scorePeakCandidate({
-        source: src ?? 'solo_elgendi',
         elConf,
         ensConf: ens.confidence,
-        spectralAgreement,
         sqi,
         perfusionIndex,
         rrMs,
         prevRrMedianMs: prevRrMed > 0 ? prevRrMed : undefined,
       });
 
-    const minScore = dual
-      ? PEAK_SCORE_THRESHOLDS.dualMin * (stallReacquire ? 0.9 : 0.96)
-      : PEAK_SCORE_THRESHOLDS.soloMin * (stallReacquire ? 0.9 : 0.96);
+    const minScore = PEAK_SCORE_THRESHOLDS.minScore * (stallReacquire ? 0.9 : 0.96);
     if (weightedScore < minScore) continue;
-
-    const reason = dual ? 'DUAL_FUSED' : 'SOLO_ELGENDI';
-    const rank = rankSource(src);
 
     if (
       bestT === 0 ||
       t > bestT ||
-      (t === bestT && (rank > bestRank || weightedScore > bestScore))
+      (t === bestT && weightedScore > bestScore)
     ) {
       bestT = t;
-      bestReason = reason;
-      bestRank = rank;
+      bestReason = 'PEAK_DETECTED';
       bestScore = weightedScore;
     }
   }
@@ -172,9 +130,8 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     return { emit: true, peakTimeMs: bestT, reason: bestReason, weightedScore: bestScore };
   }
 
-  // Respaldo: mejor candidato en borde vivo por índice (timestamps a veces van rezagados)
+  // Respaldo: mejor candidato en borde vivo por índice
   let fbT = 0;
-  let fbReason = '';
   let fbScore = 0;
   for (let i = 0; i < ens.peakTimes.length; i++) {
     const t = ens.peakTimes[i] ?? 0;
@@ -185,36 +142,25 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
         ? idx >= 0 && windowSamples - 1 - idx <= liveEdgeSamples
         : t >= (nowMs ?? t) - liveEdgeMs;
     if (!nearLive) continue;
-    const src = ens.peakSources?.[i];
     const score =
       ens.peakScores?.[i] ??
       scorePeakCandidate({
-        source: src ?? 'solo_elgendi',
         elConf,
         ensConf: ens.confidence,
-        spectralAgreement,
         sqi,
         perfusionIndex,
       });
-    const fbMin =
-      src === 'dual'
-        ? PEAK_SCORE_THRESHOLDS.dualMin * 0.92
-        : PEAK_SCORE_THRESHOLDS.soloMin * 0.94;
-    if (score < fbMin || !fingerContactConfirmed) continue;
-    if (!stallReacquire && src !== 'dual' && score < PEAK_SCORE_THRESHOLDS.soloMin) {
-      continue;
-    }
+    if (score < PEAK_SCORE_THRESHOLDS.minScore * 0.94 || !fingerContactConfirmed) continue;
     if (t > fbT || (t === fbT && score > fbScore)) {
       fbT = t;
       fbScore = score;
-      fbReason = src === 'dual' ? 'DUAL_FUSED' : 'SOLO_ELGENDI';
     }
   }
   if (fbT > 0) {
     return {
       emit: true,
       peakTimeMs: fbT,
-      reason: `${fbReason}_FB`,
+      reason: 'PEAK_DETECTED_FB',
       weightedScore: fbScore,
     };
   }

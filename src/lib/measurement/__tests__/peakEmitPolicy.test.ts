@@ -4,35 +4,30 @@ import type { PeakDetectionResult } from '@/types/measurements';
 
 function buildTestPeakResult(
   peakTimes: number[],
-  sources: Array<'dual' | 'solo_elgendi'>,
   peakScores?: number[],
 ): PeakDetectionResult {
   return {
     peaks: peakTimes.map((_, i) => 80 + i),
     peakTimes,
-    peakSources: sources,
     peakScores:
-      peakScores ??
-      sources.map((s) => (s === 'dual' ? 0.5 : 0.48)),
+      peakScores ?? peakTimes.map(() => 0.5),
     rrIntervalsMs: [],
     bpmInstant: 72,
     bpmStable: 72,
     confidence: 0.35,
-    agreement: { elgendi: 0.4, spectral: 0.55, autocorrelation: 0.25 },
+    agreement: { elgendi: 0.4 },
     rejectedPeaks: [],
     diagnostics: { elgendiConfidence: 0.35 },
   };
 }
 
 describe('peakEmitPolicy', () => {
-  it('emite pico dual en borde vivo', () => {
-    const ens = buildTestPeakResult([5000], ['dual'], [0.65]);
+  it('emite pico en borde vivo con dedo confirmado', () => {
+    const ens = buildTestPeakResult([5000], [0.65]);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,
       minPeakConf: 0.1,
-      consensusMin: 0.12,
-      allowSoloElgendi: true,
       sampleRateHz: 30,
       windowSamples: 90,
       fingerContactConfirmed: true,
@@ -45,92 +40,25 @@ describe('peakEmitPolicy', () => {
     expect(d.peakTimeMs).toBe(5000);
   });
 
-  it('no emite solo_elgendi sin dedo confirmado', () => {
-    const ens = buildTestPeakResult([5000], ['solo_elgendi']);
+  it('no emite sin dedo confirmado', () => {
+    const ens = buildTestPeakResult([5000]);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,
       minPeakConf: 0.17,
-      consensusMin: 0.15,
-      allowSoloElgendi: true,
       sampleRateHz: 30,
       windowSamples: 90,
-      placementMode: 'hybrid',
       fingerContactConfirmed: false,
     });
     expect(d.emit).toBe(false);
   });
 
-  it('emite solo_elgendi en hybrid solo con dedo confirmado y conf alta', () => {
-    const ens = buildTestPeakResult([5000], ['solo_elgendi'], [0.62]);
-    const d = decidePeakEmit({
-      ens,
-      lastEmittedPeakMs: 0,
-      minPeakConf: 0.1,
-      consensusMin: 0.12,
-      allowSoloElgendi: true,
-      sampleRateHz: 30,
-      windowSamples: 90,
-      placementMode: 'hybrid',
-      fingerContactConfirmed: true,
-      nowMs: 5200,
-      emittedPeakCount: 2,
-      sqi: 50,
-      perfusionIndex: 0.005,
-    });
-    expect(d.emit).toBe(true);
-  });
-
-  it('permite solo_elgendi como primer latido con score suficiente', () => {
-    const ens = buildTestPeakResult([5000], ['solo_elgendi'], [0.52]);
-    const d = decidePeakEmit({
-      ens,
-      lastEmittedPeakMs: 0,
-      minPeakConf: 0.1,
-      consensusMin: 0.12,
-      allowSoloElgendi: true,
-      sampleRateHz: 30,
-      windowSamples: 90,
-      fingerContactConfirmed: true,
-      nowMs: 5200,
-      emittedPeakCount: 0,
-      sqi: 50,
-      perfusionIndex: 0.005,
-    });
-    expect(d.emit).toBe(true);
-    expect(d.reason).toContain('SOLO_ELGENDI');
-  });
-
-  it('modo reacquire permite solo_elgendi tras stall sin dual', () => {
-    const ens = buildTestPeakResult([5000], ['solo_elgendi'], [0.64]);
-    const d = decidePeakEmit({
-      ens,
-      lastEmittedPeakMs: 2000,
-      minPeakConf: 0.1,
-      consensusMin: 0.12,
-      allowSoloElgendi: true,
-      sampleRateHz: 30,
-      windowSamples: 90,
-      fingerContactConfirmed: true,
-      nowMs: 5200,
-      emittedPeakCount: 0,
-      peakStallMs: 3200,
-      reacquireMode: true,
-      sqi: 50,
-      perfusionIndex: 0.005,
-    });
-    expect(d.emit).toBe(true);
-    expect(d.reason).toBe('SOLO_ELGENDI');
-  });
-
   it('prefiere el pico más reciente en la ventana viva', () => {
-    const ens = buildTestPeakResult([4900, 5050], ['dual', 'dual'], [0.65, 0.66]);
+    const ens = buildTestPeakResult([4900, 5050], [0.65, 0.66]);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,
       minPeakConf: 0.1,
-      consensusMin: 0.12,
-      allowSoloElgendi: true,
       sampleRateHz: 30,
       windowSamples: 90,
       fingerContactConfirmed: true,
@@ -141,31 +69,12 @@ describe('peakEmitPolicy', () => {
     expect(d.peakTimeMs).toBe(5050);
   });
 
-  it('sin dedo confirmado solo acepta dual estricto', () => {
-    const ens = buildTestPeakResult([5000], ['solo_elgendi']);
-    expect(
-      decidePeakEmit({
-        ens,
-        lastEmittedPeakMs: 0,
-        minPeakConf: 0.17,
-        consensusMin: 0.15,
-        allowSoloElgendi: true,
-        sampleRateHz: 30,
-        windowSamples: 90,
-        placementMode: 'tip',
-        fingerContactConfirmed: false,
-      }).emit,
-    ).toBe(false);
-  });
-
   it('no emite dos picos dentro del refractario fisiológico', () => {
-    const ens = buildTestPeakResult([5000, 5120], ['dual', 'dual'], [0.65, 0.66]);
+    const ens = buildTestPeakResult([5000, 5120], [0.65, 0.66]);
     const first = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 0,
       minPeakConf: 0.1,
-      consensusMin: 0.12,
-      allowSoloElgendi: true,
       sampleRateHz: 30,
       windowSamples: 90,
       fingerContactConfirmed: true,
@@ -177,8 +86,6 @@ describe('peakEmitPolicy', () => {
       ens,
       lastEmittedPeakMs: first.peakTimeMs,
       minPeakConf: 0.14,
-      consensusMin: 0.15,
-      allowSoloElgendi: true,
       sampleRateHz: 30,
       windowSamples: 90,
       fingerContactConfirmed: true,
@@ -187,13 +94,11 @@ describe('peakEmitPolicy', () => {
   });
 
   it('no re-emite el mismo pico', () => {
-    const ens = buildTestPeakResult([5000], ['dual']);
+    const ens = buildTestPeakResult([5000]);
     const d = decidePeakEmit({
       ens,
       lastEmittedPeakMs: 5000,
       minPeakConf: 0.14,
-      consensusMin: 0.15,
-      allowSoloElgendi: true,
       sampleRateHz: 30,
       windowSamples: 90,
     });

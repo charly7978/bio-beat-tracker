@@ -1,31 +1,25 @@
 /**
- * Ponderación de candidatos a pico PPG (Elgendi + espectral + SQI/PI).
+ * Ponderación de candidatos a pico PPG (Elgendi + SQI/PI).
  */
 import { clamp } from '@/utils/math';
 import { median } from '@/utils/stats';
 
-/** Suma ≈ 1.0 — dual y acuerdo espectral pesan más (menos falsos positivos). */
 export const PEAK_SCORE_WEIGHTS = {
-  fusionDual: 0.38,
-  elgendi: 0.22,
-  ensemble: 0.14,
-  spectral: 0.14,
-  sqi: 0.06,
-  rrStability: 0.06,
+  elgendi: 0.40,
+  ensemble: 0.24,
+  sqi: 0.18,
+  rrStability: 0.18,
 } as const;
 
 export const PEAK_SCORE_THRESHOLDS = {
-  dualMin: 0.36,
-  soloMin: 0.45,
+  minScore: 0.42,
   /** Desviación máxima vs mediana RR previa para aceptar pico */
   rrMedianMaxRelDev: 0.26,
 } as const;
 
 export interface PeakScoreInput {
-  source: 'dual' | 'solo_elgendi';
   elConf: number;
   ensConf: number;
-  spectralAgreement: number;
   sqi: number;
   perfusionIndex: number;
   rrMs?: number;
@@ -34,29 +28,23 @@ export interface PeakScoreInput {
 
 export function scorePeakCandidate(input: PeakScoreInput): number {
   const w = PEAK_SCORE_WEIGHTS;
-  const fusionFactor = input.source === 'dual' ? 1 : 0.48;
 
   let score =
-    w.fusionDual * fusionFactor +
     w.elgendi * clamp(input.elConf, 0, 1) +
     w.ensemble * clamp(input.ensConf, 0, 1) +
-    w.spectral * clamp(input.spectralAgreement, 0, 1) +
     w.sqi * clamp(input.sqi / 100, 0, 1);
 
   if (input.rrMs != null && input.prevRrMedianMs != null && input.prevRrMedianMs > 0) {
     const rel = Math.abs(input.rrMs - input.prevRrMedianMs) / input.prevRrMedianMs;
     score += w.rrStability * clamp(1 - rel / PEAK_SCORE_THRESHOLDS.rrMedianMaxRelDev, 0, 1);
   } else {
-    score += w.rrStability * (input.source === 'dual' ? 0.55 : 0.25);
+    score += w.rrStability * 0.4;
   }
 
   let piGate =
     input.perfusionIndex > 0
       ? clamp(input.perfusionIndex / 0.007, 0.38, 1)
       : 0.92;
-  if (input.source === 'dual' && input.perfusionIndex > 0 && input.perfusionIndex < 0.005) {
-    piGate = clamp(piGate + 0.12, 0.5, 1);
-  }
   const sqiGate =
     input.sqi > 0
       ? clamp(0.55 + (input.sqi / 100) * 0.45, 0.55, 1)

@@ -76,8 +76,6 @@ describe('PeakDetectionEnsemble', () => {
       expect(r.bpmInstant).toBeLessThan(110);
     }
     expect(r.confidence).toBeGreaterThanOrEqual(0);
-    const cal = (r.diagnostics as { detectorCalibration?: { fusionToleranceMs: number } })
-      .detectorCalibration;
-    expect(cal?.fusionToleranceMs).toBeGreaterThan(150);
+    expect(r.agreement.elgendi).toBeGreaterThanOrEqual(0);
   });
 });

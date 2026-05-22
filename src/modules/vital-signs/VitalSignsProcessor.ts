@@ -443,7 +443,7 @@ export class VitalSignsProcessor {
         confidence: hrOk ? Math.min(0.98, 0.45 + sqi / 200) : (sqi >= hrMinSqi ? 0.35 : 0.12),
         status: !hrOk && sqi < 12 ? "LOW_SIGNAL_QUALITY" : (!hrOk ? "NO_VALID_SIGNAL" : "VALID"),
         reason: hrOk
-          ? "BPM desde ensemble Elgendi + Pan–Tompkins PPG + autocorrelación"
+          ? "BPM desde detector Elgendi optimizado"
           : (sqi < 12 ? "SQI insuficiente para validar picos" : "Sin consenso fiable de detectores / frecuencia"),
         signalQuality: { ...commonSQM },
         diagnostics: { bpmRaw: this.lastBPM }

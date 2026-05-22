@@ -48,10 +48,10 @@ interface PPGSignalMeterProps {
       timestampJitterMs?: number;
       underexposureRatio?: number;
     };
-    /** Telemetría del ensemble Elgendi + Pan–Tompkins (desde HeartBeatProcessor) */
+    /** Telemetría del detector Elgendi (desde HeartBeatProcessor) */
     peakDetection?: {
       confidence?: number;
-      agreement?: { elgendi?: number; spectral?: number };
+      agreement?: { elgendi?: number };
       fusedPeakTimes?: number[];
       elgendiPeakTimes?: number[];
       fusedPeakCount?: number;
@@ -1040,79 +1040,36 @@ const PPGSignalMeter = ({
       }
     }
 
-    // Marcadores de detectores (Elgendi / Pan–Tompkins / fusión ensemble)
+    // Marcadores de picos detectados por Elgendi
     const pdOverlay = propsRef.current.diagnostics?.peakDetection;
-    const detectorPeaks: { x: number; y: number; kind: 'elgendi' | 'pan' | 'fused' }[] = [];
-    const mapPeakTime = (peakTime: number, kind: 'elgendi' | 'pan' | 'fused') => {
-      const age = now - peakTime - VISUAL_DELAY_MS;
-      if (age > WINDOW_MS || age < 0) return;
-      const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
-      if (x < plot.x || x > plot.x + plot.w) return;
-      let nearestPt: PPGDataPoint | null = null;
-      let minDist = Infinity;
-      for (const pt of points) {
-        const d = Math.abs(pt.time - peakTime);
-        if (d < minDist) {
-          minDist = d;
-          nearestPt = pt;
+    const detectorPeaks: { x: number; y: number }[] = [];
+    if (pdOverlay?.elgendiPeakTimes) {
+      for (const peakTime of pdOverlay.elgendiPeakTimes) {
+        const age = now - peakTime - VISUAL_DELAY_MS;
+        if (age > WINDOW_MS || age < 0) continue;
+        const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
+        if (x < plot.x || x > plot.x + plot.w) continue;
+        let nearestPt: PPGDataPoint | null = null;
+        let minDist = Infinity;
+        for (const pt of points) {
+          const d = Math.abs(pt.time - peakTime);
+          if (d < minDist) { minDist = d; nearestPt = pt; }
+        }
+        if (nearestPt && minDist < 280) {
+          const y = plot.y + wavePadTop + ((stats.max - nearestPt.value) / safeRange) * waveH;
+          detectorPeaks.push({ x, y });
         }
       }
-      if (nearestPt && minDist < 280) {
-        const y = plot.y + wavePadTop + ((stats.max - nearestPt.value) / safeRange) * waveH;
-        detectorPeaks.push({ x, y, kind });
-      }
-    };
-    if (pdOverlay?.elgendiPeakTimes) {
-      for (const t of pdOverlay.elgendiPeakTimes) mapPeakTime(t, 'elgendi');
-    }
-    if (pdOverlay?.elgendiPeakTimes) {
-      for (const t of pdOverlay.elgendiPeakTimes) mapPeakTime(t, 'elgendi');
-    }
-    if (pdOverlay?.fusedPeakTimes) {
-      for (const t of pdOverlay.fusedPeakTimes) mapPeakTime(t, 'fused');
     }
 
     for (const dp of detectorPeaks) {
-      ctx.save();
-      if (dp.kind === 'elgendi') {
-        ctx.fillStyle = '#22d3ee';
-        ctx.strokeStyle = 'rgba(34, 211, 238, 0.55)';
-        ctx.beginPath();
-        ctx.moveTo(dp.x, dp.y - 5);
-        ctx.lineTo(dp.x - 4, dp.y + 3);
-        ctx.lineTo(dp.x + 4, dp.y + 3);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-      } else if (dp.kind === 'pan') {
-        ctx.fillStyle = '#a78bfa';
-        ctx.strokeStyle = 'rgba(167, 139, 250, 0.55)';
-        ctx.fillRect(dp.x - 3.5, dp.y - 3.5, 7, 7);
-        ctx.strokeRect(dp.x - 3.5, dp.y - 3.5, 7, 7);
-      } else {
-        ctx.beginPath();
-        ctx.arc(dp.x, dp.y, 3.5, 0, Math.PI * 2);
-        ctx.fillStyle = COLORS.PEAK_NORMAL;
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(59, 130, 246, 0.7)';
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
-    // Leyenda compacta (solo si hay marcadores de detectores)
-    if (detectorPeaks.length > 0 && propsRef.current.isMonitoring) {
-      const lx = plot.x + 6;
-      const ly = plot.y + plot.h - 38;
-      ctx.font = `8px ${FONT_MONO}`;
-      ctx.textAlign = 'left';
+      ctx.beginPath();
+      ctx.arc(dp.x, dp.y, 3, 0, Math.PI * 2);
       ctx.fillStyle = '#22d3ee';
-      ctx.fillText('▲ Elgendi', lx, ly);
-      ctx.fillStyle = '#a78bfa';
-      ctx.fillText('■ Pan–Tompkins', lx + 58, ly);
-      ctx.fillStyle = COLORS.PEAK_NORMAL;
-      ctx.fillText('● Fusión', lx + 138, ly);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(34, 211, 238, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
     }
 
     for (const p of visiblePeaks) {

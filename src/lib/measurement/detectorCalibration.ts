@@ -1,26 +1,21 @@
 /**
  * Calibración adaptativa Elgendi por ventana de señal.
- * Escala umbrales desde dinámica PPG, SQI, PI y BPM espectral — sin valores fijos en mmHg.
+ * Escala umbrales desde dinámica PPG, SQI y PI — sin valores fijos en mmHg.
  */
 import { PEAK_DETECTION_DEFAULTS } from '@/config/signalProcessing';
-import { bpmFromAutocorr } from '@/modules/signal-processing/shared/dsp';
 import { clamp } from '@/utils/math';
 import { robustDynamicRange } from '@/utils/stats';
 
 export interface DetectorCalibration {
   elgendiMinProminence: number;
   elgendiOffsetWeight: number;
-  fusionToleranceMs: number;
-  soloElgendiMinConf: number;
-  estimatedBpm: number | null;
-  spectralScore: number;
   signalDynamicRange: number;
 }
 
 /** Calibra detector Elgendi para la ventana actual. */
 export function computeDetectorCalibration(
   signal: number[],
-  samplingRateHz: number,
+  _samplingRateHz: number,
   sqi?: number,
   perfusionIndex?: number,
 ): DetectorCalibration {
@@ -51,32 +46,9 @@ export function computeDetectorCalibration(
     cal.OFFSET_WEIGHT_MAX,
   );
 
-  const spec = bpmFromAutocorr(signal, samplingRateHz);
-  const estimatedBpm = spec.bpm > 0 ? spec.bpm : null;
-  const rrMs =
-    estimatedBpm != null && estimatedBpm >= cfg.minBpm && estimatedBpm <= cfg.maxBpm
-      ? 60000 / estimatedBpm
-      : 60000 / 72;
-
-  const fusionToleranceMs = clamp(
-    rrMs * cal.FUSION_TOLERANCE_RR_FRAC,
-    cal.FUSION_TOLERANCE_MS_MIN,
-    cal.FUSION_TOLERANCE_MS_MAX,
-  );
-
-  const soloElgendiMinConf = clamp(
-    cal.SOLO_ELGENDI_BASE + (1 - qualityBlend) * 0.03 - (spec.score > 0.35 ? 0.02 : 0),
-    cal.SOLO_ELGENDI_MIN,
-    cal.SOLO_ELGENDI_MAX,
-  );
-
   return {
     elgendiMinProminence,
     elgendiOffsetWeight,
-    fusionToleranceMs,
-    soloElgendiMinConf,
-    estimatedBpm,
-    spectralScore: spec.score,
     signalDynamicRange: dyn,
   };
 }

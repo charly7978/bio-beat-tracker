@@ -55,8 +55,6 @@ describe('Backpressure dynamic transition guardrail', () => {
     hb.setRuntimeHints({
       ...inferCameraRuntimeHints(),
       gateRangeScale: 0.55,
-      peakConsensusMin: 0.12,
-      allowSoloElgendiFusion: true,
     });
     hb.setFingerContactConfirmed(true);
 

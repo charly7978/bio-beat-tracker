@@ -12,13 +12,11 @@ describe('cameraDeviceProfile', () => {
     expect(h.tclLike).toBe(true);
     expect(h.constrained).toBe(false);
     expect(h.fingerConfirmFrames).toBe(6);
-    expect(h.allowSoloElgendiFusion).toBe(true);
   });
 
   it('Samsung/Motorola usan perfil tolerante por defecto', () => {
     const moto = inferCameraRuntimeHints({ userAgent: 'Motorola moto g84' });
     expect(moto.constrained).toBe(true);
-    expect(moto.allowSoloElgendiFusion).toBe(true);
     expect(moto.instantLostToUnstable).toBeGreaterThan(10);
 
     const sam = inferCameraRuntimeHints({ userAgent: 'Samsung SM-A546' });

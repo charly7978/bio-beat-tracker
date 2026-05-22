@@ -81,12 +81,10 @@ export interface DeviceCapabilityReport {
   focusMode?: string;
 }
 
-/** Resultado fusionado del ensemble de picos PPG (auditable). */
+/** Resultado del detector Elgendi de picos PPG (auditable). */
 export interface PeakDetectionResult {
   peaks: number[];
   peakTimes: number[];
-  /** Origen de cada pico fusionado (alineado con peakTimes). */
-  peakSources?: Array<'dual' | 'solo_elgendi'>;
   /** Puntuación ponderada 0–1 por pico (alineada con peakTimes). */
   peakScores?: number[];
   rrIntervalsMs: number[];
@@ -95,8 +93,6 @@ export interface PeakDetectionResult {
   confidence: number;
   agreement: {
     elgendi: number;
-    spectral: number;
-    autocorrelation: number;
   };
   rejectedPeaks: Array<{
     index: number;
