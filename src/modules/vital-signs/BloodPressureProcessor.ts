@@ -67,6 +67,7 @@ export class BloodPressureProcessor {
     signalBuffer: number[],
     rrIntervals: number[],
     sampleRate: number = 30,
+    externalHr?: number,
   ): BPEstimate {
     const insufficient: BPEstimate = {
       systolic: 0, diastolic: 0, map: 0, pulsePressure: 0,
@@ -106,7 +107,10 @@ export class BloodPressureProcessor {
     if (validRR.length < 2) return this.staleOrInsufficient(insufficient);
 
     const avgRR = validRR.reduce((a, b) => a + b, 0) / validRR.length;
-    const hr = 60000 / avgRR;
+    // Usar HR del ensemble (Elgendi+Pan) si está disponible — más robusto que mean(RR)
+    const hr = typeof externalHr === 'number' && externalHr > 0
+      ? externalHr
+      : 60000 / avgRR;
     const rrVar = PPGFeatureExtractor.extractRRVariability(validRR);
     const cyclePeriodMs = Math.max(280, mf.sutMs + mf.diastolicPhaseMs);
 

@@ -587,6 +587,7 @@ export class VitalSignsProcessor {
         this.morphologyHistory.tail(this.HISTORY_SIZE),
         validRR,
         30,
+        this.lastBPM > 0 ? this.lastBPM : undefined,
       );
 
       this.lastBPConfidence = bpEstimate.confidence;
