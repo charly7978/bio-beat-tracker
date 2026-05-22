@@ -126,20 +126,65 @@ export const VITAL_THRESHOLDS = {
     DIAG_VALID_FRAMES_REQ: 4,
   },
 
-  /** Detección de irregularidad del ritmo (conservador — menos falsos positivos) */
+  /**
+   * Arrhythmia / AF detection via weighted scoring over a multi-feature set.
+   *
+   * Sub-scores: clamp01((value - LO) / (HI - LO)) → [0,1].
+   * Overall: weighted average of sub-scores.
+   * Confidence: score ≥ MILD → "mild", ≥ MODERATE → "moderate", ≥ SEVERE → "severe".
+   * Binary detection (callback): score ≥ DETECTION_THRESHOLD.
+   */
   ARRHYTHMIA: {
     RR_WINDOW_SIZE: 10,
-    RMSSD_THRESHOLD_MS: 68,
     MIN_INTERVALS: 9,
     MIN_SQI: 38,
     LEARNING_PERIOD_MS: 12_000,
     MIN_EVENT_INTERVAL_MS: 6000,
-    PNNX_THRESHOLD: 0.42,
-    SHANNON_ENTROPY_THRESHOLD: 2.15,
-    SAMPLE_ENTROPY_THRESHOLD: 1.65,
     OUTLIER_RATIO: 0.16,
     ABRUPT_RR_FRAC: 0.16,
     IRREGULAR_DIFF_MS: 165,
+
+    // ── Sub-score thresholds (LO = normal ceiling, HI = strong AF floor)
+    RMSSD_LO: 28,
+    RMSSD_HI: 80,
+    CV_LO: 0.07,
+    CV_HI: 0.18,
+    PNN31_LO: 0.18,
+    PNN31_HI: 0.50,
+    PNN325_LO: 0.14,
+    PNN325_HI: 0.40,
+    PNN50_LO: 0.08,
+    PNN50_HI: 0.30,
+    TPR_TARGET: 0.67,
+    SHANNON_LO: 1.80,
+    SHANNON_HI: 3.50,
+    SAMPEN_LO: 0.50,
+    SAMPEN_HI: 1.50,
+    OUTLIER_LO: 1,
+    OUTLIER_HI: 5,
+    ABRUPT_LO: 1,
+    ABRUPT_HI: 5,
+    RRVAR_LO: 0.07,
+    RRVAR_HI: 0.25,
+
+    // ── Feature weights (must sum ≅ 1.0)
+    W_RMSSD: 0.15,
+    W_CV: 0.10,
+    W_PNN31: 0.20,
+    W_PNN325: 0.20,
+    W_PNN50: 0.05,
+    W_TPR: 0.05,
+    W_SHANNON: 0.05,
+    W_SAMPEN: 0.10,
+    W_OUTLIER: 0.05,
+    W_ABRUPT: 0.03,
+    W_RRVAR: 0.02,
+
+    // ── Score cutoffs
+    MILD_THRESHOLD: 0.30,
+    MODERATE_THRESHOLD: 0.45,
+    SEVERE_THRESHOLD: 0.65,
+    DETECTION_THRESHOLD: 0.45,
   },
 
   // FINGER + ROI (cámara trasera + dedo; hemoglobina + pulsación temporal)
