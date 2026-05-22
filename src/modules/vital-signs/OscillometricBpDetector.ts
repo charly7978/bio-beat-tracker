@@ -1,5 +1,6 @@
 import { clamp } from '@/utils/math';
 import { median } from '@/utils/stats';
+import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 
 export interface OscillometricSample {
   dcBaseline: number;
@@ -25,15 +26,7 @@ export interface OscillometricBpResult {
   oscillogramQuality: number;
 }
 
-const SYSTOLIC_MIN = 70;
-const SYSTOLIC_MAX = 220;
-const DIASTOLIC_MIN = 40;
-const DIASTOLIC_MAX = 130;
-const MAP_MIN = 50;
-const MAP_MAX = 150;
-const PP_MIN = 20;
-const PP_MAX = 100;
-
+const BP = VITAL_THRESHOLDS.BP;
 const RAMP_MIN_SAMPLES = 60;
 const RAMP_MAX_SAMPLES = 600;
 
@@ -116,7 +109,7 @@ export function analyzeOscillogram(samples: OscillometricSample[]): Oscillometri
   const peakPos = peakRegion.peakIndex / Math.max(1, amps.length - 1);
 
   // MAP from peak position within physiological range
-  const map = MAP_MIN + peakPos * (MAP_MAX - MAP_MIN);
+  const map = BP.MAP_MIN + peakPos * (BP.MAP_MAX - BP.MAP_MIN);
 
   // Pulse Pressure from oscillogram width and skewness
   // Wider oscillogram + more negative skew = higher PP
@@ -125,11 +118,11 @@ export function analyzeOscillogram(samples: OscillometricSample[]): Oscillometri
   const slopeRatio = peakRegion.risingEdgeSlope > 0
     ? clamp(peakRegion.fallingEdgeSlope / peakRegion.risingEdgeSlope, 0.2, 5)
     : 1;
-  const ppRaw = PP_MIN + fwhmNorm * (PP_MAX - PP_MIN) * skewFactor * slopeRatio;
-  const pulsePressure = clamp(ppRaw, PP_MIN, PP_MAX);
+  const ppRaw = BP.MIN_PP + fwhmNorm * (BP.MAX_PP - BP.MIN_PP) * skewFactor * slopeRatio;
+  const pulsePressure = clamp(ppRaw, BP.MIN_PP, BP.MAX_PP);
 
-  const sbp = clamp(map + (2 / 3) * pulsePressure, SYSTOLIC_MIN, SYSTOLIC_MAX);
-  const dbp = clamp(map - (1 / 3) * pulsePressure, DIASTOLIC_MIN, DIASTOLIC_MAX);
+  const sbp = clamp(map + (2 / 3) * pulsePressure, BP.SYSTOLIC_MIN, BP.SYSTOLIC_MAX);
+  const dbp = clamp(map - (1 / 3) * pulsePressure, BP.DIASTOLIC_MIN, BP.DIASTOLIC_MAX);
 
   const ampRatio = samples.length > 0
     ? peakRegion.peakAmplitude / (median(samples.slice(0, Math.min(10, samples.length)).map(s => s.pulseAmplitude)) || 1)

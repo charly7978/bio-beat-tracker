@@ -195,7 +195,7 @@ export class HeartBeatProcessor {
       this.lastEmittedPeakTime > 0 ? now - this.lastEmittedPeakTime : 0;
     const autoGateRelax =
       this.fingerContactConfirmed && peakStallMs > 1600
-        ? clamp(0.45, 1 - (peakStallMs - 1600) / 7000, 1)
+        ? clamp(1 - (peakStallMs - 1600) / 7000, 0.45, 1)
         : 1;
     const manualRelax = now < this.gateRelaxUntilMs ? 0.5 : 1;
     const gateScale =

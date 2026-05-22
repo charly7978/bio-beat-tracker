@@ -1,4 +1,5 @@
 import { CalibrationInfo } from '../../types/measurements';
+import type { AnthropometricProfile } from '@/lib/vitals/pwaPhysiologicalBpEngine';
 
 export type CalibrationType = 'SPO2' | 'BP' | 'DEVICE' | 'PPG_BASELINE';
 
@@ -12,13 +13,6 @@ export interface CalibrationProfile {
   createdAt: number;
   expiresAt: number;
   method: string;
-}
-
-export interface AnthropometricProfile {
-  heightCm: number;
-  weightKg: number;
-  ageYears: number;
-  isMale: boolean;
 }
 
 export class CalibrationManager {

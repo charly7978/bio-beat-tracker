@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, Brain, Loader2 } from "lucide-react";
+import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, XCircle, Brain, Loader2 } from "lucide-react";
 import { playCompletionSound } from "@/utils/soundUtils";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
 import { useSignalProcessor } from "@/hooks/useSignalProcessor";
@@ -1385,7 +1385,10 @@ const Index = () => {
             const avgBpm = vitalSigns.heartRate.value > 0 ? Math.round(vitalSigns.heartRate.value) : '--';
             const statusColor = normalPercent >= 95 ? 'emerald' : normalPercent >= 80 ? 'yellow' : 'red';
             const statusText = normalPercent >= 95 ? 'RITMO NORMAL' : normalPercent >= 80 ? 'LEVE IRREGULARIDAD' : 'IRREGULARIDAD DETECTADA';
-            const statusIcon = normalPercent >= 95 ? CheckCircle2 : normalPercent >= 80 ? AlertTriangle : AlertTriangle;
+            const statusIcon = normalPercent >= 95 ? CheckCircle2 : normalPercent >= 80 ? AlertTriangle : XCircle;
+            const bgClass = statusColor === 'emerald' ? 'bg-emerald-500/10' : statusColor === 'yellow' ? 'bg-yellow-500/10' : 'bg-red-500/10';
+            const textClass = statusColor === 'emerald' ? 'text-emerald-400' : statusColor === 'yellow' ? 'text-yellow-400' : 'text-red-400';
+            const strokeClass = statusColor === 'emerald' ? 'stroke-emerald-400' : statusColor === 'yellow' ? 'stroke-yellow-400' : 'stroke-red-400';
             const StatusIcon = statusIcon;
             
             return (
@@ -1393,13 +1396,13 @@ const Index = () => {
                 <div className="bg-slate-950 border border-slate-700/50 rounded-2xl max-w-sm w-[92%] shadow-2xl overflow-hidden">
                   
                   {/* Header con estado */}
-                  <div className={`px-4 py-3 bg-${statusColor}-500/10 border-b border-slate-800`}>
+                  <div className={`px-4 py-3 ${bgClass} border-b border-slate-800`}>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <StatusIcon className={`w-5 h-5 text-${statusColor}-400`} />
+                        <StatusIcon className={`w-5 h-5 ${textClass}`} />
                         <div>
                           <h3 className="text-white text-sm font-bold tracking-wide">MEDICIÓN COMPLETADA</h3>
-                          <p className={`text-${statusColor}-400 text-[10px] font-semibold tracking-wider`}>{statusText}</p>
+                          <p className={`${textClass} text-[10px] font-semibold tracking-wider`}>{statusText}</p>
                         </div>
                       </div>
                       <button 
@@ -1495,13 +1498,13 @@ const Index = () => {
                                 fill="none" stroke="#1e293b" strokeWidth="3" />
                           <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                                 fill="none"
-                                className={`${statusColor === 'emerald' ? 'stroke-emerald-400' : statusColor === 'yellow' ? 'stroke-yellow-400' : 'stroke-red-400'}`}
+                                className={strokeClass}
                                 strokeWidth="3"
                                 strokeDasharray={`${normalPercent}, 100`}
                                 strokeLinecap="round" />
                         </svg>
                         <div className="absolute inset-0 flex items-center justify-center">
-                          <span className={`text-sm font-bold ${statusColor === 'emerald' ? 'text-emerald-400' : statusColor === 'yellow' ? 'text-yellow-400' : 'text-red-400'}`}>
+                          <span className={`text-sm font-bold ${textClass}`}>
                             {normalPercent}%
                           </span>
                         </div>
@@ -1509,7 +1512,7 @@ const Index = () => {
                       <div>
                         <div className="text-white text-xs font-semibold">Ritmo Normal</div>
                         <div className="text-slate-500 text-[9px]">{totalBeats} latidos analizados</div>
-                        <div className={`text-[10px] font-semibold mt-0.5 ${statusColor === 'emerald' ? 'text-emerald-400' : statusColor === 'yellow' ? 'text-yellow-400' : 'text-red-400'}`}>
+                        <div className={`text-[10px] font-semibold mt-0.5 ${textClass}`}>
                           {statusText}
                         </div>
                       </div>

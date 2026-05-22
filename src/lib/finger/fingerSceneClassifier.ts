@@ -48,8 +48,7 @@ export function passesLiveFingerContact(
   const b = Math.max(1, raw.blue);
   if (raw.red / b < F.HEMOGLOBIN_MIN_RB) return false;
 
-  if (!hasFingerHemoglobinSignature(raw)) return false;
-  return hasFingerHemoglobinSignature(smoothed);
+  return true;
 }
 
 /** Mantener contacto ya adquirido (umbrales más tolerantes — AE/torch variables en Motorola, etc.). */

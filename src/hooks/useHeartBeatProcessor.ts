@@ -39,7 +39,6 @@ export const useHeartBeatProcessor = () => {
   const NO_CONTACT_PEAK_RESET_FRAMES = 24;
   /** ~1,2 s sin dedo: reset completo del procesador */
   const NO_CONTACT_FULL_RESET_FRAMES = 36;
-  const NO_CONTACT_HOLD_FRAMES = 4;
 
   useEffect(() => {
     const t = Date.now().toString(36);
@@ -101,16 +100,6 @@ export const useHeartBeatProcessor = () => {
         lastFilteredValueRef.current = 0;
       }
 
-      if (noContactFramesRef.current <= NO_CONTACT_HOLD_FRAMES) {
-        return {
-          bpm: 0,
-          confidence: 0,
-          isPeak: false,
-          filteredValue: 0,
-          signalQuality: 0,
-          rrData: EMPTY_RR,
-        };
-      }
       return {
         bpm: 0,
         confidence: 0,

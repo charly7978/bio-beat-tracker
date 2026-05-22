@@ -28,8 +28,8 @@ import {
   classifyFingerPlacement,
   placementHintText,
   smoothPlacementMode,
-  type FingerPlacementMode,
 } from '../../lib/finger/fingerPlacementProfile';
+import type { FingerPlacementMode } from '../../types/signal';
 import {
   inferCameraRuntimeHints,
   type CameraRuntimeHints,

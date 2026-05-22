@@ -154,6 +154,7 @@ function toast({ ...props }: Toast) {
       type: "DISMISS_TOAST",
       toastId: id,
     })
+    _addToRemoveQueue(id)
   }
 
   dispatch({
@@ -196,6 +197,7 @@ function useToast() {
         type: "DISMISS_TOAST",
         toastId,
       })
+      if (toastId) _addToRemoveQueue(toastId)
     },
   }
 }

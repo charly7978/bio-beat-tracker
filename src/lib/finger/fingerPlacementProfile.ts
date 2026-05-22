@@ -1,13 +1,12 @@
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import type { FingerRgbSnapshot } from './fingerContactSignature';
 import type { FingerRoiSpatial } from './fingerSceneClassifier';
+import type { FingerPlacementMode } from '@/types/signal';
 import {
   isFingerOnLensScene,
   passesFingerMaintain,
   passesLiveFingerContact,
 } from './fingerSceneClassifier';
-
-export type FingerPlacementMode = 'tip' | 'pad' | 'hybrid';
 
 export interface PlacementMetrics {
   coverageRatio: number;
