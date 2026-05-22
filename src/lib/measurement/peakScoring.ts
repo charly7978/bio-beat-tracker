@@ -41,7 +41,7 @@ export function scorePeakCandidate(input: PeakScoreInput): number {
     score += w.rrStability * 0.4;
   }
 
-  let piGate =
+  const piGate =
     input.perfusionIndex > 0
       ? clamp(input.perfusionIndex / 0.007, 0.38, 1)
       : 0.92;
