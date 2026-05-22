@@ -70,6 +70,8 @@ export class SpO2Processor {
     redDC: number,
     greenAC: number,
     greenDC: number,
+    blueAC = 0,
+    blueDC = 0,
   ): SpO2Estimate {
     this.frameCount++;
 
@@ -77,26 +79,30 @@ export class SpO2Processor {
       spo2: 0, rValue: 0, confidence: 'INSUFFICIENT', samplesUsed: 0, pi: 0,
     };
 
-    if (redDC < this.MIN_RED_DC || greenDC < this.MIN_GREEN_DC) {
+    const useBlue = blueDC > 0 && blueAC > 0 && isFinite(blueAC / blueDC) && (blueAC / blueDC) > 0;
+    const secondaryDC = useBlue ? blueDC : greenDC;
+    const secondaryAC = useBlue ? blueAC : greenAC;
+
+    if (redDC < this.MIN_RED_DC || secondaryDC < 5) {
       return this.staleHold(insufficient);
     }
 
     const piRed = redAC / redDC;
-    const piGreen = greenAC / greenDC;
+    const piSecondary = secondaryAC / secondaryDC;
 
-    if (!isFinite(piRed) || !isFinite(piGreen) || piRed <= 0 || piGreen <= 0) {
+    if (!isFinite(piRed) || !isFinite(piSecondary) || piRed <= 0 || piSecondary <= 0) {
       return this.staleHold(insufficient);
     }
 
-    if (piRed < this.MIN_PI || piGreen < this.MIN_PI) {
+    if (piRed < this.MIN_PI || piSecondary < this.MIN_PI) {
       return this.staleHold(insufficient);
     }
 
-    const currentR = piRed / piGreen;
+    const currentR = piRed / piSecondary;
 
     if (currentR < this.R_CLAMP_MIN || currentR > this.R_CLAMP_MAX) {
       if (this.frameCount % 30 === 0) {
-        log.warn(`[SpO2] R fuera rango: ${currentR.toFixed(4)}`);
+        log.warn(`[SpO2] R (${useBlue ? 'R/B' : 'R/G'}) fuera rango: ${currentR.toFixed(4)}`);
       }
       return this.staleHold(insufficient);
     }
@@ -163,7 +169,7 @@ export class SpO2Processor {
       rValue: medianR,
       confidence,
       samplesUsed: this.rBuffer.length,
-      pi: Math.max(piRed, piGreen) * 100,
+      pi: Math.max(piRed, piSecondary) * 100,
     };
   }
 

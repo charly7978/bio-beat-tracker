@@ -1454,9 +1454,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return {
       redAC: this.redAC, redDC: this.redDC,
       greenAC: this.greenAC, greenDC: this.greenDC,
+      blueAC: this.blueAC, blueDC: this.blueDC,
       rgRatio: this.greenDC > 0 ? this.redDC / this.greenDC : 0,
+      rbRatio: this.blueDC > 0 ? this.redDC / this.blueDC : 0,
       ratioOfRatios: this.greenDC > 0 && this.greenAC > 0 && this.redDC > 0
         ? (this.redAC / this.redDC) / (this.greenAC / this.greenDC)
+        : 0,
+      ratioOfRatiosRb: this.blueDC > 0 && this.blueAC > 0 && this.redDC > 0
+        ? (this.redAC / this.redDC) / (this.blueAC / this.blueDC)
         : 0,
     };
   }

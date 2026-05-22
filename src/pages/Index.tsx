@@ -1107,12 +1107,14 @@ const Index = () => {
       vitalSignsFrameCounter.current = 0;
       const rgbStats = getRGBStats();
 
-      if (rgbStats.redDC > 0 && rgbStats.greenDC > 0) {
+      if (rgbStats.redDC > 0 && (rgbStats.blueDC > 0 || rgbStats.greenDC > 0)) {
         setRGBData({
           redAC: rgbStats.redAC,
           redDC: rgbStats.redDC,
           greenAC: rgbStats.greenAC,
           greenDC: rgbStats.greenDC,
+          blueAC: rgbStats.blueAC,
+          blueDC: rgbStats.blueDC,
         });
       }
 

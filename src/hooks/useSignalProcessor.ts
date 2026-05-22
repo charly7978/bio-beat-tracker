@@ -136,8 +136,12 @@ export const useSignalProcessor = () => {
         redDC: 0,
         greenAC: 0,
         greenDC: 0,
+        blueAC: 0,
+        blueDC: 0,
         rgRatio: 0,
-        ratioOfRatios: 0
+        rbRatio: 0,
+        ratioOfRatios: 0,
+        ratioOfRatiosRb: 0,
       };
     }
     return processorRef.current.getRGBStats();

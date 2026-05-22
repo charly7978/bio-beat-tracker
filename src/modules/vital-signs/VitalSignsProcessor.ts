@@ -39,6 +39,8 @@ export interface RGBData {
   redDC: number;
   greenAC: number;
   greenDC: number;
+  blueAC: number;
+  blueDC: number;
 }
 
 interface RRData {
@@ -245,6 +247,7 @@ export class VitalSignsProcessor {
       const sp2 = this.spo2Processor.update(
         this.rgbData.redAC, this.rgbData.redDC,
         this.rgbData.greenAC, this.rgbData.greenDC,
+        this.rgbData.blueAC, this.rgbData.blueDC,
       );
       if (sp2.confidence !== 'INSUFFICIENT' && sp2.spo2 >= 70 && sp2.spo2 <= 100) {
         this.measurements.spo2 = sp2.spo2;
