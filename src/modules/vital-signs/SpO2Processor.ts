@@ -20,8 +20,8 @@ interface MlrWeights {
 }
 
 const DEFAULT_WEIGHTS: MlrWeights = {
-  w0: 100,
-  wR: -5,
+  w0: 104,
+  wR: -6,
   wDcRed: 0,
   wDcGreen: 0,
 };

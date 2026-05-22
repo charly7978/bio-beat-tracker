@@ -137,6 +137,7 @@ describe('SpO2Processor', () => {
     proc.calibrate(97);
     expect(proc.getAdaptiveOffset()).not.toBe(0);
 
+    injectR(proc, 0.5);
     const est = injectR(proc, 0.5);
     if (est.confidence !== 'INSUFFICIENT') {
       expect(est.spo2).toBe(97);
