@@ -21,7 +21,7 @@ export interface PulseAgcConfig {
 export const DEFAULT_PULSE_AGC: PulseAgcConfig = {
   targetPeak: 40,
   minScale: 2.5,
-  maxScale: 12,
+  maxScale: 8,
   minRobustRange: 0.06,
   tailSize: 96,
 };

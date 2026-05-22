@@ -76,7 +76,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private readonly pulseAgcState = createPulseAgcState();
 
   private readonly BUFFER_SIZE = 300;
-  private readonly ACDC_WINDOW = 180;
+  private readonly ACDC_WINDOW = 120;
   private readonly TILE_COLUMNS = 5;
   private readonly TILE_ROWS = 5;
 
@@ -210,8 +210,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     public onSignalReady?: (signal: ProcessedSignal) => void,
     public onError?: (error: ProcessingError) => void
   ) {
-    this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate);
-    this.morphBandpassFilter = new BandpassFilter(this.estimatedSampleRate);
+    // Pulso (HR): 0.5-4.5Hz — rango cardíaco estándar, 4º orden para mejor rechazo
+    this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate, 4.5);
+    // Morfología (BP): 0.5-8Hz — preserva escotadura dicrótica y forma completa del pulso
+    this.morphBandpassFilter = new BandpassFilter(this.estimatedSampleRate, 8.0);
   }
 
   async initialize(): Promise<void> {
@@ -1072,7 +1074,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     let redWeight = 0.35;
 
     if (piSum > 0) {
-      greenWeight = clamp(greenPI / piSum, 0.4, 0.9);
+      greenWeight = clamp(greenPI / piSum, 0.55, 0.9);
       redWeight = 1 - greenWeight;
     }
 
@@ -1203,9 +1205,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const n = this.filteredBuffer.copyTailInto(this.sortedScratch, nReq);
     const data = this.sortedScratch;
     
-    // Autocorrelación para el lag de un pulso típico (0.5s a 1.2s @ 30fps -> lag 15 a 36)
+    // Autocorrelación: lag 10-50 cubre 36-180 bpm a 30fps (fisiológico completo)
     let maxCorr = 0;
-    for (let lag = 15; lag <= 36; lag++) {
+    for (let lag = 10; lag <= 50; lag++) {
       let dot = 0;
       let magA = 0;
       let magB = 0;

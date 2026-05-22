@@ -56,8 +56,8 @@ export class SignalQualityIndex {
 
     let score = 0;
 
-    // 1. Perfusión (32%) — curva amplia para smartphone + flash
-    const piScore = clamp((perfusionIndex - 0.00012) / 0.0045, 0, 1) * 32;
+    // 1. Perfusión (32%) — curva ajustada: PI smartphone típico 0.001-0.002
+    const piScore = clamp((perfusionIndex - 0.00012) / 0.002, 0, 1) * 32;
     score += piScore;
 
     // 2. SNR (24%) — `strength` del pipeline suele ser O(0.3–2)

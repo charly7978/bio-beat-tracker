@@ -1,84 +1,111 @@
 /**
- * FILTRO PASABANDA IIR BUTTERWORTH 0.3-5Hz - OPTIMIZADO PARA PPG
- * 
+ * FILTRO PASABANDA IIR BUTTERWORTH 4º ORDEN - OPTIMIZADO PARA PPG
+ *
  * CRÍTICO PARA DETECCIÓN DE LATIDOS:
  * - Frecuencia cardíaca: 18-300 BPM = 0.3-5 Hz (rango amplio para robustez)
  * - Elimina DC (línea base, cambios lentos de iluminación)
  * - Elimina alta frecuencia (ruido eléctrico, vibraciones, movimiento)
- * 
- * IMPLEMENTACIÓN: Biquad IIR con cascada de pasa-altos + pasa-bajos
+ *
+ * IMPLEMENTACIÓN: Biquad IIR 4º orden (2 biquads en cascada por etapa)
+ * para roll-off más pronunciado (24 dB/oct vs 12 dB/oct de 2º orden).
  * 
  * Referencias:
  * - De Haan & Jeanne 2013: CHROM/POS para rPPG
- * - webcam-pulse-detector de thearn (GitHub 3.2k stars)
- * - https://scipy-cookbook.readthedocs.io/items/ButterworthBandpass.html
+ * - Proakis & Manolakis, "Digital Signal Processing" (4th ed.)
+ * - https://tomroelandts.com/articles/biquad-cookbook
  */
 export class BandpassFilter {
   // Coeficientes del filtro pasa-altos 0.5Hz (elimina DC)
-  private hpfB: number[];
-  private hpfA: number[];
-  
-  // Coeficientes del filtro pasa-bajos 4Hz (elimina ruido HF)
-  private lpfB: number[];
-  private lpfA: number[];
-  
-  // Estados internos del filtro
-  private hpfState: { x: number[], y: number[] };
-  private lpfState: { x: number[], y: number[] };
-  
+  private hpfB: number[][];
+  private hpfA: number[][];
+
+  // Coeficientes del filtro pasa-bajos (elimina ruido HF)
+  private lpfB: number[][];
+  private lpfA: number[][];
+
+  // Estados internos del filtro (un estado por biquad)
+  private hpfState: { x: number[]; y: number[] }[];
+  private lpfState: { x: number[]; y: number[] }[];
+
   private sampleRate: number;
-  private initialized: boolean = false;
-  
-  constructor(sampleRate: number = 30) {
+  private highCutFreq: number;
+  private initialized = false;
+
+  constructor(sampleRate = 30, highCutFreq = 4.5) {
     this.sampleRate = sampleRate;
-    
-    // Inicializar coeficientes
-    this.hpfB = [0, 0, 0];
-    this.hpfA = [1, 0, 0];
-    this.lpfB = [0, 0, 0];
-    this.lpfA = [1, 0, 0];
-    
-    // Estados
-    this.hpfState = { x: [0, 0, 0], y: [0, 0, 0] };
-    this.lpfState = { x: [0, 0, 0], y: [0, 0, 0] };
-    
+    this.highCutFreq = highCutFreq;
+
+    // Inicializar coeficientes (2 biquads por etapa = 4º orden)
+    this.hpfB = [[0, 0, 0], [0, 0, 0]];
+    this.hpfA = [[1, 0, 0], [1, 0, 0]];
+    this.lpfB = [[0, 0, 0], [0, 0, 0]];
+    this.lpfA = [[1, 0, 0], [1, 0, 0]];
+
+    // Estados (2 biquads × 3 taps)
+    this.hpfState = [
+      { x: [0, 0, 0], y: [0, 0, 0] },
+      { x: [0, 0, 0], y: [0, 0, 0] },
+    ];
+    this.lpfState = [
+      { x: [0, 0, 0], y: [0, 0, 0] },
+      { x: [0, 0, 0], y: [0, 0, 0] },
+    ];
+
     this.computeCoefficients();
   }
-  
+
   /**
-   * Calcula coeficientes Butterworth 2do orden usando transformación bilineal
-   * Basado en la fórmula estándar de filtros digitales IIR
+   * Calcula coeficientes Butterworth 4º orden (2 biquads en cascada por etapa)
+   * usando transformación bilineal.
+   *
+   * Para 4º orden se descompone el polinomio de Butterworth:
+   *   H(s) = 1 / (s² + 2ζ₁s + 1)(s² + 2ζ₂s + 1)
+   * Donde ζ₁ = 2cos(π/8) ≈ 0.9239, ζ₂ = 2cos(3π/8) ≈ 0.3827
    */
   private computeCoefficients(): void {
     const fs = this.sampleRate;
-    
+
     // === PASA-ALTOS a 0.5Hz (estándar clínico para HR) ===
     const fcHp = 0.5;
-    const wcHp = Math.tan(Math.PI * fcHp / fs);
-    const kHp = wcHp;
-    const normHp = 1 / (1 + Math.sqrt(2) * kHp + kHp * kHp);
-    
-    this.hpfB[0] = normHp;
-    this.hpfB[1] = -2 * normHp;
-    this.hpfB[2] = normHp;
-    this.hpfA[0] = 1;
-    this.hpfA[1] = 2 * (kHp * kHp - 1) * normHp;
-    this.hpfA[2] = (1 - Math.sqrt(2) * kHp + kHp * kHp) * normHp;
-    
-    // === PASA-BAJOS a 4.5Hz (elimina ruido HF sin degradar sistólico) ===
-    const fcLp = 4.5;
-    const wcLp = Math.tan(Math.PI * fcLp / fs);
-    const kLp = wcLp;
-    const normLp = 1 / (1 + Math.sqrt(2) * kLp + kLp * kLp);
-    
-    this.lpfB[0] = kLp * kLp * normLp;
-    this.lpfB[1] = 2 * kLp * kLp * normLp;
-    this.lpfB[2] = kLp * kLp * normLp;
-    this.lpfA[0] = 1;
-    this.lpfA[1] = 2 * (kLp * kLp - 1) * normLp;
-    this.lpfA[2] = (1 - Math.sqrt(2) * kLp + kLp * kLp) * normLp;
-    
+    this.computeHPF(fcHp, fs);
+
+    // === PASA-BAJOS configurable ===
+    this.computeLPF(this.highCutFreq, fs);
+
     this.initialized = true;
+  }
+
+  private computeHPF(fc: number, fs: number): void {
+    const wc = Math.tan(Math.PI * fc / fs);
+    // Factores de amortiguamiento Butterworth 4º orden
+    const zeta = [2 * Math.cos(Math.PI / 8), 2 * Math.cos(3 * Math.PI / 8)];
+
+    for (let i = 0; i < 2; i++) {
+      const k = wc;
+      const norm = 1 / (1 + zeta[i] * k + k * k);
+      this.hpfB[i][0] = norm;
+      this.hpfB[i][1] = -2 * norm;
+      this.hpfB[i][2] = norm;
+      this.hpfA[i][0] = 1;
+      this.hpfA[i][1] = 2 * (k * k - 1) * norm;
+      this.hpfA[i][2] = (1 - zeta[i] * k + k * k) * norm;
+    }
+  }
+
+  private computeLPF(fc: number, fs: number): void {
+    const wc = Math.tan(Math.PI * fc / fs);
+    const zeta = [2 * Math.cos(Math.PI / 8), 2 * Math.cos(3 * Math.PI / 8)];
+
+    for (let i = 0; i < 2; i++) {
+      const k = wc;
+      const norm = 1 / (1 + zeta[i] * k + k * k);
+      this.lpfB[i][0] = k * k * norm;
+      this.lpfB[i][1] = 2 * k * k * norm;
+      this.lpfB[i][2] = k * k * norm;
+      this.lpfA[i][0] = 1;
+      this.lpfA[i][1] = 2 * (k * k - 1) * norm;
+      this.lpfA[i][2] = (1 - zeta[i] * k + k * k) * norm;
+    }
   }
   
   /**
@@ -88,64 +115,71 @@ export class BandpassFilter {
     input: number,
     b: number[],
     a: number[],
-    state: { x: number[], y: number[] }
+    state: { x: number[]; y: number[] },
   ): number {
-    // Desplazar historial
     state.x[2] = state.x[1];
     state.x[1] = state.x[0];
     state.x[0] = input;
-    
+
     state.y[2] = state.y[1];
     state.y[1] = state.y[0];
-    
-    // Ecuación de diferencia IIR:
-    // y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
-    state.y[0] = b[0] * state.x[0] + 
-                 b[1] * state.x[1] + 
-                 b[2] * state.x[2] - 
-                 a[1] * state.y[1] - 
-                 a[2] * state.y[2];
-    
-    // Protección contra overflow
+
+    state.y[0] =
+      b[0] * state.x[0] +
+      b[1] * state.x[1] +
+      b[2] * state.x[2] -
+      a[1] * state.y[1] -
+      a[2] * state.y[2];
+
     if (!isFinite(state.y[0]) || Math.abs(state.y[0]) > 1e10) {
       state.y[0] = 0;
     }
-    
+
     return state.y[0];
   }
-  
+
   /**
-   * FILTRO PASABANDA COMPLETO
-   * Aplica HPF 0.5Hz -> LPF 4Hz en cascada
-   * 
-   * @param value Valor crudo de entrada (ej: intensidad rojo promedio)
-   * @returns Valor filtrado con solo componentes de frecuencia cardíaca
+   * Aplica una etapa completa (HPF o LPF) a través de sus 2 biquads en cascada.
+   */
+  private applyStage(
+    input: number,
+    bCoefs: number[][],
+    aCoefs: number[][],
+    states: { x: number[]; y: number[] }[],
+  ): number {
+    let v = input;
+    for (let i = 0; i < 2; i++) {
+      v = this.applyBiquad(v, bCoefs[i], aCoefs[i], states[i]);
+    }
+    return v;
+  }
+
+  /**
+   * FILTRO PASABANDA COMPLETO (4º orden, cascada HPF → LPF)
+   * Roll-off 24 dB/oct para mejor rechazo fuera de banda.
    */
   filter(value: number): number {
     if (!this.initialized || !isFinite(value)) {
       return 0;
     }
-    
-    // Paso 1: Pasa-altos (elimina DC y deriva lenta)
-    const hpFiltered = this.applyBiquad(value, this.hpfB, this.hpfA, this.hpfState);
-    
-    // Paso 2: Pasa-bajos (elimina ruido de alta frecuencia)
-    const bpFiltered = this.applyBiquad(hpFiltered, this.lpfB, this.lpfA, this.lpfState);
-    
+
+    const hpFiltered = this.applyStage(value, this.hpfB, this.hpfA, this.hpfState);
+    const bpFiltered = this.applyStage(hpFiltered, this.lpfB, this.lpfA, this.lpfState);
+
     return bpFiltered;
   }
-  
-  /**
-   * Resetear estados del filtro
-   */
+
   reset(): void {
-    this.hpfState = { x: [0, 0, 0], y: [0, 0, 0] };
-    this.lpfState = { x: [0, 0, 0], y: [0, 0, 0] };
+    this.hpfState = [
+      { x: [0, 0, 0], y: [0, 0, 0] },
+      { x: [0, 0, 0], y: [0, 0, 0] },
+    ];
+    this.lpfState = [
+      { x: [0, 0, 0], y: [0, 0, 0] },
+      { x: [0, 0, 0], y: [0, 0, 0] },
+    ];
   }
-  
-  /**
-   * Cambiar frecuencia de muestreo
-   */
+
   setSampleRate(rate: number): void {
     this.sampleRate = rate;
     this.computeCoefficients();
