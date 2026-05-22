@@ -97,7 +97,7 @@ export class VitalSignsProcessor {
   private frameCount = 0;  // Contador continuo para logging/diagnóstico
   
   // RGB para SpO2
-  private rgbData: RGBData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
+  private rgbData: RGBData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0, blueAC: 0, blueDC: 0 };
   
   // Gating de estabilidad (Consistencia)
   private stableFramesCount: number = 0;
@@ -697,7 +697,7 @@ export class VitalSignsProcessor {
       lastArrhythmiaData: null,
       signalQuality: 0
     };
-    this.rgbData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
+    this.rgbData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0, blueAC: 0, blueDC: 0 };
     this.lastPpgPerfusionIndex = 0;
     this.displayHold = { systolic: 0, diastolic: 0, missedFrames: 0 };
     this.spo2DisplayHold = 0;
