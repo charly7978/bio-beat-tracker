@@ -34,9 +34,9 @@ const TOLERANT_DEFAULT: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 't
   ensembleConfScale: 0.5,
   liveFingerMissGrace: 32,
   fingerConfirmFrames: 3,
-  instantLostToUnstable: 14,
+  instantLostToUnstable: 22,
   instantLostToNoContact: 48,
-  bufferResetAfterNoContact: 55,
+  bufferResetAfterNoContact: 80,
   gateRangeScale: 0.65,
 };
 

@@ -632,9 +632,9 @@ const Index = () => {
   const vitalSignsFrameCounter = useRef<number>(0);
   const unstableFrameCounter = useRef<number>(0);
   const UNSTABLE_ZERO_THRESHOLD = 60; // ~2 s sin dedo: limpiar vitales en UI
-  const NO_CONTACT_SESSION_RESET_FRAMES = 18;
-  /** Mínimo sin contacto antes de reset de sesión al volver el dedo (~0,7 s) */
-  const CONTACT_REGAIN_RESET_MIN_FRAMES = 20;
+  const NO_CONTACT_SESSION_RESET_FRAMES = 25;
+  /** Mínimo sin contacto antes de reset de sesión al volver el dedo (~1 s) */
+  const CONTACT_REGAIN_RESET_MIN_FRAMES = 30;
   const STALE_PEAK_REACQUIRE_FRAMES = 40;
   const measurementLatchRef = useRef(createMeasurementSessionLatch());
   const lastRrSnapshotRef = useRef<{ intervals: number[]; lastPeakTime: number | null } | null>(null);
