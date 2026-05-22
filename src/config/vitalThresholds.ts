@@ -105,8 +105,8 @@ export const VITAL_THRESHOLDS = {
     MIN_ENSEMBLE_CONF_STABLE: 0.09,
     /** Confianza mínima del ensemble para emitir pico audible/visual */
     MIN_ENSEMBLE_CONF_FOR_PEAK: 0.12,
-    /** Acuerdo Elgendi+Pan mínimo para alimentar arritmias */
-    MIN_DETECTOR_AGREEMENT_ARRHYTHMIA: 0.42,
+    /** Acuerdo Elgendi mínimo para alimentar arritmias */
+    MIN_DETECTOR_AGREEMENT_ARRHYTHMIA: 0.55,
     MIN_FOR_CLINICAL: 55,
     /** PI (AC/DC) mínimo para marcar contacto STABLE — cámara suele dar 0.001–0.008 al inicio */
     MIN_PI: 0.0009,
@@ -137,7 +137,7 @@ export const VITAL_THRESHOLDS = {
   ARRHYTHMIA: {
     RR_WINDOW_SIZE: 10,
     MIN_INTERVALS: 9,
-    MIN_SQI: 38,
+    MIN_SQI: 55,
     LEARNING_PERIOD_MS: 12_000,
     MIN_EVENT_INTERVAL_MS: 6000,
     OUTLIER_RATIO: 0.16,

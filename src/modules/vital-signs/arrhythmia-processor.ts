@@ -151,8 +151,18 @@ export class ArrhythmiaProcessor {
     }
 
     const sorted = [...valid].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
+    const n2 = sorted.length;
+    const median = n2 % 2 === 0
+      ? (sorted[n2 / 2 - 1] + sorted[n2 / 2]) / 2
+      : sorted[Math.floor(n2 / 2)] ?? 0;
     if (median <= 0) {
+      this.arrhythmiaDetected = false;
+      return;
+    }
+
+    // --- Reject noise / micro-movement patterns before computing features ---
+    // Noise produces intervals too short and too erratic for real cardiac activity.
+    if (this.rejectNoisePattern(valid, median)) {
       this.arrhythmiaDetected = false;
       return;
     }
@@ -362,6 +372,53 @@ export class ArrhythmiaProcessor {
 
     if (B === 0) return 0;
     return -Math.log(A / B);
+  }
+
+  // ──────────────────────────────────────────────
+  // Noise / motion-artifact rejection
+  // ──────────────────────────────────────────────
+
+  /**
+   * Returns true when the interval pattern is more consistent with
+   * noise / micro-movements than real cardiac activity.
+   *
+   * Noise heuristic — rejects three distinct patterns:
+   *   a) All intervals are too short for a human heartbeat (< 450 ms).
+   *   b) Median is very short AND variability is extreme (CV > 0.30).
+   *   c) > 90 % of successive diffs exceed 50 ms (saturation — even severe
+   *      AF has some consecutive beats with similar timing).
+   */
+  private rejectNoisePattern(intervals: number[], median: number): boolean {
+    if (intervals.length < 4) return false;
+
+    if (intervals.every(r => r < 450)) {
+      log.debug('Noise reject (a): all <450ms');
+      return true;
+    }
+
+    if (median < 450) {
+      let sum = 0;
+      for (const r of intervals) sum += r;
+      const mean = sum / intervals.length;
+      let sqSum = 0;
+      for (const r of intervals) sqSum += (r - mean) ** 2;
+      const cv = Math.sqrt(sqSum / intervals.length) / mean;
+      if (cv > 0.30) {
+        log.debug(`Noise reject (b): median=${median} cv=${cv.toFixed(3)}`);
+        return true;
+      }
+    }
+
+    let large = 0;
+    for (let i = 1; i < intervals.length; i++) {
+      if (Math.abs(intervals[i] - intervals[i - 1]) > 50) large++;
+    }
+    if (median < 500 && large / (intervals.length - 1) > 0.90) {
+      log.debug(`Noise reject (c): median=${median} ${large}/${intervals.length - 1} diffs >50ms`);
+      return true;
+    }
+
+    return false;
   }
 
   // ──────────────────────────────────────────────

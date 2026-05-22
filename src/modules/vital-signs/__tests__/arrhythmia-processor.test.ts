@@ -70,6 +70,31 @@ describe('ArrhythmiaProcessor', () => {
     });
   });
 
+  describe('noise rejection — evita falsos positivos por micromovimiento', () => {
+    it('todos los intervalos < 450ms → no detection', () => {
+      const proc = calibratedProc();
+      const r = feed(proc, [320, 290, 340, 280, 310, 330, 290, 310, 280, 340]);
+      expect(r.arrhythmiaStatus).not.toContain('ARRITMIA DETECTADA');
+      expect(r.arrhythmiaScore).toBe(0);
+    });
+
+    it('mediana < 450ms con CV > 0.30 → no detection', () => {
+      const proc = calibratedProc();
+      // Alternating very short / mid intervals that produce high CV
+      const r = feed(proc, [300, 580, 310, 590, 305, 575, 295, 585, 315, 570]);
+      expect(r.arrhythmiaStatus).not.toContain('ARRITMIA DETECTADA');
+      expect(r.arrhythmiaScore).toBe(0);
+    });
+
+    it('100% diffs > 50ms con mediana < 500ms → no detection', () => {
+      const proc = calibratedProc();
+      // Alternating but every successive diff is huge
+      const r = feed(proc, [400, 510, 410, 520, 420, 510, 430, 520, 440, 510]);
+      expect(r.arrhythmiaStatus).not.toContain('ARRITMIA DETECTADA');
+      expect(r.arrhythmiaScore).toBe(0);
+    });
+  });
+
   describe('edge cases', () => {
     it('ventana sin PVC (últimos 10 normales) → no detection', () => {
       const proc = calibratedProc();
