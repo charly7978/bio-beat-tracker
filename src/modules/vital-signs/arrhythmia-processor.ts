@@ -71,8 +71,9 @@ export class ArrhythmiaProcessor {
   private lastArrhythmiaTime = 0;
   private measurementStartTime = getMonotonicNow();
 
-  // Current metrics
+  // Current metrics & cached score (updated atomically after each detection)
   private metrics: ArrhythmiaMetrics = this.emptyMetrics();
+  private lastScore = 0;
 
   private onArrhythmiaDetection?: (detected: boolean) => void;
 
@@ -87,6 +88,12 @@ export class ArrhythmiaProcessor {
     const now = typeof rrData?.timestampNow === 'number' && Number.isFinite(rrData.timestampNow)
       ? rrData.timestampNow
       : getMonotonicNow();
+
+    // End learning phase BEFORE processing data, so the first batch after the
+    // calibration window is evaluated immediately rather than being skipped.
+    if (now - this.measurementStartTime > this.LEARNING_PERIOD_MS) {
+      this.isLearningPhase = false;
+    }
 
     if (rrData?.intervals && rrData.intervals.length > 0) {
       this.rrIntervals = rrData.intervals
@@ -106,10 +113,6 @@ export class ArrhythmiaProcessor {
       this.lastPeakTime = null;
     }
 
-    if (now - this.measurementStartTime > this.LEARNING_PERIOD_MS) {
-      this.isLearningPhase = false;
-    }
-
     const status = this.isLearningPhase
       ? 'CALIBRANDO...'
       : this.arrhythmiaDetected
@@ -120,7 +123,7 @@ export class ArrhythmiaProcessor {
       arrhythmiaStatus: status,
       arrhythmiaCount: this.arrhythmiaCount,
       arrhythmiaConfidence: this.computeConfidence(),
-      arrhythmiaScore: this.computeScore(),
+      arrhythmiaScore: this.lastScore,
       lastArrhythmiaData: this.arrhythmiaDetected
         ? { timestamp: now, rmssd: this.metrics.rmssd, rrVariation: this.metrics.rrVariation, metrics: { ...this.metrics } }
         : null,
@@ -237,13 +240,13 @@ export class ArrhythmiaProcessor {
     };
 
     // ── Weighted scoring ──
-    const score = this.computeScore();
-    const newDetected = score >= this.A.DETECTION_THRESHOLD;
+    this.lastScore = this.computeScore();
+    const newDetected = this.lastScore >= this.A.DETECTION_THRESHOLD;
 
     if (newDetected !== this.arrhythmiaDetected) {
       if (this.onArrhythmiaDetection) {
         this.onArrhythmiaDetection(newDetected);
-        log.info(`Estado → ${newDetected ? 'ARRITMIA' : 'NORMAL'} score=${score.toFixed(3)}`);
+        log.info(`Estado → ${newDetected ? 'ARRITMIA' : 'NORMAL'} score=${this.lastScore.toFixed(3)}`);
       }
     }
 
@@ -251,7 +254,7 @@ export class ArrhythmiaProcessor {
       this.arrhythmiaCount++;
       this.lastArrhythmiaTime = now;
       log.warn(
-        `#${this.arrhythmiaCount} score=${score.toFixed(3)} ` +
+        `#${this.arrhythmiaCount} score=${this.lastScore.toFixed(3)} ` +
         `rmssd=${rmssd.toFixed(1)} cv=${cv.toFixed(3)} ` +
         `pnn50=${pnn50.toFixed(2)} pnn31=${pnn31.toFixed(2)} pnn325=${pnn325.toFixed(2)} ` +
         `tpr=${tpr.toFixed(3)} shannon=${shannon.toFixed(2)} sampEn=${sampleEntropy.toFixed(3)} ` +
@@ -271,20 +274,23 @@ export class ArrhythmiaProcessor {
     const m = this.metrics;
 
     // Sub-scores are clamped to [0, 1] via piecewise linear functions:
-    //   score = clamp((value - minThreshold) / (maxThreshold - minThreshold), 0, 1)
-    // where minThreshold = "normal" cutoff and maxThreshold = "strong AF" cutoff.
+    //   score = clamp((value - lo) / (hi - lo), 0, 1)
+    // where lo = "normal" cutoff and hi = "strong AF" cutoff.
 
-    const sRHRMSSD = clamp01((m.rmssd - A.RMSSD_LO) / (A.RMSSD_HI - A.RMSSD_LO));
-    const sCV     = clamp01((m.cv - A.CV_LO) / (A.CV_HI - A.CV_LO));
-    const spNN31  = clamp01((m.pnn31 - A.PNN31_LO) / (A.PNN31_HI - A.PNN31_LO));
-    const spNN325 = clamp01((m.pnn325 - A.PNN325_LO) / (A.PNN325_HI - A.PNN325_LO));
-    const spNN50  = clamp01((m.pnn50 - A.PNN50_LO) / (A.PNN50_HI - A.PNN50_LO));
-    const sTPR    = 1 - Math.abs(m.tpr - A.TPR_TARGET) / A.TPR_TARGET;  // inverted distance
-    const sShannon = clamp01((m.shannonEntropy - A.SHANNON_LO) / (A.SHANNON_HI - A.SHANNON_LO));
-    const sSampEn  = clamp01((m.sampleEntropy - A.SAMPEN_LO) / (A.SAMPEN_HI - A.SAMPEN_LO));
-    const sOutlier = clamp01((m.outlierCount - A.OUTLIER_LO) / (A.OUTLIER_HI - A.OUTLIER_LO));
-    const sAbrupt  = clamp01((m.abruptDiffCount - A.ABRUPT_LO) / (A.ABRUPT_HI - A.ABRUPT_LO));
-    const sRRVar   = clamp01((m.rrVariation - A.RRVAR_LO) / (A.RRVAR_HI - A.RRVAR_LO));
+    const safeRange = (val: number, lo: number, hi: number): number =>
+      clamp01((val - lo) / (hi > lo ? hi - lo : 1));
+
+    const sRHRMSSD = safeRange(m.rmssd, A.RMSSD_LO, A.RMSSD_HI);
+    const sCV      = safeRange(m.cv, A.CV_LO, A.CV_HI);
+    const spNN31   = safeRange(m.pnn31, A.PNN31_LO, A.PNN31_HI);
+    const spNN325  = safeRange(m.pnn325, A.PNN325_LO, A.PNN325_HI);
+    const spNN50   = safeRange(m.pnn50, A.PNN50_LO, A.PNN50_HI);
+    const sTPR     = 1 - Math.abs(m.tpr - A.TPR_TARGET) / A.TPR_TARGET;
+    const sShannon = safeRange(m.shannonEntropy, A.SHANNON_LO, A.SHANNON_HI);
+    const sSampEn  = safeRange(m.sampleEntropy, A.SAMPEN_LO, A.SAMPEN_HI);
+    const sOutlier = safeRange(m.outlierCount, A.OUTLIER_LO, A.OUTLIER_HI);
+    const sAbrupt  = safeRange(m.abruptDiffCount, A.ABRUPT_LO, A.ABRUPT_HI);
+    const sRRVar   = safeRange(m.rrVariation, A.RRVAR_LO, A.RRVAR_HI);
 
     const totalWeight = A.W_RMSSD + A.W_CV + A.W_PNN31 + A.W_PNN325 + A.W_PNN50 +
                         A.W_TPR + A.W_SHANNON + A.W_SAMPEN + A.W_OUTLIER + A.W_ABRUPT + A.W_RRVAR;
@@ -309,7 +315,7 @@ export class ArrhythmiaProcessor {
    * Convert score to a 4-level confidence string.
    */
   private computeConfidence(): ArrhythmiaConfidence {
-    const s = this.computeScore();
+    const s = this.lastScore;
     if (this.isLearningPhase) return 'none';
     if (s >= this.A.SEVERE_THRESHOLD) return 'severe';
     if (s >= this.A.MODERATE_THRESHOLD) return 'moderate';
@@ -358,24 +364,6 @@ export class ArrhythmiaProcessor {
     return -Math.log(A / B);
   }
 
-  /**
-   * Heuristic irregular sequence detection (preserved from original logic).
-   */
-  private detectIrregularSequence(last: number[]): boolean {
-    if (last.length < 4) return false;
-    const diffs: number[] = [];
-    for (let i = 1; i < last.length; i++) diffs.push(Math.abs(last[i] - last[i - 1]));
-    let consec = 0;
-    for (const d of diffs) {
-      if (d > this.A.IRREGULAR_DIFF_MS) { consec++; if (consec >= 2) return true; }
-      else consec = 0;
-    }
-    const p1 = Math.abs(last[0] - last[2]);
-    const p2 = Math.abs(last[1] - last[3]);
-    if (p1 < 60 && p2 < 60 && Math.abs(last[0] - last[1]) > 180) return true;
-    return false;
-  }
-
   // ──────────────────────────────────────────────
   // Public helpers
   // ──────────────────────────────────────────────
@@ -389,6 +377,7 @@ export class ArrhythmiaProcessor {
     this.lastArrhythmiaTime = 0;
     this.measurementStartTime = getMonotonicNow();
     this.metrics = this.emptyMetrics();
+    this.lastScore = 0;
     if (this.onArrhythmiaDetection) this.onArrhythmiaDetection(false);
   }
 
