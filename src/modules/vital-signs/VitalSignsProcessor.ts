@@ -779,6 +779,14 @@ export class VitalSignsProcessor {
 
   reset(): VitalSignsResult | null {
     const result = this.getFormattedResult();
+    if (this.bpTotalWeight > 0 && result.bloodPressure.value) {
+      const wAvgSys = Math.round(this.bpSysWeightedSum / this.bpTotalWeight);
+      const wAvgDia = Math.round(this.bpDiaWeightedSum / this.bpTotalWeight);
+      if (wAvgSys > 0 && wAvgDia > 0) {
+        result.bloodPressure.value.systolic = wAvgSys;
+        result.bloodPressure.value.diastolic = wAvgDia;
+      }
+    }
     this.signalHistory.reset();
     this.morphologyHistory.reset();
     this.respirationHistory.reset();
