@@ -29,17 +29,16 @@ export function useSignalDivider() {
   const start = useCallback(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    frontCam.start();
+    // NO abrir frontCam — compite con la cámara trasera (flash)
     compass.start();
-  }, [frontCam, compass]);
+  }, [compass]);
 
   const stop = useCallback(() => {
     startedRef.current = false;
-    frontCam.stop();
     compass.stop();
     lastResultRef.current = null;
     setLastResult(null);
-  }, [frontCam, compass]);
+  }, [compass]);
 
   const processFrame = useCallback((imageData: ImageData, timestampMs?: number) => {
     const divider = dividerRef.current;
