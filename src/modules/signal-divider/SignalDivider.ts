@@ -1,5 +1,6 @@
 import { BandpassFilter } from '../signal-processing/BandpassFilter';
 import { NotchFilter } from '../signal-processing/NotchFilter';
+import { SNREstimator, type SNRResult } from '../signal-processing/SNREstimator';
 import { transformPixel } from '../signal-processing/visualTransform';
 import { clamp } from '../../utils/math';
 import {
@@ -29,6 +30,14 @@ export interface ChannelState {
   quality: number;
   /** Confianza 0-1 */
   confidence: number;
+  /** SNR espectral en dB (Welch's PSD method) */
+  snrDb: number;
+  /** SNR normalizado 0-1 */
+  snrScore: number;
+  /** Frecuencia dominante en banda fisiológica (Hz) */
+  dominantFreq: number;
+  /** Sharpness del pico espectral (0-1) */
+  peakSharpness: number;
   rawBuffer: Float64Array;
   acBuffer: Float64Array;
 }
@@ -58,6 +67,8 @@ interface RoiExtraction {
 export class SignalDivider {
   private readonly notchFilters: Map<string, NotchFilter> = new Map(); // Elimina 50/60Hz
   private readonly filters: Map<string, BandpassFilter> = new Map();
+  private readonly snrEstimators: Map<string, SNREstimator> = new Map(); // Welch PSD + SNR espectral
+  private readonly snrResults: Map<string, SNRResult> = new Map();
   private readonly agcScales: Map<string, number> = new Map();
   private readonly rawValues: Map<string, { r: number; g: number; b: number }> = new Map();
 
@@ -73,6 +84,11 @@ export class SignalDivider {
   private readonly BUFFER_SIZE = 256;
   private readonly BUFFER_MASK = 255; // tamaño potencia de 2 para máscara
 
+  /** FFT size para SNR (potencia de 2). 128 = ~4.3s @ 30Hz, resolución 0.23 Hz/bin */
+  private readonly SNR_FFT_SIZE = 128;
+  /** Recalcular SNR cada N frames (throttling — Welch es O(N log N) por segmento) */
+  private readonly SNR_UPDATE_INTERVAL = 8; // ~270ms @ 30fps
+
   private readonly AGC_TARGET = 40;
   private readonly AGC_MIN_SCALE = 0.5;
   private readonly AGC_MAX_SCALE = 8;
@@ -87,6 +103,16 @@ export class SignalDivider {
     for (const preset of [HR_CHANNEL, SPO2_CHANNEL, HRV_CHANNEL, RESP_CHANNEL, BP_CHANNEL]) {
       this.notchFilters.set(preset.name, new NotchFilter(this.SAMPLE_RATE, 50, 20));
       this.filters.set(preset.name, new BandpassFilter(this.SAMPLE_RATE, preset.bandpassHigh));
+      // SNR estimator con banda específica del canal (Welch PSD method)
+      this.snrEstimators.set(preset.name, new SNREstimator(this.SNR_FFT_SIZE, {
+        signalBandLow: preset.bandpassLow,
+        signalBandHigh: preset.bandpassHigh,
+        sampleRate: this.SAMPLE_RATE,
+      }));
+      this.snrResults.set(preset.name, {
+        snrDb: 0, snrScore: 0, signalPower: 0, noisePower: 0,
+        dominantFreq: 0, peakSharpness: 0,
+      });
       this.rawBuffers.set(preset.name, new Float64Array(this.BUFFER_SIZE));
       this.acBuffers.set(preset.name, new Float64Array(this.BUFFER_SIZE));
       this.heads.set(preset.name, 0);
@@ -121,6 +147,24 @@ export class SignalDivider {
     for (const notchFilter of this.notchFilters.values()) {
       notchFilter.reset();
     }
+  }
+
+  /** Resetear todos los SNR estimators. */
+  resetSnrEstimators(): void {
+    for (const estimator of this.snrEstimators.values()) {
+      estimator.reset();
+    }
+    for (const [key] of this.snrResults) {
+      this.snrResults.set(key, {
+        snrDb: 0, snrScore: 0, signalPower: 0, noisePower: 0,
+        dominantFreq: 0, peakSharpness: 0,
+      });
+    }
+  }
+
+  /** Obtener resultado SNR de un canal específico. */
+  getSnrResult(channelName: string): SNRResult | undefined {
+    return this.snrResults.get(channelName);
   }
 
   processFrame(imageData: ImageData, timestampMs: number): DividerResult {
@@ -201,8 +245,21 @@ export class SignalDivider {
     const agcScale = this.computeAgc(acBuf, this.heads.get(preset.name)!, newFill, preset);
     this.agcScales.set(preset.name, agcScale);
 
-    // Calidad del canal
-    const quality = this.computeChannelQuality(acBuf, newFill, acValue, preset);
+    // SNR espectral (Welch PSD) — throttled cada SNR_UPDATE_INTERVAL frames
+    // FFT es O(N log N) — no se ejecuta por frame para preservar performance
+    let snrResult = this.snrResults.get(preset.name)!;
+    if (
+      this.frameCount % this.SNR_UPDATE_INTERVAL === 0 &&
+      newFill >= this.SNR_FFT_SIZE + (this.SNR_FFT_SIZE >> 1)
+    ) {
+      const estimator = this.snrEstimators.get(preset.name)!;
+      const currentHead = this.heads.get(preset.name)!;
+      snrResult = estimator.compute(acBuf, currentHead, newFill, this.BUFFER_MASK);
+      this.snrResults.set(preset.name, snrResult);
+    }
+
+    // Calidad del canal — ahora incluye SNR espectral
+    const quality = this.computeChannelQuality(acBuf, newFill, acValue, preset, snrResult);
     const confidence = quality / 100;
 
     return {
@@ -213,6 +270,10 @@ export class SignalDivider {
       agcScale,
       quality,
       confidence,
+      snrDb: snrResult.snrDb,
+      snrScore: snrResult.snrScore,
+      dominantFreq: snrResult.dominantFreq,
+      peakSharpness: snrResult.peakSharpness,
       rawBuffer: rawBuf,
       acBuffer: acBuf,
     };
@@ -238,23 +299,47 @@ export class SignalDivider {
     return agcScale;
   }
 
-  /** SQI: periodicidad + estabilidad sobre la señal AC */
-  private computeChannelQuality(acBuf: Float64Array, fillCount: number, _latestAc: number, preset: SignalChannelPreset): number {
+  /**
+   * SQI: fusión multimétrica
+   * - Periodicidad (autocorrelación, dominio tiempo): 35%
+   * - Estabilidad (varianza ventaneada): 20%
+   * - SNR espectral (Welch PSD): 30%
+   * - Peak sharpness (especificidad del pico espectral): 15%
+   * - Multiplicado por penalty específica del canal
+   */
+  private computeChannelQuality(
+    acBuf: Float64Array,
+    fillCount: number,
+    _latestAc: number,
+    preset: SignalChannelPreset,
+    snr: SNRResult,
+  ): number {
     if (fillCount < 10) return 0;
 
     const len = Math.min(fillCount, this.BUFFER_SIZE);
     const head = this.heads.get(preset.name)!;
 
-    // Periodicidad por autocorrelación
-    const periodicityScore = this.periodicityScore(acBuf, head, len, preset);
+    // Periodicidad por autocorrelación (dominio tiempo)
+    // Rango: 0-60 → reescalado a 0-35
+    const periodicityScore = (this.periodicityScore(acBuf, head, len, preset) / 60) * 35;
 
     // Estabilidad: desviación del AC en ventana reciente
-    const stabilityScore = this.stabilityScore(acBuf, head, len);
+    // Rango: 0-40 → reescalado a 0-20
+    const stabilityScore = (this.stabilityScore(acBuf, head, len) / 40) * 20;
 
-    // Penalización por canal
+    // SNR espectral (Welch's PSD) — dominio frecuencia
+    // snrScore ya está normalizado 0-1 → escalado a 0-30
+    const snrComponent = snr.snrScore * 30;
+
+    // Peak sharpness: cuán pronunciado es el pico fundamental
+    // peakSharpness ya está 0-1 → escalado a 0-15
+    const sharpnessComponent = snr.peakSharpness * 15;
+
+    // Penalización específica por canal
     const penalty = this.channelPenalty(acBuf, head, len, preset);
 
-    return clamp(Math.round((periodicityScore + stabilityScore) * penalty), 0, 100);
+    const totalScore = (periodicityScore + stabilityScore + snrComponent + sharpnessComponent) * penalty;
+    return clamp(Math.round(totalScore), 0, 100);
   }
 
   /** Autocorrelación sobre buffer AC para medir periodicidad */

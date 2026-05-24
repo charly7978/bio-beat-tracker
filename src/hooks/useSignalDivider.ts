@@ -8,6 +8,14 @@ export interface DividerHRChannel {
   dcValue: number;
   quality: number;
   confidence: number;
+  /** SNR espectral (dB) — Welch PSD method */
+  snrDb: number;
+  /** SNR normalizado 0-1 */
+  snrScore: number;
+  /** Frecuencia dominante en banda HR (Hz) */
+  dominantFreq: number;
+  /** Sharpness del pico espectral (0-1) */
+  peakSharpness: number;
   rawR: number;
   rawG: number;
   rawB: number;
@@ -62,6 +70,10 @@ export function useSignalDivider() {
         dcValue: lastResultRef.current.channels.hr.dcValue,
         quality: lastResultRef.current.channels.hr.quality,
         confidence: lastResultRef.current.channels.hr.confidence,
+        snrDb: lastResultRef.current.channels.hr.snrDb,
+        snrScore: lastResultRef.current.channels.hr.snrScore,
+        dominantFreq: lastResultRef.current.channels.hr.dominantFreq,
+        peakSharpness: lastResultRef.current.channels.hr.peakSharpness,
         rawR: lastResultRef.current.channels.hr.rawR,
         rawG: lastResultRef.current.channels.hr.rawG,
         rawB: lastResultRef.current.channels.hr.rawB,
