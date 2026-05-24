@@ -13,6 +13,8 @@ import {
 } from '../lib/device/cameraDeviceProfile';
 import { bpmFromEmittedRr, decidePeakEmit } from '../lib/measurement/peakEmitPolicy';
 import type { FingerPlacementMode } from '../types/signal';
+import { PeakScorer } from './onnx/PeakScorer';
+import { SqiRefiner } from './onnx/SqiRefiner';
 
 export interface HeartBeatProcessDiagnostics {
   ensemble?: Record<string, unknown>;
@@ -60,6 +62,11 @@ export class HeartBeatProcessor {
   /** SQI del pipeline PPG (SignalQualityIndex) — fuente primaria para el ensemble */
   private ppgSqi = 0;
   private ppgPerfusionIndex = 0;
+
+  private readonly peakScorer = new PeakScorer();
+  private readonly sqiRefiner = new SqiRefiner();
+  private nnScoredPeakConfidence = 0;
+  private nnRefinedSqi = 0;
 
   constructor() {
     this.setupAudio();
@@ -179,6 +186,18 @@ export class HeartBeatProcessor {
     }
     this.signalQualityIndex = this.calculateSQI(range, this.cachedPeriodicity.score);
 
+    this.sqiRefiner.refine({
+      signalWindow: new Float32Array(this.signalBuffer.slice(-128)),
+      rawSqi: this.signalQualityIndex,
+      rrStability: this.rrIntervals.length >= 2 ? 1 - this.calculateRRCV() : 0,
+      periodicityScore: this.cachedPeriodicity.score,
+      perfusionIndex: this.ppgPerfusionIndex,
+    }).then((nn) => {
+      if (nn) {
+        this.nnRefinedSqi = nn.refinedSqi;
+      }
+    }).catch(() => {});
+
     let isPeak = false;
     let emitReason = 'WAITING';
     const sampleRate = this.estimateSampleRate();
@@ -255,6 +274,15 @@ export class HeartBeatProcessor {
             }
           }
         }
+
+        this.peakScorer.evaluate({
+          signalWindow: new Float32Array(this.signalBuffer.slice(-256)),
+          candidateIndex: this.signalBuffer.length - 1,
+          sqi: this.signalQualityIndex,
+          perfusionIndex: this.ppgPerfusionIndex,
+        }).then((nn) => {
+          if (nn) this.nnScoredPeakConfidence = nn.confidence;
+        }).catch(() => {});
 
         const instantBpm = bpmFromEmittedRr(this.rrIntervals);
         this.consecutivePeaks += 1;
@@ -471,14 +499,23 @@ export class HeartBeatProcessor {
     return sqi;
   }
 
+  private calculateRRCV(): number {
+    if (this.rrIntervals.length < 2) return 1;
+    const m = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
+    const v = this.rrIntervals.reduce((a, rr) => a + (rr - m) ** 2, 0) / this.rrIntervals.length;
+    return Math.sqrt(v) / Math.max(1, m);
+  }
+
   private calculateConfidence(ensembleConf: number, isPeak: boolean): number {
-    const sqiFactor = this.signalQualityIndex / 100;
+    const effectiveSqi = this.nnRefinedSqi > 0 ? this.nnRefinedSqi : this.signalQualityIndex;
+    const sqiFactor = effectiveSqi / 100;
     const peakSupport = Math.min(1, this.consecutivePeaks / 5);
     const ens = clamp(ensembleConf, 0, 1);
     const peakBoost = isPeak ? 0.12 : 0;
+    const nnBoost = this.nnScoredPeakConfidence > 0 ? this.nnScoredPeakConfidence * 0.1 : 0;
 
     if (this.rrIntervals.length < 2) {
-      return clamp(sqiFactor * 0.22 + peakSupport * 0.22 + ens * 0.36 + peakBoost, 0, 0.85);
+      return clamp(sqiFactor * 0.22 + peakSupport * 0.22 + ens * 0.36 + peakBoost + nnBoost, 0, 0.85);
     }
 
     const mean = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
@@ -487,7 +524,7 @@ export class HeartBeatProcessor {
     const rrStability = clamp(1 - cv * 1.5, 0, 1);
 
     return clamp(
-      rrStability * 0.32 + peakSupport * 0.22 + sqiFactor * 0.2 + ens * 0.16 + peakBoost,
+      rrStability * 0.32 + peakSupport * 0.22 + sqiFactor * 0.2 + ens * 0.16 + peakBoost + nnBoost,
       0,
       1,
     );

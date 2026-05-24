@@ -7,6 +7,7 @@ import {
   saveBackpressureConfig,
   type BackpressureConfig,
 } from '../lib/perf/backpressureConfig';
+import { Denoiser } from '../modules/onnx/Denoiser';
 
 /**
  * Hook que adapta PPGSignalProcessor para React.
@@ -15,6 +16,7 @@ import {
  */
 export const useSignalProcessor = () => {
   const processorRef = useRef<PPGSignalProcessor | null>(null);
+  const denoiserRef = useRef<Denoiser | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const isProcessingRef = useRef(false);
   const [lastSignal, setLastSignal] = useState<ProcessedSignal | null>(null);
@@ -75,6 +77,7 @@ export const useSignalProcessor = () => {
 
     try {
       processorRef.current = new PPGSignalProcessor(onSignalReady, onError);
+      denoiserRef.current = new Denoiser();
       try { processorRef.current.setBackpressureConfig(loadBackpressureConfig()); } catch {}
       initializationState.current = 'READY';
     } catch {
@@ -87,6 +90,7 @@ export const useSignalProcessor = () => {
         processorRef.current.stop();
         processorRef.current = null;
       }
+      denoiserRef.current = null;
       initializationState.current = 'IDLE';
       instanceLock.current = false;
     };
