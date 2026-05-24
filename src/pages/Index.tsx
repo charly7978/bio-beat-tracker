@@ -75,6 +75,15 @@ const Index = () => {
   const cameraRef = useRef<CameraViewHandle>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
+  // Crear canvas fuera del ciclo de vida de React para que esté disponible
+  // cuando handleStreamReady dispare startFrameLoop (sin race condition).
+  if (!canvasRef.current && typeof document !== 'undefined') {
+    const c = document.createElement('canvas');
+    c.width = 320;
+    c.height = 240;
+    canvasRef.current = c;
+    ctxRef.current = c.getContext('2d', { willReadFrequently: true, alpha: false });
+  }
   const frameLoopRef = useRef<number | null>(null);
   const videoFrameLoopRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
@@ -278,19 +287,6 @@ const Index = () => {
     }
   }, [currentStride, isMonitoring, getBackpressureConfig]);
 
-  // CANVAS PARA CAPTURA
-  useEffect(() => {
-    if (!canvasRef.current) {
-      canvasRef.current = document.createElement('canvas');
-      canvasRef.current.width = 320;
-      canvasRef.current.height = 240;
-      ctxRef.current = canvasRef.current.getContext('2d', { 
-        willReadFrequently: true,
-        alpha: false 
-      });
-    }
-  }, []);
-
   // PANTALLA COMPLETA
   const enterFullScreen = useCallback(async () => {
     if (isFullscreen) return;
@@ -356,14 +352,10 @@ const Index = () => {
   // === LOOP DE CAPTURA — requestVideoFrameCallback con fallback RAF ===
   const startFrameLoop = useCallback(() => {
     if (isProcessingRef.current) return;
-    isProcessingRef.current = true;
-    
     const canvas = canvasRef.current;
     const ctx = ctxRef.current;
-    if (!canvas || !ctx) {
-      isProcessingRef.current = false;
-      return;
-    }
+    if (!canvas || !ctx) return;
+    isProcessingRef.current = true;
 
     const captureOneFrame = (frameTimestampMs?: number) => {
       if (!isProcessingRef.current) return;
@@ -754,6 +746,12 @@ const Index = () => {
     displaySpo2Ref.current = 0;
     displayBpRef.current = { systolic: 0, diastolic: 0 };
     lastHbInputRef.current = 0;
+    // Resetear throttles para que el primer post-contacto no espere ventana muerta
+    lastHrPushRef.current = 0;
+    lastVitalsPushRef.current = 0;
+    lastRrPushRef.current = 0;
+    lastSignalPushRef.current = 0;
+    lastDiagPushRef.current = 0;
   }, [resetHeartBeat]);
 
   const handleSignalRealtime = useCallback((lastSignal: ProcessedSignal) => {
@@ -808,9 +806,6 @@ const Index = () => {
       underexposedFramesRef.current += 1;
     }
 
-    if (vitalSignsFrameCounter.current % 45 === 0) {
-      syncCameraHints();
-    }
     const hints = cameraHintsRef.current;
     const Q = VITAL_THRESHOLDS.QUALITY;
     const minConf =
@@ -1197,7 +1192,6 @@ const Index = () => {
     processVitalSigns,
     setRGBData,
     getRGBStats,
-    syncCameraHints,
     setFingerPlacementMode,
     setVitalsPlacementMode,
     resetFingerContactSession,
