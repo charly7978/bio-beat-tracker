@@ -32,11 +32,11 @@ export function isMotorolaLikeUserAgent(ua = typeof navigator !== 'undefined' ? 
 const TOLERANT_DEFAULT: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 'torchReliable' | 'constrained'> = {
   minPiScale: 0.1,
   ensembleConfScale: 0.5,
-  liveFingerMissGrace: 32,
+  liveFingerMissGrace: 16,
   fingerConfirmFrames: 3,
-  instantLostToUnstable: 22,
-  instantLostToNoContact: 48,
-  bufferResetAfterNoContact: 80,
+  instantLostToUnstable: 10,
+  instantLostToNoContact: 22,
+  bufferResetAfterNoContact: 30,
   gateRangeScale: 0.65,
 };
 

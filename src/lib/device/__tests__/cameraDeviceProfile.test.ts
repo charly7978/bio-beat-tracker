@@ -17,7 +17,7 @@ describe('cameraDeviceProfile', () => {
   it('Samsung/Motorola usan perfil tolerante por defecto', () => {
     const moto = inferCameraRuntimeHints({ userAgent: 'Motorola moto g84' });
     expect(moto.constrained).toBe(true);
-    expect(moto.instantLostToUnstable).toBeGreaterThan(10);
+    expect(moto.instantLostToUnstable).toBe(10);
 
     const sam = inferCameraRuntimeHints({ userAgent: 'Samsung SM-A546' });
     expect(sam.constrained).toBe(true);

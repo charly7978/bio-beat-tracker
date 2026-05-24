@@ -12,6 +12,8 @@ export interface FingerRgbSnapshot {
 /**
  * Firma mínima de dedo con flash: R domina y B bajo (hemoglobina).
  * Rechaza escena iluminada por flash sin contacto (R≈G≈B alto).
+ * Umbrales ultra-permisivos: cualquier escena con suficiente rojo
+ * dominante pasa; la pulsación es quien confirma o descarta después.
  */
 export function hasFingerHemoglobinSignature(s: FingerRgbSnapshot): boolean {
   const F = VITAL_THRESHOLDS.FINGER;
@@ -30,11 +32,8 @@ export function hasFingerHemoglobinSignature(s: FingerRgbSnapshot): boolean {
   if (rb < F.HEMOGLOBIN_MIN_RB) return false;
   if (redDominance < F.MIN_RED_DOMINANCE) return false;
 
-  // Flash al aire: canal verde/azul aún altos frente a rojo
-  if (rg < 1.14 && rb < 1.28) return false;
-  if (g > 95 && b > 80 && redDominance < 30) return false;
-  if (total > 200 && rb < 1.38) return false;
-  if (total > 120 && rb < 1.42 && rg < 1.2) return false;
+  // Solo flash al aire extremo (R≈G≈B alto muy brillante)
+  if (total > 160 && g > 120 && b > 100 && rb < 1.25) return false;
 
   return (
     s.coverage >= F.MIN_COVERAGE * 0.95 &&

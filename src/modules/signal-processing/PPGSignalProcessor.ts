@@ -171,6 +171,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
   private lastInstantFinger = false;
   private readonly FINGER_CONFIRM_FRAMES = VITAL_THRESHOLDS.FINGER.FINGER_CONFIRM_FRAMES;
+  // Pulsatility verification: after finger acquisition, if no pulse detected for N frames,
+  // force no-contact (rejects red surfaces, flash-to-air, etc.)
+  private pulsatileGraceCounter = 0;
+  private readonly PULSATILE_GRACE_FRAMES = 40; // ~1.3s @ 30fps
+  private lastPulsatileFrame = 0;
 
   // Suavizado temporal — más lentos = más estable
   private smoothedRed = 0;
@@ -608,6 +613,23 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       }
     }
 
+    // Pulsatility verification: después de adquirir dedo, si no hay pulsación en N frames,
+    // forzar pérdida de contacto (evita medir sobre superficies rojas inertes).
+    if (this.fingerDetected && this.contactState !== 'NO_CONTACT') {
+      if (this.hasPulsatility()) {
+        this.pulsatileGraceCounter = 0;
+        this.lastPulsatileFrame = this.frameCount;
+      } else {
+        this.pulsatileGraceCounter++;
+        if (this.pulsatileGraceCounter > this.PULSATILE_GRACE_FRAMES) {
+          // Superó el período de gracia sin pulsación → no es un dedo vivo
+          this.setNoContact(true);
+        }
+      }
+    } else {
+      this.pulsatileGraceCounter = 0;
+    }
+
     if (previousState === 'NO_CONTACT' && this.contactState !== 'NO_CONTACT') {
       const minGap = hints.bufferResetAfterNoContact;
       if (this.consecutiveNoContactFrames >= minGap) {
@@ -656,6 +678,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.instantLostStreak = 0;
     this.lastInstantFinger = false;
     this.liveFingerMissStreak = 0;
+    this.pulsatileGraceCounter = 0;
 
     const shouldHard =
       hardReset &&
@@ -707,6 +730,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       fingerScore: roi.fingerScore,
       fingerTileCount: roi.fingerTileCount,
     };
+  }
+
+  /** Verifica si hay pulsación real (PI o CV de ROI). */
+  private hasPulsatility(): boolean {
+    const F = VITAL_THRESHOLDS.FINGER;
+    return (
+      this.cachedPI >= F.PULSE_HOLD_MIN_PI ||
+      this.lastRoiRedCv >= F.ROI_RED_CV_MIN * 0.5
+    );
   }
 
   private isLiveFingerFrame(roi: ROIMetrics): boolean {
@@ -792,11 +824,16 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private computeRoiRect(width: number, height: number) {
-    const roiSize = Math.min(width, height) * VITAL_THRESHOLDS.FINGER.ROI_SIZE_FRACTION;
-    const startX = Math.floor((width - roiSize) / 2);
-    const startY = Math.floor((height - roiSize) / 2);
-    const side = Math.floor(roiSize);
-    return { startX, startY, endX: startX + side, endY: startY + side, roiW: side, roiH: side };
+    // ROI = frame completo (ya no es un cuadrado central).
+    // El dedo puede estar en cualquier parte del frame; la pulsación confirma presencia.
+    return { 
+      startX: 0, 
+      startY: 0, 
+      endX: width, 
+      endY: height, 
+      roiW: width, 
+      roiH: height 
+    };
   }
 
   private signalRoiFromMetrics(roi: ROIMetrics) {
