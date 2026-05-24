@@ -15,10 +15,13 @@ import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
 import type { ContactState } from "@/types/signal";
 import { usePerfTelemetry } from "@/hooks/usePerfTelemetry";
 import type { BackpressureConfig } from "@/lib/perf/backpressureConfig";
+import { useDualCamera } from "@/hooks/useDualCamera";
+import type { RppgResult } from "@/modules/rppg";
 
 const Index = () => {
   // Canvas sincrónico (render-phase, fuera de effects)
   const cameraRef = useRef<CameraViewHandle>(null);
+  const _rppgResultRef = useRef<RppgResult | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   if (!canvasRef.current && typeof document !== 'undefined') {
@@ -28,6 +31,9 @@ const Index = () => {
     canvasRef.current = c;
     ctxRef.current = c.getContext('2d', { willReadFrequently: true, alpha: false });
   }
+
+  // Dual camera setup (rPPG front + PPG back)
+  const dualCamera = useDualCamera({ sqiThreshold: 30, switchDelayMs: 2000 });
 
   // Hooks de procesamiento (sin cambios)
   const { 
@@ -254,11 +260,17 @@ const Index = () => {
     return () => clearInterval(interval);
   }, [router.vitalSigns.isCalibrating, getCalibrationProgress]);
 
+  useEffect(() => {
+    dualCamera.updateBackSqi(lastSignal?.quality ?? 0);
+  }, [lastSignal?.quality, dualCamera]);
+
   const handleToggleMonitoring = () => {
     if (session.isMonitoring) {
+      dualCamera.stopCameras();
       session.finalizeMeasurement();
     } else {
       session.startMonitoring();
+      dualCamera.startCameras();
     }
   };
 
