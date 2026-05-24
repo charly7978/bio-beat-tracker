@@ -58,6 +58,9 @@ export function useDualCamera({
   const switchingRef = useRef(false);
   const lastSwitchTimeRef = useRef(0);
   const rppgCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rppgCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const frontFrameLoopRef = useRef<number | null>(null);
+  const isFrontProcessingRef = useRef(false);
 
   useEffect(() => {
     if (!rppgCanvasRef.current && typeof document !== 'undefined') {
@@ -65,6 +68,7 @@ export function useDualCamera({
       c.width = 320;
       c.height = 240;
       rppgCanvasRef.current = c;
+      rppgCtxRef.current = c.getContext('2d', { willReadFrequently: true, alpha: false });
     }
     chromRppgRef.current = new ChromRppg({ windowSize: 150, sampleRate: 30 });
   }, []);
@@ -155,6 +159,43 @@ export function useDualCamera({
     [],
   );
 
+  const startFrontProcessing = useCallback(() => {
+    if (isFrontProcessingRef.current) return;
+    const canvas = rppgCanvasRef.current;
+    const ctx = rppgCtxRef.current;
+    if (!canvas || !ctx) return;
+    isFrontProcessingRef.current = true;
+
+    const loop = () => {
+      if (!isFrontProcessingRef.current) return;
+      const video = frontVideoRef.current;
+      if (!video || video.readyState < 2 || video.videoWidth === 0) {
+        frontFrameLoopRef.current = requestAnimationFrame(loop);
+        return;
+      }
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      processFrontFrame(imageData);
+
+      frontFrameLoopRef.current = requestAnimationFrame(loop);
+    };
+
+    frontFrameLoopRef.current = requestAnimationFrame(loop);
+  }, [processFrontFrame]);
+
+  const stopFrontProcessing = useCallback(() => {
+    isFrontProcessingRef.current = false;
+    if (frontFrameLoopRef.current !== null) {
+      cancelAnimationFrame(frontFrameLoopRef.current);
+      frontFrameLoopRef.current = null;
+    }
+    setRppmLiveBpm(0);
+    setRppgConfidence(0);
+  }, []);
+
   const updateBackSqi = useCallback((sqi: number) => {
     setBackSqi(sqi);
 
@@ -187,6 +228,8 @@ export function useDualCamera({
     rppgConfidence,
     startCameras,
     stopCameras,
+    startFrontProcessing,
+    stopFrontProcessing,
     processFrontFrame,
     updateBackSqi,
     setActiveCamera,

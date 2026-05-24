@@ -266,11 +266,14 @@ const Index = () => {
 
   const handleToggleMonitoring = () => {
     if (session.isMonitoring) {
+      dualCamera.stopFrontProcessing();
       dualCamera.stopCameras();
       session.finalizeMeasurement();
     } else {
       session.startMonitoring();
       dualCamera.startCameras();
+      // Start front camera rPPG processing after a short delay (allow camera to init)
+      setTimeout(() => dualCamera.startFrontProcessing(), 1500);
     }
   };
 
