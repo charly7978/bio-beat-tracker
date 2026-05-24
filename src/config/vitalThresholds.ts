@@ -14,21 +14,27 @@ export const VITAL_THRESHOLDS = {
     PHYSIOLOGICAL_RR_MAX_MS: 2200,
   },
   
-  // BLOOD OXYGEN (SpO2) — modelo ratio-of-ratios cámara+flash (verde como proxy IR)
+  // BLOOD OXYGEN (SpO2) — modelo multi-ratio ensemble para cámara RGB+flash
+  // Sin canal IR real, se usan relaciones R/G, R/B, G/B para extraer algo de
+  // rango dinámico. El ensemble promedia ponderado por calidad de cada ratio.
   SPO2: {
     MIN_VALID: 88,
-    MAX_VALID: 98,
+    MAX_VALID: 99,
     CRITICAL_LOW: 90,
     R_VALUE_MIN: 0.1,
-    R_VALUE_MAX: 2.5,
+    R_VALUE_MAX: 4.0,
     /** SpO2 = intercept − slope × R_mediana (calibración smartphone) */
-    R_MODEL_INTERCEPT: 101,
-    R_MODEL_SLOPE: 10,
+    R_MODEL_INTERCEPT: 103,
+    R_MODEL_SLOPE: 12,
     DISPLAY_CAP: 99,
     R_HISTORY_SAMPLES: 7,
     MIN_PI_PERCENT: 0.02,
     MIN_RED_DC: 10,
     MIN_GREEN_DC: 5,
+    MIN_BLUE_DC: 5,
+    /** Si la varianza de R en la ventana es menor a este umbral, la señal
+     *  está "plana" (el SpO₂ no varía realmente). Baja confianza. */
+    R_MIN_VARIANCE: 0.0005,
   },
   
   /** Geometría dedo: unificar punta (HR/SpO2) y almohadilla (PA) */

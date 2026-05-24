@@ -40,6 +40,7 @@ import {
   DEFAULT_PULSE_AGC,
   resetPulseAgc,
 } from './shared/pulseAgc';
+import { transformPixel, type VisualTransform } from './visualTransform';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -129,6 +130,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private tileXLut: Int8Array | null = null;
   private tileYLut: Int8Array | null = null;
   private tileLutKey = '';
+
+  /** Transformación visual aplicada a píxeles RAW antes de promediar tiles.
+   *  null = sin transformación (comportamiento legacy).
+   *  Activar con setVisualTransform() cuando se configure el canal. */
+  private visualTransform: VisualTransform | null = null;
+
+  setVisualTransform(t: VisualTransform | null): void {
+    this.visualTransform = t;
+  }
 
   // AC/DC
   private redDC = 0;
@@ -793,6 +803,20 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return { x: roi.roiX, y: roi.roiY, width: roi.roiW, height: roi.roiH };
   }
 
+  private rebuildTileLut(roiWidth: number, roiHeight: number): void {
+    this.tileLutKey = `${roiWidth}x${roiHeight}`;
+    const xLut = new Int8Array(roiWidth);
+    const yLut = new Int8Array(roiHeight);
+    for (let px = 0; px < roiWidth; px++) {
+      xLut[px] = Math.min(this.TILE_COLUMNS - 1, Math.floor((px / roiWidth) * this.TILE_COLUMNS));
+    }
+    for (let py = 0; py < roiHeight; py++) {
+      yLut[py] = Math.min(this.TILE_ROWS - 1, Math.floor((py / roiHeight) * this.TILE_ROWS));
+    }
+    this.tileXLut = xLut;
+    this.tileYLut = yLut;
+  }
+
   private buildFingerDiagnostics(
     roi: ROIMetrics,
     motionArtifact: boolean,
@@ -866,19 +890,45 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const roiWidth = Math.max(1, endX - startX);
     const roiHeight = Math.max(1, endY - startY);
 
-    // Sample every Nth pixel — N adaptativo (3 normal, 4 bajo backpressure)
-    const stride = this.pixelStride;
-    for (let y = startY; y < endY; y += stride) {
-      for (let x = startX; x < endX; x += stride) {
-        const i = (y * width + x) * 4;
-        const tileX = Math.min(this.TILE_COLUMNS - 1, Math.floor(((x - startX) / roiWidth) * this.TILE_COLUMNS));
-        const tileY = Math.min(this.TILE_ROWS - 1, Math.floor(((y - startY) / roiHeight) * this.TILE_ROWS));
-        const tile = tiles[tileY * this.TILE_COLUMNS + tileX];
+    const lutKey = `${roiWidth}x${roiHeight}`;
+    if (lutKey !== this.tileLutKey) {
+      this.rebuildTileLut(roiWidth, roiHeight);
+    }
 
-        tile.red += data[i];
-        tile.green += data[i + 1];
-        tile.blue += data[i + 2];
-        tile.count++;
+    // Sample every Nth pixel — N adaptativo (3 normal, 4 bajo backpressure)
+    // Opcionalmente aplica transformación visual por canal antes de promediar
+    const stride = this.pixelStride;
+    const xLut = this.tileXLut!;
+    const yLut = this.tileYLut!;
+    const vt = this.visualTransform;
+    if (vt) {
+      for (let y = startY; y < endY; y += stride) {
+        const rowOffset = y - startY;
+        for (let x = startX; x < endX; x += stride) {
+          const i = (y * width + x) * 4;
+          const col = x - startX;
+          const tileIdx = yLut[rowOffset] * this.TILE_COLUMNS + xLut[col];
+          const tile = tiles[tileIdx];
+          const [r, g, b] = transformPixel(data[i], data[i + 1], data[i + 2], vt);
+          tile.red += r;
+          tile.green += g;
+          tile.blue += b;
+          tile.count++;
+        }
+      }
+    } else {
+      for (let y = startY; y < endY; y += stride) {
+        const rowOffset = y - startY;
+        for (let x = startX; x < endX; x += stride) {
+          const i = (y * width + x) * 4;
+          const col = x - startX;
+          const tileIdx = yLut[rowOffset] * this.TILE_COLUMNS + xLut[col];
+          const tile = tiles[tileIdx];
+          tile.red += data[i];
+          tile.green += data[i + 1];
+          tile.blue += data[i + 2];
+          tile.count++;
+        }
       }
     }
 
@@ -1445,6 +1495,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return {
       redAC: this.redAC, redDC: this.redDC,
       greenAC: this.greenAC, greenDC: this.greenDC,
+      blueAC: this.blueAC, blueDC: this.blueDC,
       rgRatio: this.greenDC > 0 ? this.redDC / this.greenDC : 0,
       ratioOfRatios: this.greenDC > 0 && this.greenAC > 0 && this.redDC > 0
         ? (this.redAC / this.redDC) / (this.greenAC / this.greenDC)

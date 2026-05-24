@@ -64,7 +64,7 @@ interface VitalSignsProcessorAPI {
   ) => VitalSignsResult;
   setPlacementMode: (mode: FingerPlacementMode) => void;
   setRGBData: (data: RGBData) => void;
-  getRGBStats: () => { redAC: number; redDC: number; greenAC: number; greenDC: number; rgRatio: number; ratioOfRatios: number };
+  getRGBStats: () => { redAC: number; redDC: number; greenAC: number; greenDC: number; blueAC: number; blueDC: number; rgRatio: number; ratioOfRatios: number };
 }
 
 interface UseSignalRouterInput {
@@ -572,6 +572,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
           redDC: rgbStats.redDC,
           greenAC: rgbStats.greenAC,
           greenDC: rgbStats.greenDC,
+          blueAC: rgbStats.blueAC,
+          blueDC: rgbStats.blueDC,
         });
       }
 

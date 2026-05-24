@@ -195,12 +195,13 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
 
     const waitForVideo = (video: HTMLVideoElement): Promise<void> => {
       return new Promise((resolve) => {
-        if (video.readyState >= 2 && video.videoWidth > 0) {
+        if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA && video.videoWidth > 0) {
           resolve();
           return;
         }
-        const onMeta = async () => {
-          video.removeEventListener("loadedmetadata", onMeta);
+        const onReady = async () => {
+          video.removeEventListener("canplay", onReady);
+          video.removeEventListener("loadedmetadata", onReady);
           try {
             await video.play();
           } catch {
@@ -208,7 +209,12 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
           }
           resolve();
         };
-        video.addEventListener("loadedmetadata", onMeta);
+        const onFallback = () => {
+          video.removeEventListener("loadedmetadata", onFallback);
+          onReady();
+        };
+        video.addEventListener("canplay", onReady);
+        video.addEventListener("loadedmetadata", onFallback);
       });
     };
 
@@ -230,6 +236,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
             facingMode: { ideal: "environment" },
             width: { ideal: 640, max: 960 },
             height: { ideal: 480, max: 720 },
+            aspectRatio: { ideal: 4 / 3 },
             // 30 fps estable: varios Motorola fallan con ideal 60 + min 24 (overconstraint / AE inestable).
             frameRate: { ideal: 30, min: 15, max: 30 },
           },
@@ -251,12 +258,8 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
         const track = stream.getVideoTracks()[0];
         if (track) {
           await stabilizeTrack(track);
-          let torchOn = await activateTorch(track);
-          if (!torchOn) {
-            await new Promise((r) => setTimeout(r, 400));
-            torchOn = await activateTorch(track);
-          }
-          if (torchOn) log.info("Flash activado");
+          const torchResult = await activateTorch(track);
+          if (torchResult) log.info("Flash activado");
           else log.warn("Flash no confirmado — se usará perfil de cámara tolerante");
         }
 

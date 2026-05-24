@@ -38,6 +38,8 @@ export interface RGBData {
   redDC: number;
   greenAC: number;
   greenDC: number;
+  blueAC: number;
+  blueDC: number;
 }
 
 interface RRData {
@@ -92,13 +94,14 @@ export class VitalSignsProcessor {
   private frameCount = 0;  // Contador continuo para logging/diagnóstico
   
   // RGB para SpO2
-  private rgbData: RGBData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
+  private rgbData: RGBData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0, blueAC: 0, blueDC: 0 };
   
   // Gating de estabilidad (Consistencia)
   private stableFramesCount: number = 0;
   private readonly STABILITY_SPO2_FRAMES = 45;  // ~1.5s para SpO2 (actualización rápida)
   private readonly STABILITY_BP_FRAMES = VITAL_THRESHOLDS.BP.STABILITY_FRAMES_HIGH;
   private lastCoherentSpO2: number = 0;
+  private lastRSignalVariance: number = 0;
   
   // Suavizado adaptativo para estabilidad SIN perder respuesta
   // Alpha más bajo = más suavizado = lecturas más estables
@@ -162,6 +165,7 @@ export class VitalSignsProcessor {
     this.respirationHistory.reset();
     this.stableFramesCount = 0;
     this.lastCoherentSpO2 = 0;
+    this.lastRSignalVariance = 0;
     this.lastPpgPerfusionIndex = 0;
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
@@ -290,16 +294,21 @@ export class VitalSignsProcessor {
     }
   }
 
-  /** SpO2 ratio-of-ratios: no requiere ventana RR, solo RGB + perfusión mínima */
+  /** SpO2 ratio-of-ratios: no requiere ventana RR, solo RGB + perfusión mínima.
+   *  Si la varianza de R es muy baja, la señal está "plana" y el SpO₂ no es
+   *  confiable (el modelo siempre dará ~98). */
   private getSpo2Confidence(): 'LOW' | 'INVALID' {
     const sq = this.measurements.signalQuality;
     const piRgb = this.rgbData.greenDC > 0 ? this.rgbData.greenAC / this.rgbData.greenDC : 0;
     const pi = Math.max(piRgb, this.lastPpgPerfusionIndex);
-    if (SignalQualityIndex.isAdequateForLiveVitals(sq, pi)) return 'LOW';
-    if (sq >= 8 && pi >= 0.00015 && this.rgbData.redDC >= 10 && this.rgbData.greenDC >= 5) {
-      return 'LOW';
+    const adequateSQI = SignalQualityIndex.isAdequateForLiveVitals(sq, pi);
+    const marginalSQI = sq >= 8 && pi >= 0.00015 && this.rgbData.redDC >= 10 && this.rgbData.greenDC >= 5;
+    if (!adequateSQI && !marginalSQI) return 'INVALID';
+    const rValueHistory = this.rValueHistory;
+    if (rValueHistory.length >= 3 && this.lastRSignalVariance < VITAL_THRESHOLDS.SPO2.R_MIN_VARIANCE) {
+      return 'INVALID';
     }
-    return 'INVALID';
+    return 'LOW';
   }
 
   private currentPerfusionIndex(): number {
@@ -681,56 +690,74 @@ export class VitalSignsProcessor {
    */
   // Buffer para valores R (Ratio-of-Ratios) para filtrado de mediana
   private rValueHistory: number[] = [];
+  /** Calcula SpO₂ como ensemble ponderado de múltiples relaciones de canal.
+   *  Sin canal IR real, cada relación de canal (R/G, R/B, G/B) aporta una
+   *  perspectiva distinta. Se ponderan por calidad de perfusión de cada par. */
   private calculateSpO2Raw(): number {
     const spoCfg = VITAL_THRESHOLDS.SPO2;
-    const { redAC, redDC, greenAC, greenDC } = this.rgbData;
+    const { redAC, redDC, greenAC, greenDC, blueAC, blueDC } = this.rgbData;
 
-    if (redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC) return 0;
-    
-    const piRed = (redAC / redDC) * 100;   // como %
+    if (redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC || blueDC < spoCfg.MIN_BLUE_DC) return 0;
+
+    const piRed = (redAC / redDC) * 100;
     const piGreen = (greenAC / greenDC) * 100;
+    const piBlue = blueDC > 0 ? (blueAC / blueDC) * 100 : 0;
 
-    // Log de depuración (~cada 0.3s)
     if (this.frameCount % 10 === 0) {
-      log.info(`[SpO2 Debug] ACr:${redAC.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${greenAC.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}%`);
+      log.info(`[SpO2 Debug] ACr:${redAC.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${greenAC.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}% | ACb:${blueAC.toFixed(3)} DCb:${blueDC.toFixed(0)} PIb:${piBlue.toFixed(3)}%`);
     }
-    
+
     if (piRed < spoCfg.MIN_PI_PERCENT || piGreen < spoCfg.MIN_PI_PERCENT) return 0;
-    
+
+    // Calcular múltiples ratios de canal
     const ratioRed = redAC / redDC;
     const ratioGreen = greenAC / greenDC;
+    const ratioBlue = blueDC > 0 ? blueAC / blueDC : 0;
     if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) return 0;
-    
-    const currentR = ratioRed / ratioGreen;
-    
-    // Rango físico de R para tejido humano con cámara+flash:
-    // Con dedo en flash blanco, rojo está cerca de saturación → R puede ser bajo (0.1+)
-    if (currentR < spoCfg.R_VALUE_MIN || currentR > spoCfg.R_VALUE_MAX) {
-      if (this.frameCount % 15 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
-      return 0;
+
+    // Ensemble: R_gr = R/G, R_gb = G/B, R_rb = R/B
+    const ratios: { r: number; weight: number }[] = [];
+    ratios.push({ r: ratioRed / ratioGreen, weight: 1.0 });
+    if (ratioBlue > 0 && isFinite(ratioBlue)) {
+      ratios.push({ r: ratioGreen / ratioBlue, weight: 0.6 });
+      ratios.push({ r: ratioRed / ratioBlue, weight: 0.4 });
     }
 
-    // Acumular R para filtrado de mediana
+    // Ponderar y promediar
+    let weightedR = 0;
+    let totalWeight = 0;
+    for (const { r, weight } of ratios) {
+      if (r >= spoCfg.R_VALUE_MIN && r <= spoCfg.R_VALUE_MAX) {
+        weightedR += r * weight;
+        totalWeight += weight;
+      }
+    }
+    if (totalWeight === 0) return 0;
+    const currentR = weightedR / totalWeight;
+
+    // Acumular R ensemble para filtrado de mediana y varianza
     this.rValueHistory.push(currentR);
     if (this.rValueHistory.length > spoCfg.R_HISTORY_SAMPLES) {
       this.rValueHistory.shift();
     }
-
     if (this.rValueHistory.length < 3) return 0;
 
+    // Mediana
     const sortedR = [...this.rValueHistory].sort((a, b) => a - b);
     const medianR = sortedR[Math.floor(sortedR.length / 2)] ?? 0;
 
+    // Varianza: detectar señal plana (SpO₂ atascado)
+    const meanR = this.rValueHistory.reduce((a, b) => a + b, 0) / this.rValueHistory.length;
+    const variance = this.rValueHistory.reduce((sum, r) => sum + (r - meanR) ** 2, 0) / this.rValueHistory.length;
+    this.lastRSignalVariance = variance;
+
     const spo2 = Math.min(
       spoCfg.DISPLAY_CAP,
-      Math.max(
-        spoCfg.MIN_VALID,
-        spoCfg.R_MODEL_INTERCEPT - spoCfg.R_MODEL_SLOPE * medianR,
-      ),
+      Math.max(spoCfg.MIN_VALID, spoCfg.R_MODEL_INTERCEPT - spoCfg.R_MODEL_SLOPE * medianR),
     );
-    
+
     if (this.frameCount % 30 === 0) {
-      log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}% (n=${this.rValueHistory.length})`);
+      log.info(`[SpO2] R_ens:${currentR.toFixed(3)} med:${medianR.toFixed(3)} var:${variance.toFixed(6)} → ${spo2.toFixed(0)}%`);
     }
 
     return Number.isFinite(spo2) ? spo2 : 0;
@@ -812,6 +839,7 @@ export class VitalSignsProcessor {
     this.frameCount = 0;
     this.stableFramesCount = 0;
     this.lastCoherentSpO2 = 0;
+    this.lastRSignalVariance = 0;
     this.measurements = {
       spo2: 0,
       systolicPressure: 0,
@@ -821,7 +849,7 @@ export class VitalSignsProcessor {
       lastArrhythmiaData: null,
       signalQuality: 0
     };
-    this.rgbData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
+    this.rgbData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0, blueAC: 0, blueDC: 0 };
     this.lastPpgPerfusionIndex = 0;
     this.displayHold = { spo2: 0, systolic: 0, diastolic: 0, missedFrames: 0 };
     this.isCalibrating = false;
