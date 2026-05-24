@@ -25,7 +25,6 @@ export class HeartBeatProcessor {
   private readonly MAX_PEAK_INTERVAL_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS;
 
   private signalBuffer: number[] = [];
-  private derivativeBuffer: number[] = [];
   private timestampBuffer: number[] = [];
   private readonly BUFFER_SIZE = 300;
 
@@ -156,12 +155,6 @@ export class HeartBeatProcessor {
       const hold = this.signalBuffer[this.signalBuffer.length - 1]! * 0.999;
       this.signalBuffer.push(hold);
       this.timestampBuffer.push(now);
-    }
-
-    const derivative = this.calculateDerivative();
-    this.derivativeBuffer.push(derivative);
-    if (this.derivativeBuffer.length > this.BUFFER_SIZE) {
-      this.derivativeBuffer.shift();
     }
 
     if (this.signalBuffer.length < 20) {
@@ -356,15 +349,6 @@ export class HeartBeatProcessor {
     };
   }
 
-  private calculateDerivative(): number {
-    const n = this.signalBuffer.length;
-    if (n < 3) return 0;
-    return (
-      (this.signalBuffer[n - 1] - this.signalBuffer[n - 3]) * 0.5 +
-      (this.signalBuffer[n - 1] - this.signalBuffer[n - 2]) * 0.5
-    );
-  }
-
   private normalizeSignal(value: number, windowLen: number = 150): { normalizedValue: number; range: number } {
     const recent = this.signalBuffer.slice(-windowLen);
     const { low, high, range } = robustBounds(recent);
@@ -457,10 +441,15 @@ export class HeartBeatProcessor {
     if (this.signalBuffer.length < 30) return 0;
 
     const rangeFactor = Math.min(1, range / 4) * 24;
-    const derivWindow = this.derivativeBuffer.slice(-60);
-    const meanAbsDeriv = derivWindow.length > 0
-      ? derivWindow.reduce((s, v) => s + Math.abs(v), 0) / derivWindow.length
-      : 0;
+    const nSig = this.signalBuffer.length;
+    let meanAbsDeriv = 0;
+    let derivCount = 0;
+    const derivStart = Math.max(0, nSig - 61);
+    for (let i = derivStart + 1; i < nSig; i++) {
+      meanAbsDeriv += Math.abs(this.signalBuffer[i] - this.signalBuffer[i - 1]);
+      derivCount++;
+    }
+    if (derivCount > 0) meanAbsDeriv /= derivCount;
     const slopeFactor = Math.min(1, meanAbsDeriv / 0.8) * 14;
 
     let rrFactor = 0;
@@ -545,7 +534,6 @@ export class HeartBeatProcessor {
   /** Limpia estado de picos/RR al quitar el dedo o al volver a colocarlo. */
   resetPeakTracking(): void {
     this.signalBuffer = [];
-    this.derivativeBuffer = [];
     this.timestampBuffer = [];
     this.rrIntervals = [];
     this.smoothBPM = 0;

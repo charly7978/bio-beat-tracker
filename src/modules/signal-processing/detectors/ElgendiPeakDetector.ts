@@ -1,6 +1,8 @@
 /**
  * Detector de picos sistólicos PPG inspirado en Elgendi et al. (TMA + bloques de interés).
  * Entrada: señal PPG (idealmente filtrada); salida: índices/tiempos con diagnóstico auditable.
+ *
+ * Optimizado: sliding MA O(n) con suma acumulativa, arrays pre-asignados.
  */
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../../../config/vitalThresholds';
@@ -9,7 +11,6 @@ import {
   bandpassOffline,
   detrendLinear,
   hampel1D,
-  movingAverage,
   prepareUniformPpgWindow,
   robustNormalizeZeroCenter,
 } from '../shared/dsp';
@@ -39,31 +40,47 @@ export interface ElgendiPeakDetectorOutput {
   parametersUsed: Record<string, number>;
 }
 
-function stdSample(x: number[]): number {
+function stdSample(x: number[], mean: number): number {
   if (x.length < 2) return 0;
-  const m = x.reduce((a, b) => a + b, 0) / x.length;
-  const v = x.reduce((s, val) => s + (val - m) ** 2, 0) / (x.length - 1);
-  return Math.sqrt(Math.max(0, v));
+  let v = 0;
+  for (let i = 0; i < x.length; i++) v += (x[i] - mean) ** 2;
+  return Math.sqrt(v / (x.length - 1));
+}
+
+/** MA deslizante O(n) con suma acumulativa, escribe en `out` pre-asignado. */
+function slidingMA(x: number[], win: number, out: number[]): void {
+  const n = x.length;
+  if (n === 0 || win < 1) return;
+  const half = Math.floor(win / 2);
+  let sum = 0;
+  let c = 0;
+  for (let i = -half; i <= half; i++) {
+    if (i >= 0 && i < n) { sum += x[i]; c++; }
+  }
+  out[0] = sum / c;
+  for (let i = 1; i < n; i++) {
+    const removeIdx = i - half - 1;
+    if (removeIdx >= 0) { sum -= x[removeIdx]; c--; }
+    const addIdx = i + half;
+    if (addIdx < n) { sum += x[addIdx]; c++; }
+    out[i] = c > 0 ? sum / c : x[i];
+  }
 }
 
 export class ElgendiPeakDetector {
   static detect(input: ElgendiPeakDetectorInput): ElgendiPeakDetectorOutput {
-    const rejectedCandidates: Array<{ index: number; reason: string }> = [];
-
     const minBpm = input.minBpm ?? PEAK_DETECTION_DEFAULTS.minBpm;
     const maxBpm = input.maxBpm ?? PEAK_DETECTION_DEFAULTS.maxBpm;
     const peakMs = input.peakWindowMs ?? PEAK_DETECTION_DEFAULTS.peakWindowMs;
     const beatMs = input.beatWindowMs ?? PEAK_DETECTION_DEFAULTS.beatWindowMs;
     const offsetW = input.offsetWeight ?? PEAK_DETECTION_DEFAULTS.offsetWeight;
     const minProm = input.minProminence ?? PEAK_DETECTION_DEFAULTS.minProminence;
+    const nSig = input.signal.length;
 
-    if (input.signal.length !== input.timestampsMs.length || input.signal.length < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
+    if (nSig !== input.timestampsMs.length || nSig < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
       return {
-        peaks: [],
-        peakTimes: [],
-        peakValues: [],
-        confidence: 0,
-        rejectedCandidates,
+        peaks: [], peakTimes: [], peakValues: [],
+        confidence: 0, rejectedCandidates: [],
         diagnostics: { stage: 'insufficient_input' },
         reason: 'INSUFFICIENT_WINDOW',
         parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, minProm, fs: input.samplingRateHz },
@@ -74,24 +91,20 @@ export class ElgendiPeakDetector {
     const sig = uniform.signal;
     const ts = uniform.timestampsMs;
     const fs = uniform.samplingRateHz;
-    const resample = uniform.resampled;
+    const n = sig.length;
 
-    const finite = sig.every((v) => Number.isFinite(v));
-    if (!finite) {
-      return {
-        peaks: [],
-        peakTimes: [],
-        peakValues: [],
-        confidence: 0,
-        rejectedCandidates,
-        diagnostics: { nonFinite: true },
-        reason: 'NO_VALID_SIGNAL',
-        parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, minProm, fs },
-      };
+    for (let i = 0; i < n; i++) {
+      if (!Number.isFinite(sig[i])) {
+        return {
+          peaks: [], peakTimes: [], peakValues: [],
+          confidence: 0, rejectedCandidates: [],
+          diagnostics: { nonFinite: true },
+          reason: 'NO_VALID_SIGNAL',
+          parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, minProm, fs },
+        };
+      }
     }
 
-    // Supresión de artefactos impulsivos (movimiento, spikes de exposición) ANTES del pasabanda:
-    // Hampel con ventana ~250 ms y umbral 3σ MAD — preserva morfología del pulso sistólico.
     const hampelWin = Math.max(5, Math.round(fs * 0.25) | 1);
     const cleaned = hampel1D(sig, hampelWin, 3);
     let x = bandpassOffline(detrendLinear(cleaned), fs);
@@ -100,134 +113,138 @@ export class ElgendiPeakDetector {
     const w1 = Math.max(3, Math.round((peakMs / 1000) * fs));
     const w2 = Math.max(w1 + 2, Math.round((beatMs / 1000) * fs));
 
-    const energy = x.map((v) => {
-      const p = v > 0 ? v : 0;
-      return p * p;
-    });
+    // Energy signal + MA pre-alloc
+    const energy = new Array<number>(n);
+    for (let i = 0; i < n; i++) {
+      const p = x[i] > 0 ? x[i] : 0;
+      energy[i] = p * p;
+    }
 
-    const maPeak = movingAverage(energy, w1);
-    const maBeat = movingAverage(energy, w2);
+    const maPeak = new Array<number>(n);
+    const maBeat = new Array<number>(n);
+    slidingMA(energy, w1, maPeak);
+    slidingMA(energy, w2, maBeat);
 
-    const warm = Math.min(maPeak.length, Math.max(8, Math.floor(fs * 1.5)));
-    const offset = offsetW * stdSample(maPeak.slice(0, warm));
+    const warm = Math.min(n, Math.max(8, Math.floor(fs * 1.5)));
+    let warmMean = 0;
+    for (let i = 0; i < warm; i++) warmMean += maPeak[i];
+    warmMean /= warm;
+    const offset = offsetW * stdSample(maPeak.slice(0, warm), warmMean);
 
     const minDist = Math.max(1, Math.round((60000 / maxBpm / 1000) * fs));
     const maxDist = Math.max(minDist + 1, Math.round((60000 / minBpm / 1000) * fs));
     const minBlock = Math.max(2, Math.floor(minDist * 0.35));
     const maxBlock = Math.ceil(maxDist * 1.25);
+    const maxPeaks = Math.ceil(n / minDist) + 2;
 
-    const thr = maBeat.map((b, i) => b + offset * (0.85 + 0.15 * (maPeak[i] / (Math.abs(b) + 1e-6))));
+    const thr = new Array<number>(n);
+    for (let i = 0; i < n; i++) {
+      thr[i] = maBeat[i] + offset * (0.85 + 0.15 * (maPeak[i] / (Math.abs(maBeat[i]) + 1e-6)));
+    }
 
-    const blocks: { start: number; end: number }[] = [];
+    // Pre-alloc block detection
+    const blocks: Array<{ start: number; end: number }> = [];
     let i = 0;
-    while (i < maPeak.length) {
-      if (maPeak[i] <= thr[i]) {
-        i++;
-        continue;
-      }
+    while (i < n) {
+      if (maPeak[i] <= thr[i]) { i++; continue; }
       const start = i;
-      while (i < maPeak.length && maPeak[i] > thr[i]) i++;
+      while (i < n && maPeak[i] > thr[i]) i++;
       const end = i - 1;
       const len = end - start + 1;
-      if (len < minBlock) {
-        for (let j = start; j <= end; j++) rejectedCandidates.push({ index: j, reason: 'SHORT_BLOCK' });
-        continue;
-      }
-      if (len > maxBlock) {
-        rejectedCandidates.push({ index: start, reason: 'LONG_BLOCK' });
-        continue;
-      }
+      if (len < minBlock || len > maxBlock) continue;
       blocks.push({ start, end });
     }
 
-    const peaks: number[] = [];
-    const peakTimes: number[] = [];
-    const peakValues: number[] = [];
+    // Pre-alloc result arrays
+    const rejectedCandidates: Array<{ index: number; reason: string }> = [];
+    const peaks = new Array<number>(maxPeaks);
+    const peakTimes = new Array<number>(maxPeaks);
+    const peakValues = new Array<number>(maxPeaks);
+    let pk = 0;
 
-    for (const b of blocks) {
+    for (let bi = 0; bi < blocks.length; bi++) {
+      const b = blocks[bi];
       let best = b.start;
       let bestV = x[b.start];
-      for (let j = b.start; j <= b.end; j++) {
-        if (x[j] > bestV) {
-          bestV = x[j];
-          best = j;
-        }
+      for (let j = b.start + 1; j <= b.end; j++) {
+        if (x[j] > bestV) { bestV = x[j]; best = j; }
       }
 
       const left = Math.max(0, best - minDist);
-      const right = Math.min(x.length - 1, best + minDist);
+      const right = Math.min(n - 1, best + minDist);
       let localMin = x[best];
-      for (let j = left; j <= right; j++) localMin = Math.min(localMin, x[j]);
+      for (let j = left; j <= right; j++) if (x[j] < localMin) localMin = x[j];
       const prom = bestV - localMin;
-      if (prom < minProm) {
-        rejectedCandidates.push({ index: best, reason: 'LOW_PROMINENCE' });
-        continue;
-      }
+      if (prom < minProm) continue;
 
-      if (peaks.length > 0) {
-        const prev = peaks[peaks.length - 1];
+      if (pk > 0) {
+        const prev = peaks[pk - 1];
         const dist = best - prev;
         if (dist < minDist) {
-          if (x[best] > x[prev]) {
-            rejectedCandidates.push({ index: prev, reason: 'SUPERSEDED' });
-            peaks.pop();
-            peakTimes.pop();
-            peakValues.pop();
-          } else {
-            rejectedCandidates.push({ index: best, reason: 'MIN_DISTANCE' });
-            continue;
-          }
+          if (x[best] > x[prev]) { pk--; }
+          else { continue; }
         } else if (dist > maxDist) {
-          rejectedCandidates.push({ index: best, reason: 'RR_TOO_LONG' });
           continue;
         }
       }
 
-      peaks.push(best);
-      peakTimes.push(ts[best] ?? ts[ts.length - 1]);
-      peakValues.push(sig[best] ?? 0);
+      peaks[pk] = best;
+      peakTimes[pk] = ts[best] ?? ts[ts.length - 1];
+      peakValues[pk] = sig[best] ?? 0;
+      pk++;
     }
 
-    const rr: number[] = [];
-    for (let k = 1; k < peakTimes.length; k++) {
-      const d = peakTimes[k] - peakTimes[k - 1];
+    // Trim to actual count
+    const outPeaks = peaks.slice(0, pk);
+    const outPeakTimes = peakTimes.slice(0, pk);
+    const outPeakValues = peakValues.slice(0, pk);
+
+    // RR intervals
+    const maxRR = pk > 0 ? pk - 1 : 0;
+    const rr = new Array<number>(maxRR);
+    let rrCount = 0;
+    for (let k = 1; k < pk; k++) {
+      const d = outPeakTimes[k] - outPeakTimes[k - 1];
       if (d >= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS && d <= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS) {
-        rr.push(d);
+        rr[rrCount++] = d;
       }
     }
+    const rrTrim = rr.slice(0, rrCount);
 
-    // Confianza: cobertura RR + cobertura picos + regularidad (1 − CV de RR).
-    // Penaliza ritmos erráticos por artefacto residual aun cuando haya cuenta alta.
     let rrRegularity = 0;
-    if (rr.length >= 3) {
-      const mean = rr.reduce((a, b) => a + b, 0) / rr.length;
-      const variance = rr.reduce((s, v) => s + (v - mean) ** 2, 0) / rr.length;
-      const cv = Math.sqrt(variance) / Math.max(1, mean);
+    if (rrCount >= 3) {
+      let m = 0;
+      for (let i = 0; i < rrCount; i++) m += rrTrim[i];
+      m /= rrCount;
+      let v = 0;
+      for (let i = 0; i < rrCount; i++) v += (rrTrim[i] - m) ** 2;
+      v /= rrCount;
+      const cv = Math.sqrt(v) / Math.max(1, m);
       rrRegularity = clamp(1 - cv / 0.35, 0, 1);
     }
-    let confidence =
-      rr.length > 0
-        ? clamp(rr.length / 6, 0, 1) * 0.4 +
-          clamp(peaks.length / 8, 0, 1) * 0.3 +
-          rrRegularity * 0.3
-        : 0;
+
+    let confidence = rrCount > 0
+      ? clamp(rrCount / 6, 0, 1) * 0.4 +
+        clamp(pk / 8, 0, 1) * 0.3 +
+        rrRegularity * 0.3
+      : 0;
     if (typeof input.sqi === 'number' && input.sqi < PEAK_DETECTION_DEFAULTS.minSQI) {
       confidence *= 0.5;
     }
 
     return {
-      peaks,
-      peakTimes,
-      peakValues,
+      peaks: outPeaks,
+      peakTimes: outPeakTimes,
+      peakValues: outPeakValues,
       confidence,
       rejectedCandidates,
       diagnostics: {
         blocks: blocks.length,
-        resampled: resample,
+        resampled: uniform.resampled,
         fsEffective: fs,
-        rrCount: rr.length,
+        rrCount,
       },
-      reason: peaks.length ? 'OK' : 'NO_PEAKS',
+      reason: pk > 0 ? 'OK' : 'NO_PEAKS',
       parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, minProm, fs, w1, w2 },
     };
   }

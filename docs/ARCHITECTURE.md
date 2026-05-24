@@ -17,7 +17,7 @@ useSignalProcessor → PPGSignalProcessor
     ▼
 ProcessedSignal
     ├─► useHeartBeatProcessor → HeartBeatProcessor
-    │       PeakDetectionEnsemble (Elgendi + Pan–Tompkins PPG + espectral)
+    │       PeakDetectionEnsemble (Elgendi optimizado)
     │       → BPM, RR, isPeak, ensembleDiagnostics
     └─► useVitalSignsProcessor → VitalSignsProcessor
             ├─ SpO2 (ratio-of-ratios + calibración)
@@ -65,16 +65,11 @@ La medición **no asume** torch ni FPS solicitados: baja `confidence` o bloquea 
 
 Basado en medias móviles de evento (MApeak / MAbeat), offset adaptativo, un pico por bloque, distancia mínima según BPM máximo, prominencia y SQI.
 
-### Pan–Tompkins adaptado a PPG (`PanTompkinsPPGDetector.ts`)
-
-**No es ECG/QRS.** Pipeline PPG: bandpass → derivada (upstroke) → cuadrado → integración por ventana → umbrales adaptativos + searchback + período refractario.
-
 ### Ensemble (`PeakDetectionEnsemble.ts`)
 
-1. Ejecuta Elgendi y Pan–Tompkins sobre la misma ventana.
-2. Fusiona picos dentro de ~110 ms; registra rechazados (`NO_PAN_MATCH`, `NO_ELGENDI_MATCH`, `SPECTRAL_MISMATCH`).
-3. Compara con autocorrelación/espectral (`bpmFromAutocorr` en `dsp.ts`).
-4. Devuelve `PeakDetectionResult`: `peaks`, `peakTimes`, `rrIntervalsMs`, `bpmInstant`, `confidence`, `agreement`, `diagnostics` (incluye `elgendiPeakTimes`, `panTompkinsPeakTimes`, `fusedPeakTimes` para UI).
+1. Ejecuta `ElgendiPeakDetector` sobre la ventana PPG.
+2. Puntuación de picos individual con `scorePeakCandidate` (SQI + perfusión + RR + acuerdo Elgendi).
+3. Devuelve `PeakDetectionResult`: `peaks`, `peakTimes`, `peakScores`, `rrIntervalsMs`, `bpmInstant`, `confidence`, `agreement`, `diagnostics` (incluye `elgendiPeakTimes`, `elgendiConfidence`, `fusedPeakTimes` para UI).
 
 `HeartBeatProcessor` es el **único** consumidor productivo del ensemble para BPM y emite `ensembleDiagnostics` hacia la UI.
 
@@ -82,7 +77,7 @@ Basado en medias móviles de evento (MApeak / MAbeat), offset adaptativo, un pic
 
 `SignalQualityIndex` calcula SQI a partir de perfusión, SNR, periodicidad, clipping, saturación, movimiento, FPS y jitter.
 
-`enrichMetrics()` combina el SQI de frame con el acuerdo Elgendi/Pan–Tompkins para que SpO2, PA y respiración no traten como “buena” una señal con picos incoherentes.
+`enrichMetrics()` combina el SQI de frame con el acuerdo Elgendi para que SpO2, PA y respiración no traten como “buena” una señal con picos incoherentes.
 
 Reglas típicas:
 
@@ -96,7 +91,7 @@ Reglas típicas:
 
 ## UI de depuración
 
-- **PPGSignalMeter**: onda 2 s, picos ▲ Elgendi, ■ Pan–Tompkins, ● fusión ensemble, picos de latido (audio/háptico).
+- **PPGSignalMeter**: onda 2 s, picos ▲ Elgendi, picos de latido (audio/háptico).
 - **DebugTelemetryPanel**: SQI, PI, FPS, jitter, acuerdo, torch, estado de adquisición.
 
 ## Supabase
