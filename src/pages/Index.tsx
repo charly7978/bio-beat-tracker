@@ -17,6 +17,7 @@ import { usePerfTelemetry } from "@/hooks/usePerfTelemetry";
 import type { BackpressureConfig } from "@/lib/perf/backpressureConfig";
 import { useDualCamera } from "@/hooks/useDualCamera";
 import type { RppgResult } from "@/modules/rppg";
+import { usePpgWorker } from "@/hooks/usePpgWorker";
 
 const Index = () => {
   // Canvas sincrónico (render-phase, fuera de effects)
@@ -32,10 +33,7 @@ const Index = () => {
     ctxRef.current = c.getContext('2d', { willReadFrequently: true, alpha: false });
   }
 
-  // Dual camera setup (rPPG front + PPG back)
-  const dualCamera = useDualCamera({ sqiThreshold: 30, switchDelayMs: 2000 });
-
-  // Hooks de procesamiento (sin cambios)
+  // Hooks de procesamiento
   const { 
     startProcessing, 
     stopProcessing, 
@@ -57,6 +55,21 @@ const Index = () => {
     reset: resetHeartBeat,
     reacquirePeaks: reacquireHeartPeaks,
   } = useHeartBeatProcessor();
+
+  // Dual camera setup (rPPG front + PPG back)
+  const dualCamera = useDualCamera({ sqiThreshold: 30, switchDelayMs: 2000 });
+
+  // Web Worker offloading
+  const ppgWorker = usePpgWorker({ enabled: true });
+
+  // Wrapped processFrame: main thread + optional worker offload
+  const processFrameWithWorker = useCallback(
+    (imageData: ImageData, timestamp?: number) => {
+      processFrame(imageData, timestamp);
+      ppgWorker.processOffMain(imageData, timestamp ?? performance.now());
+    },
+    [processFrame, ppgWorker],
+  );
 
   const { 
     processSignal: processVitalSigns,
@@ -88,7 +101,7 @@ const Index = () => {
     cameraRef,
     canvasRef,
     ctxRef,
-    processFrame,
+    processFrame: processFrameWithWorker,
   });
 
   // Signal router (encapsula todo el routing de señal, throttling, latch, sanity)

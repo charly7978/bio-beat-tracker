@@ -35,9 +35,11 @@ function walk(dir, acc = []) {
 }
 
 function tryResolve(spec, fromFile) {
+  // Strip Vite query params like ?worker, ?raw, ?url
+  const cleanSpec = spec.replace(/\?[\w-]+$/, '');
   let base;
-  if (spec.startsWith('@/')) base = join(SRC, spec.slice(2));
-  else if (spec.startsWith('./') || spec.startsWith('../')) base = resolve(dirname(fromFile), spec);
+  if (cleanSpec.startsWith('@/')) base = join(SRC, cleanSpec.slice(2));
+  else if (cleanSpec.startsWith('./') || cleanSpec.startsWith('../')) base = resolve(dirname(fromFile), cleanSpec);
   else return null; // package import
 
   const candidates = [
