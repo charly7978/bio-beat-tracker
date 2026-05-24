@@ -1,5 +1,6 @@
 import type { ProcessedSignal, ProcessingError, SignalProcessor as SignalProcessorInterface, ContactState } from '../../types/signal';
 import { BandpassFilter } from './BandpassFilter';
+import { NotchFilter } from './NotchFilter';
 import { createLogger, ppgPerf } from '../../utils/logger';
 import { clamp } from '../../utils/math';
 import { RingF32 } from '../../utils/RingBuffer';
@@ -221,10 +222,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private lastSourceSwitch = 0;
   private readonly SOURCE_HYSTERESIS_MS = 2000;
 
+  private notchFilter: NotchFilter; // Elimina 50/60 Hz (red eléctrica) antes del bandpass
+
   constructor(
     public onSignalReady?: (signal: ProcessedSignal) => void,
     public onError?: (error: ProcessingError) => void
   ) {
+    // Notch 50Hz (predeterminado — Europa/Asia). Cambia a 60Hz en USA si es necesario.
+    this.notchFilter = new NotchFilter(this.estimatedSampleRate, 50, 20);
     // Pulso (HR): 0.5-4.5Hz — rango cardíaco estándar, 4º orden para mejor rechazo
     this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate, 4.5);
     // Morfología (BP): 0.5-8Hz — preserva escotadura dicrótica y forma completa del pulso
@@ -254,6 +259,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   /** Actualizar perfil según diagnóstico de CameraView (torch/FPS/jitter). */
   setCameraRuntimeHints(diag: Record<string, unknown> | null | undefined): void {
     this.cameraHints = inferCameraRuntimeHints(diag);
+  }
+
+  /** Cambiar frecuencia del notch filter: 50 Hz (Europa/Asia) o 60 Hz (USA/América). */
+  setNotchFrequency(freq: 50 | 60): void {
+    this.notchFilter.setNotchFrequency(freq);
   }
 
   processFrame(imageData: ImageData, frameTimestampMs?: number): void {
@@ -404,8 +414,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.rawBuffer.push(pulseSource.value);
 
     const endFilt = ppgPerf.start('bandpass');
-    const filtered = this.bandpassFilter.filter(pulseSource.value);
-    const morphFiltered = this.morphBandpassFilter.filter(morphSource);
+    // Notch filter primero (50/60Hz) — elimina interferencia de red
+    const notched = this.notchFilter.filter(pulseSource.value);
+    const filtered = this.bandpassFilter.filter(notched);
+    const morphNotched = this.notchFilter.filter(morphSource);
+    const morphFiltered = this.morphBandpassFilter.filter(morphNotched);
     const enhanced = applyPulseAgc(
       this.pulseAgcState,
       filtered,
@@ -1355,6 +1368,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.sourceBuffers.R.reset();
     this.sourceBuffers.G.reset();
     this.sourceBuffers.RG.reset();
+    this.notchFilter.reset();
     this.bandpassFilter.reset();
     this.morphBandpassFilter.reset();
     resetPulseAgc(this.pulseAgcState);
@@ -1412,8 +1426,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.resetBaselines();
     this.roiRedPulseRing.reset();
     this.lastRoiRedCv = 0;
+    this.notchFilter.setSampleRate(this.estimatedSampleRate);
     this.bandpassFilter.setSampleRate(this.estimatedSampleRate);
     this.morphBandpassFilter.setSampleRate(this.estimatedSampleRate);
+    this.notchFilter.reset();
     this.bandpassFilter.reset();
     this.morphBandpassFilter.reset();
     resetPulseAgc(this.pulseAgcState);
