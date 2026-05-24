@@ -16,8 +16,8 @@ export const VITAL_THRESHOLDS = {
   
   // BLOOD OXYGEN (SpO2) — modelo ratio-of-ratios cámara+flash (verde como proxy IR)
   SPO2: {
-    MIN_VALID: 70,
-    MAX_VALID: 100,
+    MIN_VALID: 88,
+    MAX_VALID: 98,
     CRITICAL_LOW: 90,
     R_VALUE_MIN: 0.1,
     R_VALUE_MAX: 2.5,
@@ -45,8 +45,8 @@ export const VITAL_THRESHOLDS = {
 
   // BLOOD PRESSURE — rangos fisiológicos (AHA / supervivencia) + normalización morfológica PPG
   BP: {
-    SYSTOLIC_MIN: 70,
-    SYSTOLIC_MAX: 220,
+    SYSTOLIC_MIN: 20,
+    SYSTOLIC_MAX: 280,
     DIASTOLIC_MIN: 40,
     DIASTOLIC_MAX: 130,
     MAP_MIN: 50,
