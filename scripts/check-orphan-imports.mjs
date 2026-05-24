@@ -22,14 +22,7 @@ const ENTRYPOINTS = new Set([
   'src/integrations/supabase/client.ts',
   'src/integrations/supabase/types.ts',
 ]);
-const ALLOWED_ORPHANS = new Set([
-  'src/modules/signal-divider/SignalDivider.ts',
-  'src/modules/signal-divider/channelPresets.ts',
-  'src/lib/sensors/motionArbiter.ts',
-  'src/hooks/useFrontCameraMotion.ts',
-  'src/hooks/useCompassMotion.ts',
-  'src/modules/signal-processing/visualTransform.ts',
-]);
+const ALLOWED_ORPHANS = new Set();
 const TYPES_GLOB = /\.d\.ts$/;
 
 function posix(p) { return p.replace(/\\/g, '/'); }

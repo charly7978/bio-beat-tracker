@@ -126,6 +126,9 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const DIAG_PUSH_THROTTLE_MS = 200;
   const VITALS_PROCESS_EVERY_N_FRAMES = 3;
 
+  // Divider signal (injectado externamente)
+  const dividerSignalRef = useRef<{ filteredValue: number; quality: number } | null>(null);
+
   // Sanity checker
   const [sanityProfileId, setSanityProfileId] = useState<string>(() => getActiveProfileId());
   const [customJSON, setCustomJSON] = useState<string>(() => {
@@ -286,16 +289,21 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       (contactState === 'STABLE_CONTACT'
         ? Q.MIN_ENSEMBLE_CONF_STABLE
         : Q.MIN_ENSEMBLE_CONF_UNSTABLE) * hints.ensembleConfScale;
-    const rawSqi =
-      (diag && typeof diag === 'object' && diag.sqm && typeof diag.sqm.sqi === 'number'
-        ? diag.sqm.sqi
-        : lastSignal.quality) || 0;
+    const dv = dividerSignalRef.current;
+    const rawSqi = dv && dv.quality >= 15
+      ? dv.quality
+      : (diag && typeof diag === 'object' && diag.sqm && typeof diag.sqm.sqi === 'number'
+          ? diag.sqm.sqi
+          : lastSignal.quality) || 0;
 
     let hbInput = 0;
     if (fingerConfirmed) {
-      if (Math.abs(signalValue) > 1e-7) {
-        lastHbInputRef.current = signalValue;
-        hbInput = signalValue;
+      const dv = dividerSignalRef.current;
+      const useDivider = dv && dv.quality >= 15 && Math.abs(dv.filteredValue) > 1e-7;
+      const inputSource = useDivider ? dv!.filteredValue : signalValue;
+      if (Math.abs(inputSource) > 1e-7) {
+        lastHbInputRef.current = inputSource;
+        hbInput = inputSource;
       } else if (Math.abs(lastHbInputRef.current) > 1e-7) {
         hbInput = lastHbInputRef.current;
       }
@@ -697,6 +705,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     // Callbacks
     handleSignalRealtime,
+    setDividerSignal: (v: { filteredValue: number; quality: number } | null) => { dividerSignalRef.current = v; },
     resetFingerContactSession,
     resetSessionRefs,
     setIsMonitoringRef,

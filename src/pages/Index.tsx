@@ -15,6 +15,7 @@ import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
 import type { ContactState } from "@/types/signal";
 import { usePerfTelemetry } from "@/hooks/usePerfTelemetry";
 import type { BackpressureConfig } from "@/lib/perf/backpressureConfig";
+import { useSignalDivider } from "@/hooks/useSignalDivider";
 
 const Index = () => {
   // Canvas sincrónico (render-phase, fuera de effects)
@@ -52,6 +53,8 @@ const Index = () => {
     reacquirePeaks: reacquireHeartPeaks,
   } = useHeartBeatProcessor();
 
+  const divider = useSignalDivider();
+
   const { 
     processSignal: processVitalSigns,
     setPlacementMode: setVitalsPlacementMode,
@@ -77,14 +80,6 @@ const Index = () => {
     setHeartBeatRuntimeHints(cameraHintsRef.current);
   }, [setCameraRuntimeHints, setHeartBeatRuntimeHints]);
 
-  // Frame loop
-  const { startFrameLoop, stopFrameLoop } = useFrameLoop({
-    cameraRef,
-    canvasRef,
-    ctxRef,
-    processFrame,
-  });
-
   // Signal router (encapsula todo el routing de señal, throttling, latch, sanity)
   const router = useSignalRouter({
     processHeartBeat: {
@@ -101,6 +96,30 @@ const Index = () => {
       getRGBStats,
     },
     cameraHintsRef,
+  });
+
+  // Frame loop — envuelve processFrame para ejecutar SignalDivider antes
+  const baseProcessFrameRef = useRef(processFrame);
+  baseProcessFrameRef.current = processFrame;
+  const dividerProcessFrameRef = useRef(divider.processFrame);
+  dividerProcessFrameRef.current = divider.processFrame;
+  const routerSetDividerRef = useRef(router.setDividerSignal);
+  routerSetDividerRef.current = router.setDividerSignal;
+
+  const combinedProcessFrame: (imageData: ImageData, ts?: number) => void = useCallback((imageData: ImageData, ts?: number) => {
+    dividerProcessFrameRef.current(imageData, ts);
+    const hr = divider.lastResultRef.current?.channels.hr;
+    if (hr) {
+      routerSetDividerRef.current({ filteredValue: hr.filtered, quality: hr.quality });
+    }
+    baseProcessFrameRef.current(imageData, ts);
+  }, []);
+
+  const { startFrameLoop, stopFrameLoop } = useFrameLoop({
+    cameraRef,
+    canvasRef,
+    ctxRef,
+    processFrame: combinedProcessFrame,
   });
 
   // Session management
@@ -151,6 +170,15 @@ const Index = () => {
   useEffect(() => {
     router.setIsMonitoringRef(session.isMonitoring);
   }, [session.isMonitoring, router]);
+
+  // Iniciar/detener sensores del divider con el monitoreo
+  useEffect(() => {
+    if (session.isMonitoring) {
+      divider.start();
+    } else {
+      divider.stop();
+    }
+  }, [session.isMonitoring, divider]);
 
   // Sincronizar resultados post-medición
   useEffect(() => {
