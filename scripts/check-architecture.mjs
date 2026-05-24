@@ -38,7 +38,10 @@ const REQUIRED_FILES = [
   'src/modules/signal-quality/SignalQualityIndex.ts',
   'src/modules/HeartBeatProcessor.ts',
   'src/modules/signal-processing/PPGSignalProcessor.ts',
+  'src/modules/signal-divider/SignalDivider.ts',
+  'src/modules/signal-divider/channelPresets.ts',
   'src/modules/vital-signs/CalibrationManager.ts',
+  'src/lib/sensors/motionArbiter.ts',
 ];
 
 const SINGLETON_EXPORTS = [
