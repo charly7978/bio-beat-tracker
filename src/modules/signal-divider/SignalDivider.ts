@@ -1,4 +1,5 @@
 import { BandpassFilter } from '../signal-processing/BandpassFilter';
+import { NotchFilter } from '../signal-processing/NotchFilter';
 import { transformPixel } from '../signal-processing/visualTransform';
 import { clamp } from '../../utils/math';
 import {
@@ -55,6 +56,7 @@ interface RoiExtraction {
  * Incluye MotionArbiter para desambiguar señal dudosa.
  */
 export class SignalDivider {
+  private readonly notchFilters: Map<string, NotchFilter> = new Map(); // Elimina 50/60Hz
   private readonly filters: Map<string, BandpassFilter> = new Map();
   private readonly agcScales: Map<string, number> = new Map();
   private readonly rawValues: Map<string, { r: number; g: number; b: number }> = new Map();
@@ -83,6 +85,7 @@ export class SignalDivider {
 
   constructor() {
     for (const preset of [HR_CHANNEL, SPO2_CHANNEL, HRV_CHANNEL, RESP_CHANNEL, BP_CHANNEL]) {
+      this.notchFilters.set(preset.name, new NotchFilter(this.SAMPLE_RATE, 50, 20));
       this.filters.set(preset.name, new BandpassFilter(this.SAMPLE_RATE, preset.bandpassHigh));
       this.rawBuffers.set(preset.name, new Float64Array(this.BUFFER_SIZE));
       this.acBuffers.set(preset.name, new Float64Array(this.BUFFER_SIZE));
@@ -104,6 +107,20 @@ export class SignalDivider {
     this.compassReport = compass;
     this.lastCompassReport = lastCompass;
     this.accelReport = accel;
+  }
+
+  /** Cambiar frecuencia del notch filter: 50 Hz (Europa/Asia) o 60 Hz (USA). */
+  setNotchFrequency(freq: 50 | 60): void {
+    for (const notchFilter of this.notchFilters.values()) {
+      notchFilter.setNotchFrequency(freq);
+    }
+  }
+
+  /** Resetear todos los notch filters. */
+  resetNotchFilters(): void {
+    for (const notchFilter of this.notchFilters.values()) {
+      notchFilter.reset();
+    }
   }
 
   processFrame(imageData: ImageData, timestampMs: number): DividerResult {
@@ -170,9 +187,11 @@ export class SignalDivider {
     const newFill = Math.min(fillCount + 1, this.BUFFER_SIZE);
     this.fillCounts.set(preset.name, newFill);
 
-    // Filtro bandpass
+    // Notch filter (50/60Hz) → Bandpass
+    const notchFilter = this.notchFilters.get(preset.name)!;
+    const notched = notchFilter.filter(rawVal);
     const filter = this.filters.get(preset.name)!;
-    const acValue = filter.filter(rawVal);
+    const acValue = filter.filter(notched);
 
     // Buffer circular AC
     const acBuf = this.acBuffers.get(preset.name)!;
