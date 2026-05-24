@@ -4,7 +4,8 @@ import { useFrontCameraMotion } from './useFrontCameraMotion';
 import { useCompassMotion } from './useCompassMotion';
 
 export interface DividerHRChannel {
-  filteredValue: number;
+  acValue: number;
+  dcValue: number;
   quality: number;
   confidence: number;
   rawR: number;
@@ -58,7 +59,8 @@ export function useSignalDivider() {
 
   const hrChannel: DividerHRChannel | null = lastResultRef.current
     ? {
-        filteredValue: lastResultRef.current.channels.hr.filtered,
+        acValue: lastResultRef.current.channels.hr.acValue,
+        dcValue: lastResultRef.current.channels.hr.dcValue,
         quality: lastResultRef.current.channels.hr.quality,
         confidence: lastResultRef.current.channels.hr.confidence,
         rawR: lastResultRef.current.channels.hr.rawR,

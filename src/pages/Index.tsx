@@ -110,7 +110,7 @@ const Index = () => {
     dividerProcessFrameRef.current(imageData, ts);
     const hr = divider.lastResultRef.current?.channels.hr;
     if (hr) {
-      routerSetDividerRef.current({ filteredValue: hr.filtered, quality: hr.quality });
+      routerSetDividerRef.current({ filteredValue: hr.acValue, quality: hr.quality });
     }
     baseProcessFrameRef.current(imageData, ts);
   }, []);

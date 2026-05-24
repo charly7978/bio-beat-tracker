@@ -11,17 +11,6 @@ export interface VisualTransform {
   clampMax: number;
 }
 
-export const HR_VISUAL: VisualTransform = {
-  rScale: 0.7,
-  gScale: 1.5,
-  bScale: 0.5,
-  brightness: 5,
-  gamma: 1.0,
-  contrast: 1.0,
-  clampMin: 10,
-  clampMax: 245,
-};
-
 export function transformPixel(
   r: number, g: number, b: number,
   t: VisualTransform
