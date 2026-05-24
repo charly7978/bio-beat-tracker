@@ -57,7 +57,7 @@ const Index = () => {
   } = useHeartBeatProcessor();
 
   // Dual camera setup (rPPG front + PPG back)
-  const dualCamera = useDualCamera({ sqiThreshold: 30, switchDelayMs: 2000 });
+  const dualCamera = useDualCamera();
 
   // Web Worker offloading
   const ppgWorker = usePpgWorker({ enabled: true });
@@ -277,17 +277,37 @@ const Index = () => {
     dualCamera.updateBackSqi(lastSignal?.quality ?? 0);
   }, [lastSignal?.quality, dualCamera]);
 
-  const handleToggleMonitoring = () => {
+  // Camera error toast
+  useEffect(() => {
+    const handler = () => {
+      import('@/components/ui/use-toast').then(({ toast }) => toast({
+        title: "Cámara trasera no disponible",
+        description: "Verifica los permisos de cámara e intenta nuevamente.",
+        duration: 5000,
+      }));
+    };
+    window.addEventListener('camera-error', handler);
+    return () => window.removeEventListener('camera-error', handler);
+  }, []);
+
+  const handleToggleMonitoring = async () => {
     if (session.isMonitoring) {
       dualCamera.stopFrontProcessing();
-      dualCamera.stopCameras();
+      dualCamera.stopFrontCamera();
       session.finalizeMeasurement();
     } else {
       session.startMonitoring();
-      dualCamera.startCameras();
-      // Start front camera rPPG processing after a short delay (allow camera to init)
-      setTimeout(() => dualCamera.startFrontProcessing(), 1500);
+      const frontOk = await dualCamera.startFrontCamera();
+      if (frontOk) {
+        setTimeout(() => dualCamera.startFrontProcessing(), 1500);
+      }
     }
+  };
+
+  const handleReset = () => {
+    dualCamera.stopFrontProcessing();
+    dualCamera.stopFrontCamera();
+    session.handleReset();
   };
 
   return (
@@ -362,7 +382,7 @@ const Index = () => {
 
       <div className="flex-1 relative">
 
-        {/* CÁMARA - Con ref directo */}
+        {/* CÁMARA TRASERA (PPG dedo) - Con ref directo */}
         <div className="absolute inset-0">
           <CameraView 
             ref={cameraRef}
@@ -370,6 +390,15 @@ const Index = () => {
             isMonitoring={session.isCameraOn}
           />
         </div>
+
+        {/* CÁMARA FRONTAL (rPPG rostro) - Oculta, montada en DOM para que getUserMedia funcione en móvil */}
+        <video
+          ref={dualCamera.frontVideoRef}
+          playsInline
+          muted
+          autoPlay
+          style={{ position: 'absolute', width: 0, height: 0, opacity: 0, pointerEvents: 'none' }}
+        />
 
 
         {/* AJUSTES — Removido para simplificar la interfaz según preferencia del usuario */}
@@ -394,7 +423,7 @@ const Index = () => {
                 lastSignal?.contactState !== 'NO_CONTACT'
               }
               onStartMeasurement={handleToggleMonitoring}
-              onReset={session.handleReset}
+              onReset={handleReset}
               isMonitoring={session.isMonitoring}
               arrhythmiaStatus={router.vitalSigns.arrhythmia.value?.status ?? ''}
               rawArrhythmiaData={router.lastArrhythmiaData.current}
