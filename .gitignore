@@ -28,3 +28,12 @@ bio-beat-tracker/
 .env
 !.env.example
 dev_output.html
+
+# Android build artifacts
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+android/capacitor-cordova-android-plugins/cordova.variables.gradle
+android/.gradle/
+android/build/
+android/local.properties
+android/capacitor-cordova-android-plugins/.gradle/
