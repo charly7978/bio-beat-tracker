@@ -36,19 +36,39 @@ export class NotchFilter {
   /**
    * Calcula coeficientes del filtro notch usando transformación bilineal
    *
+   * Solución avanzada: Si f_notch > Nyquist, usa frecuencia aliaseada.
+   * Ejemplo: 50Hz @ fs=30Hz aliaseada a 10Hz (dentro de Nyquist).
+   *
    * Fórmula del filtro notch (IIR 2º orden):
    *   H(z) = b[0](1 + z^-2) / (1 + a[1]z^-1 + a[2]z^-2)
    *
    * Donde los coeficientes se derivan de:
-   *   w0 = 2 * π * f_notch / fs
+   *   w0 = 2 * π * f_effective / fs
    *   α = sin(w0) / (2 * Q)
    */
   private computeCoefficients(): void {
     const fs = this.sampleRate;
-    const f0 = this.notchFreq;
+    const nyquist = fs / 2;
+    let f0 = this.notchFreq;
     const Q = this.Q;
 
-    // Frecuencia normalizada
+    // === VALIDACIÓN AVANZADA: Mapear f0 a frecuencia aliaseada válida ===
+    if (f0 > nyquist) {
+      // Si f0 está fuera de rango, calcula su represetnación aliaseada
+      // Fold frequency back into valid range usando reflejo de Nyquist
+      const folded = f0 % fs;
+      if (folded > nyquist) {
+        // Reflect around Nyquist
+        f0 = fs - folded;
+      } else {
+        f0 = folded;
+      }
+    }
+
+    // Garantizar f0 > 0
+    f0 = Math.max(0.1, f0);
+
+    // Frecuencia normalizada (ahora garantizada válida)
     const w0 = 2 * Math.PI * f0 / fs;
     const sinW0 = Math.sin(w0);
     const cosW0 = Math.cos(w0);
@@ -66,6 +86,13 @@ export class NotchFilter {
     this.a[0] = 1;
     this.a[1] = (-2 * cosW0) / a0;
     this.a[2] = (1 - alpha) / a0;
+
+    // Validar coeficientes (guard against numerical errors)
+    if (!isFinite(this.b[0]) || !isFinite(this.a[1])) {
+      // Fallback a identity filter si hay error numérico
+      this.b = [1, 0, 0];
+      this.a = [1, 0, 0];
+    }
 
     this.initialized = true;
   }
