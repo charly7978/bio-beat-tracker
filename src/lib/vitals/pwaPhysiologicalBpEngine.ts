@@ -187,20 +187,20 @@ export function enforceHemodynamicCoherence(
   let d = dbp;
   let pp = s - d;
 
-  if (pp > cfg.MAX_PP) {
-    const excess = pp - cfg.MAX_PP;
+  if (pp > cfg.PP_MAX) {
+    const excess = pp - cfg.PP_MAX;
     s -= excess * 0.6;
     d += excess * 0.25;
     pp = s - d;
   }
-  if (pp < cfg.MIN_PP) {
-    const deficit = cfg.MIN_PP - pp;
+  if (pp < cfg.PP_MIN) {
+    const deficit = cfg.PP_MIN - pp;
     s += deficit * 0.5;
     d -= deficit * 0.5;
     pp = s - d;
   }
   if (d >= s) {
-    d = s - cfg.MIN_PP;
+    d = s - cfg.PP_MIN;
   }
   return { sbp: s, dbp: d };
 }
@@ -239,7 +239,7 @@ export function isPhysiologicalBp(sbp: number, dbp: number): boolean {
   if (sbp < cfg.SYSTOLIC_MIN || sbp > cfg.SYSTOLIC_MAX) return false;
   if (dbp < cfg.DIASTOLIC_MIN || dbp > cfg.DIASTOLIC_MAX) return false;
   const pp = sbp - dbp;
-  if (pp < cfg.MIN_PP || pp > cfg.MAX_PP) return false;
+  if (pp < cfg.PP_MIN || pp > cfg.PP_MAX) return false;
   const ratio = dbp / sbp;
   if (ratio < cfg.DIA_SYS_RATIO_MIN || ratio > cfg.DIA_SYS_RATIO_MAX) return false;
   const map = dbp + pp / 3;

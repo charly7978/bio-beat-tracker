@@ -21,7 +21,7 @@ export interface PeakDetectionEnsembleInput {
 
 export class PeakDetectionEnsemble {
   static analyze(input: PeakDetectionEnsembleInput): PeakDetectionResult {
-    const rejected: PeakDetectionResult['rejectedPeaks'] = [];
+    const log: PeakDetectionResult['rejectedPeaks'] = [];
     const { signal, timestampsMs, samplingRateHz, sqi, perfusionIndex = 0 } = input;
 
     if (signal.length < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble || signal.length !== timestampsMs.length) {
@@ -87,7 +87,7 @@ export class PeakDetectionEnsemble {
       const te = elTimeAt(j);
       peakIdx.push(clamp(ie, 0, signal.length - 1));
       peakTimes.push(te);
-      rejected.push({ index: ie, reason: 'ELGENDI', detector: 'Elgendi' });
+      log.push({ index: ie, reason: 'ELGENDI', detector: 'Elgendi' });
     }
 
     const order = peakTimes
@@ -155,7 +155,7 @@ export class PeakDetectionEnsemble {
       agreement: {
         elgendi: agreeEl,
       },
-      rejectedPeaks: rejected,
+      rejectedPeaks: log,
       diagnostics: {
         elgendi: el.diagnostics,
         elgendiReason: el.reason,

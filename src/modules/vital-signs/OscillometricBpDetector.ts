@@ -118,8 +118,8 @@ export function analyzeOscillogram(samples: OscillometricSample[]): Oscillometri
   const slopeRatio = peakRegion.risingEdgeSlope > 0
     ? clamp(peakRegion.fallingEdgeSlope / peakRegion.risingEdgeSlope, 0.2, 5)
     : 1;
-  const ppRaw = BP.MIN_PP + fwhmNorm * (BP.MAX_PP - BP.MIN_PP) * skewFactor * slopeRatio;
-  const pulsePressure = clamp(ppRaw, BP.MIN_PP, BP.MAX_PP);
+  const ppRaw = BP.PP_MIN + fwhmNorm * (BP.PP_MAX - BP.PP_MIN) * skewFactor * slopeRatio;
+  const pulsePressure = clamp(ppRaw, BP.PP_MIN, BP.PP_MAX);
 
   const sbp = clamp(map + (2 / 3) * pulsePressure, BP.SYSTOLIC_MIN, BP.SYSTOLIC_MAX);
   const dbp = clamp(map - (1 / 3) * pulsePressure, BP.DIASTOLIC_MIN, BP.DIASTOLIC_MAX);

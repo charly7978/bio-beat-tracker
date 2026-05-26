@@ -1,11 +1,11 @@
 /**
- * Constantes y utilidades fisiológicas centralizadas.
- * Única fuente de verdad para rangos RR, cálculos HRV, umbrales y helpers temporales.
+ * Constantes y utilidades fisiológicas.
+ * Los rangos RR provienen de VITAL_THRESHOLDS (única fuente de verdad).
  */
+import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 
-// Rango fisiológico único para intervalos RR (ms)
-export const RR_MIN_MS = 270;
-export const RR_MAX_MS = 2200;
+export const RR_MIN_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS;
+export const RR_MAX_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS;
 
 /** Timestamp monotónico de alta resolución (sin riesgo de saltos de reloj). */
 export const getMonotonicNow = (): number =>

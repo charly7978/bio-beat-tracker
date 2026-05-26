@@ -189,7 +189,7 @@ export function useMeasurementSession({
     setElapsedTime(0);
     totalBeatsRef.current = 0;
     arrhythmiaBeatsRef.current = 0;
-    setVitalSigns(prev => ({ ...prev, arrhythmiaStatus: "SIN ARRITMIAS|0" }));
+    // arrhythmia se resetea desde VitalSignsProcessor; no hay propiedad plana
 
     startProcessing();
     setIsCameraOn(true);
@@ -358,8 +358,8 @@ export function useMeasurementSession({
     setElapsedTime,
     cameraStream,
     setCameraStream,
-    measurementSummary: measurementSummary ?? measurementSummary,
-    showResults: showResults ?? showResults,
+    measurementSummary,
+    showResults,
     isFullscreen,
     startMonitoring,
     handleStreamReady,

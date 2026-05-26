@@ -101,12 +101,12 @@ export function isMeasurementPipelineLive(
     nowMs - latch.lastPeakMs < SESSION_LATCH.MAX_PEAK_GAP_MS;
 
   if (hasUsableContact) {
-    return latch.established && peakRecent && rawSqi >= 2;
+    return latch.established && peakRecent && rawSqi >= SESSION_LATCH.MIN_SQI;
   }
   if (!latch.established) return false;
   return (
     nowMs - latch.lastContactMs < SESSION_LATCH.CONTACT_GRACE_MS &&
     peakRecent &&
-    rawSqi >= 2
+    rawSqi >= SESSION_LATCH.MIN_SQI
   );
 }

@@ -1,4 +1,4 @@
-import { Heart, Activity } from 'lucide-react';
+import { Heart } from 'lucide-react';
 
 interface PulseIndicatorProps {
   showPulse: boolean;
@@ -19,7 +19,7 @@ export function PulseIndicator({ showPulse }: PulseIndicatorProps) {
           fill={showPulse ? 'currentColor' : 'none'}
         />
       </div>
-      <Activity className="w-3 h-3 text-emerald-400/0" />
+      {/* Activity icon removed — was invisible (text-emerald-400/0) */}
     </div>
   );
 }

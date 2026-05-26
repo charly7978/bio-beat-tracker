@@ -48,13 +48,13 @@ describe('measurementSessionLatch', () => {
     const lostAt = 2000 + SESSION_LATCH.ESTABLISH_STREAK * 800;
     latch = updateMeasurementSessionLatch(latch, false, 0, 0, lostAt, false);
     expect(
-      isMeasurementPipelineLive(latch, false, 3, lostAt + 500),
+      isMeasurementPipelineLive(latch, false, SESSION_LATCH.MIN_SQI, lostAt + 500),
     ).toBe(true);
     expect(
       isMeasurementPipelineLive(
         latch,
         false,
-        3,
+        SESSION_LATCH.MIN_SQI,
         lostAt + SESSION_LATCH.CONTACT_GRACE_MS + 1,
       ),
     ).toBe(false);

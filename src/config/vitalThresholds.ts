@@ -53,8 +53,6 @@ export const VITAL_THRESHOLDS = {
     MAP_MAX: 150,
     PP_MIN: 15,
     PP_MAX: 110,
-    MIN_PP: 15,
-    MAX_PP: 110,
     DIA_SYS_RATIO_MIN: 0.30,
     DIA_SYS_RATIO_MAX: 0.90,
     /** Fracción de PP atribuible a reflexión de onda (índice 0–1) */

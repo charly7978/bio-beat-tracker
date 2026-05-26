@@ -123,6 +123,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   // `[...arr].sort()` por frame. Tamaño máximo = ACDC_WINDOW.
   private readonly statScratch = new Float32Array(this.ACDC_WINDOW);
   private readonly sortedScratch = new Float32Array(this.ACDC_WINDOW);
+  private readonly periodicityScratch = new Float32Array(this.BUFFER_SIZE);
 
   // LUTs de teselado: cachean Math.floor((px / roiSize) * cols) por píxel
   // del ROI. Se reconstruyen sólo cuando cambia el tamaño del ROI.
@@ -1202,8 +1203,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (this.filteredBuffer.length < nReq) return 0;
     
     // Usamos sortedScratch como buffer temporal para no alocar
-    const n = this.filteredBuffer.copyTailInto(this.sortedScratch, nReq);
-    const data = this.sortedScratch;
+    const n = this.filteredBuffer.copyTailInto(this.periodicityScratch, nReq);
+    const data = this.periodicityScratch;
     
     // Autocorrelación: lag 10-50 cubre 36-180 bpm a 30fps (fisiológico completo)
     let maxCorr = 0;
