@@ -146,6 +146,7 @@ export interface PpgRenderState {
   lastArrhythmiaCount: number;
   pendingTrendArr: boolean;
   lastPeakProcessedTime: number;
+  arrActiveUntil: number;
 }
 
 export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: number): void {
@@ -560,6 +561,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
         const retroRR = lastRR > 0 ? lastRR : 800;
         const retroDuration = Math.min(Math.max(retroRR, 400), 1500);
         buffer.markArrhythmiaBack(retroDuration);
+        state.arrActiveUntil = state.now + retroDuration * 1.2;
       }
       const storedRR = isPhysiologicalRR(lastRR) ? Math.round(lastRR) : 0;
       state.beatHistory.push({
@@ -573,7 +575,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     }
   }
 
-  buffer.push({ time: state.now, value: scaledValue, isArrhythmia: false });
+  buffer.push({ time: state.now, value: scaledValue, isArrhythmia: state.now < state.arrActiveUntil });
 
   const points = buffer.getPoints();
   if (points.length > 30) {
