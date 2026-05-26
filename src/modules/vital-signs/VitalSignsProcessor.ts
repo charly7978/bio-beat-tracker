@@ -186,6 +186,18 @@ export class VitalSignsProcessor {
     this.bloodPressureProcessor.setPlacementMode(mode);
   }
 
+  /**
+   * Procesa un sample del pipeline y actualiza vitales.
+   *
+   * `dividerChannels` (NUEVO): bundle de canales especializados del SignalDivider.
+   * Si está presente, cada vital sign usa SU canal optimizado:
+   *   - morphologyHistory ← bp.acValue (banda 0.5-8 Hz para morfología/dicrotic)
+   *   - respirationHistory ← resp.acValue (banda 0.1-0.7 Hz para respiración)
+   * Si NO está presente, fallback al signalValue del PPG genérico (legacy).
+   *
+   * SpO2 sigue usando RGB raw via setRGBData (independiente del divider).
+   * HR ya se procesa antes en el router con divider.hr.acValue.
+   */
   processSignal(
     signalValue: number,
     signalQuality: number,
@@ -194,6 +206,12 @@ export class VitalSignsProcessor {
     perfusionIndexFromPpg?: number,
     sqmBundle?: Partial<SignalQualityMetrics>,
     morphologyValue?: number,
+    dividerChannels?: {
+      bpAC?: number;
+      respAC?: number;
+      spo2AC?: number;
+      hrvAC?: number;
+    },
   ): VitalSignsResult {
     this.frameCount++;
 
@@ -207,13 +225,29 @@ export class VitalSignsProcessor {
 
     this.syncAnthropometric();
 
-    const morphSample =
-      typeof morphologyValue === 'number' && Number.isFinite(morphologyValue)
-        ? morphologyValue
+    // Selección de samples para cada buffer según disponibilidad de canales
+    // especializados del SignalDivider. Las funciones Number.isFinite() son
+    // necesarias porque un canal puede ser 0 o NaN al inicio.
+    const isFiniteNumber = (v: unknown): v is number =>
+      typeof v === 'number' && Number.isFinite(v);
+
+    // Morfología (BP): canal bp.acValue (banda 0.5-8 Hz, escotadura dicrótica)
+    // o fallback al morphologyValue/signalValue clásico.
+    const morphSample = isFiniteNumber(dividerChannels?.bpAC)
+      ? dividerChannels!.bpAC!
+      : isFiniteNumber(morphologyValue)
+        ? morphologyValue!
         : signalValue;
+
+    // Respiración: canal resp.acValue (banda 0.1-0.7 Hz, modulación respiratoria)
+    // o fallback al signalValue clásico.
+    const respSample = isFiniteNumber(dividerChannels?.respAC)
+      ? dividerChannels!.respAC!
+      : signalValue;
+
     this.signalHistory.push(signalValue);
     this.morphologyHistory.push(morphSample);
-    this.respirationHistory.push(signalValue);
+    this.respirationHistory.push(respSample);
     // Control de calibración
     if (this.isCalibrating) {
       this.calibrationSamples++;

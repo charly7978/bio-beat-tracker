@@ -108,11 +108,30 @@ const Index = () => {
   routerSetDividerRef.current = router.setDividerSignal;
 
   const combinedProcessFrame: (imageData: ImageData, ts?: number) => void = useCallback((imageData: ImageData, ts?: number) => {
+    // 1. SignalDivider procesa el frame en 5 canales especializados.
+    //    Cada canal aplica su propio bandpass + AGC + SNR espectral.
     dividerProcessFrameRef.current(imageData, ts);
-    const hr = divider.lastResultRef.current?.channels.hr;
-    if (hr) {
-      routerSetDividerRef.current({ filteredValue: hr.acValue, quality: hr.quality });
+
+    // 2. Publicar el bundle COMPLETO al router. Antes solo se publicaba el
+    //    canal HR; ahora todos los canales especializados llegan al router
+    //    para que cada vital sign consuma SU canal optimizado.
+    const result = divider.lastResultRef.current;
+    if (result) {
+      const ch = result.channels;
+      routerSetDividerRef.current({
+        hr:   { acValue: ch.hr.acValue,   quality: ch.hr.quality   },
+        spo2: { acValue: ch.spo2.acValue, dcValue: ch.spo2.dcValue, quality: ch.spo2.quality },
+        hrv:  { acValue: ch.hrv.acValue,  quality: ch.hrv.quality  },
+        resp: { acValue: ch.resp.acValue, quality: ch.resp.quality },
+        bp:   { acValue: ch.bp.acValue,   quality: ch.bp.quality   },
+      });
+    } else {
+      routerSetDividerRef.current(null);
     }
+
+    // 3. PPGSignalProcessor sigue corriendo para: RGB raw (SpO2), detección
+    //    de dedo, diagnostics de calidad. Su filteredValue se usa como
+    //    FALLBACK si el divisor no produce señal válida.
     baseProcessFrameRef.current(imageData, ts);
   }, []);
 
