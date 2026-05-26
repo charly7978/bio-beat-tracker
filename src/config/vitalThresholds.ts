@@ -135,7 +135,7 @@ export const VITAL_THRESHOLDS = {
   ARRHYTHMIA: {
     RR_WINDOW_SIZE: 10,
     MIN_INTERVALS: 9,
-    MIN_SQI: 55,
+    MIN_SQI: 62,
     LEARNING_PERIOD_MS: 12_000,
     MIN_EVENT_INTERVAL_MS: 6000,
     OUTLIER_RATIO: 0.16,
@@ -182,7 +182,7 @@ export const VITAL_THRESHOLDS = {
     MILD_THRESHOLD: 0.30,
     MODERATE_THRESHOLD: 0.45,
     SEVERE_THRESHOLD: 0.65,
-    DETECTION_THRESHOLD: 0.45,
+    DETECTION_THRESHOLD: 0.50,
   },
 
   // FINGER + ROI (cámara trasera + dedo; hemoglobina + pulsación temporal)
