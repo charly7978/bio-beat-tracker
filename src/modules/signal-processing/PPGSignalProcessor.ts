@@ -1071,17 +1071,18 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const greenPI = this.greenDC > 0 ? this.greenAC / this.greenDC : 0;
     const piSum = redPI + greenPI;
 
-    let greenWeight = 0.65; // Favor Green (mejor SNR para HR)
-    let redWeight = 0.35;
+    // Verde tiene mejor SNR para HR en PPG por cámara (Tyapochkin 2019, OpenPPG 2025)
+    let greenWeight = 0.75;
+    let redWeight = 0.25;
 
     if (piSum > 0) {
-      greenWeight = clamp(greenPI / piSum, 0.55, 0.9);
+      greenWeight = clamp(greenPI / piSum, 0.65, 0.92);
       redWeight = 1 - greenWeight;
     }
 
-    // Clipping penalties - muy agresivos para evitar picos falsos
-    if (rawGreen > 248) { greenWeight = 0.1; redWeight = 0.9; }
-    else if (rawRed > 248) { redWeight = 0.1; greenWeight = 0.9; }
+    // Clipping: reducir peso del canal saturado sin invertir completamente la mezcla
+    if (rawGreen > 248) { greenWeight = clamp(greenWeight * 0.25, 0.15, 0.5); redWeight = 1 - greenWeight; }
+    else if (rawRed > 248) { redWeight = clamp(redWeight * 0.25, 0.15, 0.5); greenWeight = 1 - redWeight; }
     
     if (this.placementMode === 'pad') {
       greenWeight = clamp(greenWeight + 0.12, 0.72, 0.95);

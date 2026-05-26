@@ -189,8 +189,10 @@ export const VITAL_THRESHOLDS = {
   // NOTA: umbrales relajados para tolerar dedo no perfectamente centrado
   // (ROI más grande, centerBias más plano, tiles más permisivos)
   FINGER: {
-    /** Fracción del lado corto del frame usada como ROI cuadrado central (0.99 = máximo dedo visible, mayor estabilidad espacial) */
-    ROI_SIZE_FRACTION: 0.99,
+    /** Fracción del lado corto del frame usada como ROI cuadrado central.
+     *  0.65 captura zona central del dedo (mejor relación señal/ruido, menos luz ambiental perimetral)
+     *  y reduce ~57% los píxeles a procesar frente a 0.99. */
+    ROI_SIZE_FRACTION: 0.65,
     /** Penalización radial en tiles: menor = más tolerante si el dedo no está perfectamente centrado */
     ROI_CENTER_BIAS_MULT: 0.50,
     ROI_CENTER_BIAS_MIN: 0.50,
