@@ -90,6 +90,25 @@ export class VitalSignsProcessor {
   /** Buffer más largo para modulación respiratoria (~10 Hz efectivos desde Index). */
   private readonly RESPIRATION_BUFFER = 320;
   private respirationHistory: RingF32 = new RingF32(this.RESPIRATION_BUFFER);
+  /**
+   * Buffer especializado SpO2 alimentado por divider.spo2.acValue cuando el
+   * SignalDivider está activo. Usado para validación de pulsatilidad real
+   * de SpO2 (la señal del divider está filtrada en 0.5-5Hz con DC preservado,
+   * y procesada con paleta R-dominante optimizada para Beer-Lambert).
+   */
+  private readonly SPO2_DIVIDER_BUFFER = 96;
+  private spo2DividerHistory: RingF32 = new RingF32(this.SPO2_DIVIDER_BUFFER);
+  /** Último valor de quality del canal SpO2 del divider (0-100) */
+  private lastSpo2DividerQuality = 0;
+  /**
+   * Buffer especializado HRV alimentado por divider.hrv.acValue.
+   * Banda 0.5-3 Hz con zeroPhase filtering — no introduce lag temporal,
+   * ideal para precisión de localización de picos en variabilidad RR.
+   */
+  private readonly HRV_DIVIDER_BUFFER = 128;
+  private hrvDividerHistory: RingF32 = new RingF32(this.HRV_DIVIDER_BUFFER);
+  /** Último valor de quality del canal HRV del divider (0-100) */
+  private lastHrvDividerQuality = 0;
   private readonly VITAL_SIGNAL_ESTIMATE_HZ = 10;
   private frameCount = 0;  // Contador continuo para logging/diagnóstico
   
@@ -210,7 +229,10 @@ export class VitalSignsProcessor {
       bpAC?: number;
       respAC?: number;
       spo2AC?: number;
+      spo2DC?: number;
+      spo2Quality?: number;
       hrvAC?: number;
+      hrvQuality?: number;
     },
   ): VitalSignsResult {
     this.frameCount++;
@@ -248,6 +270,20 @@ export class VitalSignsProcessor {
     this.signalHistory.push(signalValue);
     this.morphologyHistory.push(morphSample);
     this.respirationHistory.push(respSample);
+
+    // Alimentar buffers especializados del divisor (señal optimizada por vital)
+    if (isFiniteNumber(dividerChannels?.spo2AC)) {
+      this.spo2DividerHistory.push(dividerChannels!.spo2AC!);
+    }
+    if (isFiniteNumber(dividerChannels?.spo2Quality)) {
+      this.lastSpo2DividerQuality = dividerChannels!.spo2Quality!;
+    }
+    if (isFiniteNumber(dividerChannels?.hrvAC)) {
+      this.hrvDividerHistory.push(dividerChannels!.hrvAC!);
+    }
+    if (isFiniteNumber(dividerChannels?.hrvQuality)) {
+      this.lastHrvDividerQuality = dividerChannels!.hrvQuality!;
+    }
     // Control de calibración
     if (this.isCalibrating) {
       this.calibrationSamples++;
@@ -624,11 +660,29 @@ export class VitalSignsProcessor {
     }
     
     // === SpO2 — Basado en física (Beer-Lambert), no estadística ===
-    // SpO2 usa ratios ópticos AC/DC directamente de la cámara.
-    // Solo necesita datos RGB válidos y confidence no-INVALID.
+    // SpO2 usa ratios ópticos AC/DC directamente de la cámara (RGB raw).
+    // El SignalDivider provee un canal especializado (banda 0.5-5Hz, paleta
+    // R-dominante, DC preservado) que validamos como GATE: si la señal
+    // pulsátil del divider.spo2 es muy débil, descartamos el cálculo
+    // para no emitir SpO2 sobre ruido.
     const spo2 = this.calculateSpO2Raw();
     const spo2Conf = this.getSpo2Confidence();
-    if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && spo2Conf !== 'INVALID') {
+    // Gate del divider.spo2: la señal AC pulsátil debe tener amplitud mínima
+    // (peak-to-peak) para que el cálculo Beer-Lambert sea válido. Esto evita
+    // emitir SpO2 sobre superficies estáticas con rojo (foto, tela, etc).
+    let spo2DividerPasses = true;
+    if (this.spo2DividerHistory.length >= 16) {
+      const last48 = this.spo2DividerHistory.tail(48);
+      let mn = Infinity, mx = -Infinity;
+      for (const v of last48) {
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      const peakToPeak = mx - mn;
+      spo2DividerPasses = peakToPeak > 1.0 && this.lastSpo2DividerQuality >= 20;
+    }
+    // Durante warmup (buffer < 16 muestras) no bloquear — se valida después.
+    if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && spo2Conf !== 'INVALID' && spo2DividerPasses) {
       const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 5;
       if (isCoherent || this.frameCount > 300) {
         this.lastCoherentSpO2 = spo2;
@@ -688,17 +742,26 @@ export class VitalSignsProcessor {
       }
     }
 
-    // Arrhythmia — solo con RR robustos y SQI suficiente
+    // Arrhythmia — solo con RR robustos y SQI suficiente.
+    // El canal divider.hrv (banda 0.5-3Hz, zeroPhase, sin lag temporal)
+    // se usa como GATE DE CALIDAD adicional: si su quality es muy baja,
+    // los RR del HR detector probablemente sean ruidosos también.
     const arrCfg = VITAL_THRESHOLDS.ARRHYTHMIA;
     const arrhythmiaRR = validRR.slice(-arrCfg.RR_WINDOW_SIZE);
     const detectorAgree = this.lastSqmBundle?.detectorAgreement ?? 0;
+    // Gate del divider.hrv: la calidad de la señal HRV especializada debe
+    // ser >= 25 para confiar en los RR del HR detector. Si está vacío
+    // (lastHrvDividerQuality === 0), permite (warmup) para no bloquear.
+    const hrvDividerPasses =
+      this.lastHrvDividerQuality === 0 || this.lastHrvDividerQuality >= 25;
     const arrhythmiaInput = (
       arrhythmiaRR.length >= arrCfg.MIN_INTERVALS &&
       this.measurements.signalQuality >= arrCfg.MIN_SQI &&
       detectorAgree >= VITAL_THRESHOLDS.QUALITY.MIN_DETECTOR_AGREEMENT_ARRHYTHMIA + 0.06 &&
       hr >= VITAL_THRESHOLDS.HR.MIN &&
       hr <= VITAL_THRESHOLDS.HR.MAX &&
-      this.validPulseCount >= 3
+      this.validPulseCount >= 3 &&
+      hrvDividerPasses
     ) ? { ...rrData!, intervals: arrhythmiaRR } : undefined;
 
     const arrhythmiaResult = this.arrhythmiaProcessor.processRRData(arrhythmiaInput);

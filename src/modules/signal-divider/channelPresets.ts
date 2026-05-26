@@ -1,6 +1,26 @@
 import type { VisualTransform } from '../signal-processing/visualTransform';
 
-/** Preprocesamiento visual + filtros + stride para cada canal */
+/**
+ * Parámetros AGC (Automatic Gain Control) especializados por canal.
+ * Diferentes vitales requieren targets y ventanas distintas:
+ *   - HR/HRV: target moderado, ventana media (pulso periódico)
+ *   - SpO2: target bajo, ventana larga (anti-saturación para ratio Beer-Lambert)
+ *   - BP: target alto, ventana corta (preservar transients morfológicos)
+ *   - RESP: target alto, ventana muy larga (señal lenta, evita oscilación AGC)
+ */
+export interface ChannelAgcParams {
+  /** Amplitud objetivo en cuentas (típico 30-55 según vital) */
+  target: number;
+  /** Tail/ventana del RMS para estimar amplitud actual (frames) */
+  tail: number;
+  /** Rango del escalado: [min, max] */
+  scaleMin: number;
+  scaleMax: number;
+  /** Smoothing del AGC (alpha EMA): bajo=lento/estable, alto=rápido/inestable */
+  smoothAlpha: number;
+}
+
+/** Preprocesamiento visual + filtros + AGC + stride para cada canal */
 export interface SignalChannelPreset {
   name: string;
   label: string;
@@ -14,7 +34,38 @@ export interface SignalChannelPreset {
   dominantChannel: 'R' | 'G' | 'B' | 'RG';
   /** Cómo tratar la DC: 'preserve' para SpO2, 'remove' para HR, 'partial' para BP */
   dcMode: 'preserve' | 'remove' | 'partial';
+  /** AGC especializado por vital (target/tail/range/smoothing) */
+  agc: ChannelAgcParams;
 }
+
+// ─────────────────────────────────────────────────────────────────
+// AGC presets — derivados de literatura PPG smartphone
+// ─────────────────────────────────────────────────────────────────
+
+/** HR/HRV: target moderado, ventana media (~1.6s @30fps) */
+const AGC_HR_LIKE: ChannelAgcParams = {
+  target: 40, tail: 48, scaleMin: 0.5, scaleMax: 8.0, smoothAlpha: 0.20,
+};
+
+/** SpO2: target bajo (anti-saturación clave para Beer-Lambert), ventana larga */
+const AGC_SPO2: ChannelAgcParams = {
+  target: 30, tail: 72, scaleMin: 0.3, scaleMax: 6.0, smoothAlpha: 0.12,
+};
+
+/** HRV: igual que HR pero ventana mayor para estabilidad temporal de RR */
+const AGC_HRV: ChannelAgcParams = {
+  target: 40, tail: 64, scaleMin: 0.5, scaleMax: 8.0, smoothAlpha: 0.18,
+};
+
+/** RESP: target alto, ventana MUY larga (señal lenta 0.1-0.5Hz) */
+const AGC_RESP: ChannelAgcParams = {
+  target: 50, tail: 120, scaleMin: 0.4, scaleMax: 10.0, smoothAlpha: 0.08,
+};
+
+/** BP: target alto, ventana CORTA (preserva morfología/dicrotic notch viva) */
+const AGC_BP: ChannelAgcParams = {
+  target: 55, tail: 32, scaleMin: 0.6, scaleMax: 10.0, smoothAlpha: 0.28,
+};
 
 export const HR_CHANNEL: SignalChannelPreset = {
   name: 'hr',
@@ -27,6 +78,7 @@ export const HR_CHANNEL: SignalChannelPreset = {
   zeroPhase: false,
   dominantChannel: 'G',
   dcMode: 'remove',
+  agc: AGC_HR_LIKE,
 };
 
 export const SPO2_CHANNEL: SignalChannelPreset = {
@@ -40,6 +92,7 @@ export const SPO2_CHANNEL: SignalChannelPreset = {
   zeroPhase: false,
   dominantChannel: 'R',
   dcMode: 'preserve',
+  agc: AGC_SPO2,
 };
 
 export const HRV_CHANNEL: SignalChannelPreset = {
@@ -53,6 +106,7 @@ export const HRV_CHANNEL: SignalChannelPreset = {
   zeroPhase: true,
   dominantChannel: 'G',
   dcMode: 'remove',
+  agc: AGC_HRV,
 };
 
 export const RESP_CHANNEL: SignalChannelPreset = {
@@ -66,6 +120,7 @@ export const RESP_CHANNEL: SignalChannelPreset = {
   zeroPhase: false,
   dominantChannel: 'G',
   dcMode: 'remove',
+  agc: AGC_RESP,
 };
 
 export const BP_CHANNEL: SignalChannelPreset = {
@@ -80,6 +135,7 @@ export const BP_CHANNEL: SignalChannelPreset = {
   sharpen: 0.3,
   dominantChannel: 'R',
   dcMode: 'partial',
+  agc: AGC_BP,
 };
 
 export const ALL_CHANNELS: SignalChannelPreset[] = [

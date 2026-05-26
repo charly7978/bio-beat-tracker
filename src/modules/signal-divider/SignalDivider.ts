@@ -65,7 +65,8 @@ interface RoiExtraction {
  * Incluye MotionArbiter para desambiguar señal dudosa.
  */
 export class SignalDivider {
-  private readonly notchFilters: Map<string, NotchFilter> = new Map(); // Elimina 50/60Hz
+  // Un solo notch filter para todos los canales (todos notch a 50/60Hz)
+  private readonly notchFilter: NotchFilter;
   private readonly filters: Map<string, BandpassFilter> = new Map();
   private readonly snrEstimators: Map<string, SNREstimator> = new Map(); // Welch PSD + SNR espectral
   private readonly snrResults: Map<string, SNRResult> = new Map();
@@ -89,10 +90,16 @@ export class SignalDivider {
   /** Recalcular SNR cada N frames (throttling — Welch es O(N log N) por segmento) */
   private readonly SNR_UPDATE_INTERVAL = 8; // ~270ms @ 30fps
 
+  /**
+   * AGC defaults legacy — ahora cada preset trae su propio agc.target/tail/range.
+   * Estas constantes se mantienen solo como fallback si por error un preset no
+   * trae el campo agc. La especialización real viene de channelPresets.ts.
+   */
   private readonly AGC_TARGET = 40;
   private readonly AGC_MIN_SCALE = 0.5;
   private readonly AGC_MAX_SCALE = 8;
   private readonly AGC_TAIL = 48;
+  private readonly AGC_SMOOTH_ALPHA = 0.10;
 
   private frontCamReport: FrontCameraMotionReport | null = null;
   private compassReport: CompassMotionReport | null = null;
@@ -100,8 +107,8 @@ export class SignalDivider {
   private accelReport: AccelerometerMotionReport | null = null;
 
   constructor() {
+    this.notchFilter = new NotchFilter(this.SAMPLE_RATE, 50, 20);
     for (const preset of [HR_CHANNEL, SPO2_CHANNEL, HRV_CHANNEL, RESP_CHANNEL, BP_CHANNEL]) {
-      this.notchFilters.set(preset.name, new NotchFilter(this.SAMPLE_RATE, 50, 20));
       this.filters.set(preset.name, new BandpassFilter(this.SAMPLE_RATE, preset.bandpassHigh));
       // SNR estimator con banda específica del canal (Welch PSD method)
       this.snrEstimators.set(preset.name, new SNREstimator(this.SNR_FFT_SIZE, {
@@ -137,16 +144,12 @@ export class SignalDivider {
 
   /** Cambiar frecuencia del notch filter: 50 Hz (Europa/Asia) o 60 Hz (USA). */
   setNotchFrequency(freq: 50 | 60): void {
-    for (const notchFilter of this.notchFilters.values()) {
-      notchFilter.setNotchFrequency(freq);
-    }
+    this.notchFilter.setNotchFrequency(freq);
   }
 
-  /** Resetear todos los notch filters. */
+  /** Resetear el notch filter. */
   resetNotchFilters(): void {
-    for (const notchFilter of this.notchFilters.values()) {
-      notchFilter.reset();
-    }
+    this.notchFilter.reset();
   }
 
   /** Resetear todos los SNR estimators. */
@@ -232,8 +235,7 @@ export class SignalDivider {
     this.fillCounts.set(preset.name, newFill);
 
     // Notch filter (50/60Hz) → Bandpass
-    const notchFilter = this.notchFilters.get(preset.name)!;
-    const notched = notchFilter.filter(rawVal);
+    const notched = this.notchFilter.filter(rawVal);
     const filter = this.filters.get(preset.name)!;
     const acValue = filter.filter(notched);
 
@@ -279,12 +281,29 @@ export class SignalDivider {
     };
   }
 
-  /** AGC adaptativo sobre buffer AC */
-  private computeAgc(acBuf: Float64Array, head: number, fillCount: number, _preset: SignalChannelPreset): number {
-    let agcScale = this.agcScales.get(_preset.name) ?? 1.0;
+  /**
+   * AGC adaptativo sobre buffer AC.
+   * Cada canal usa SUS propios parámetros (preset.agc) — target/tail/range/alpha.
+   * Esto especializa el control de ganancia según la naturaleza de cada vital:
+   *   - SpO2: target bajo + ventana larga + smoothing lento (anti-saturación)
+   *   - BP: target alto + ventana corta + smoothing rápido (morfología viva)
+   *   - RESP: target alto + ventana muy larga (señal lenta sin oscilación)
+   */
+  private computeAgc(acBuf: Float64Array, head: number, fillCount: number, preset: SignalChannelPreset): number {
+    let agcScale = this.agcScales.get(preset.name) ?? 1.0;
     if (fillCount < 5) return agcScale;
 
-    const tail = Math.min(fillCount, this.AGC_TAIL);
+    // Fallback defensivo: si por algún motivo el preset no trae .agc,
+    // usar las constantes legacy.
+    const agcCfg = preset.agc ?? {
+      target: this.AGC_TARGET,
+      tail: this.AGC_TAIL,
+      scaleMin: this.AGC_MIN_SCALE,
+      scaleMax: this.AGC_MAX_SCALE,
+      smoothAlpha: this.AGC_SMOOTH_ALPHA,
+    };
+
+    const tail = Math.min(fillCount, agcCfg.tail);
     let peak = 0;
     for (let i = 0; i < tail; i++) {
       const idx = ((head - 1 - i) & this.BUFFER_MASK);
@@ -292,9 +311,9 @@ export class SignalDivider {
       if (abs > peak) peak = abs;
     }
     if (peak > 0.1) {
-      const target = this.AGC_TARGET / peak;
-      agcScale += (target - agcScale) * 0.1;
-      agcScale = clamp(agcScale, this.AGC_MIN_SCALE, this.AGC_MAX_SCALE);
+      const targetScale = agcCfg.target / peak;
+      agcScale += (targetScale - agcScale) * agcCfg.smoothAlpha;
+      agcScale = clamp(agcScale, agcCfg.scaleMin, agcCfg.scaleMax);
     }
     return agcScale;
   }

@@ -59,7 +59,10 @@ export const useVitalSignsProcessor = () => {
       bpAC?: number;
       respAC?: number;
       spo2AC?: number;
+      spo2DC?: number;
+      spo2Quality?: number;
       hrvAC?: number;
+      hrvQuality?: number;
     },
   ): VitalSignsResult => {
     if (!processorRef.current) return createDefaultVitalSignsResult();

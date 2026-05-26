@@ -42,6 +42,7 @@ import {
   resetPulseAgc,
 } from './shared/pulseAgc';
 import { transformPixel, type VisualTransform } from './visualTransform';
+import { PPG_BUFFER_SIZE } from '../../config/constants';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -77,7 +78,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private placementStreak = { mode: 'hybrid' as FingerPlacementMode, count: 0 };
   private readonly pulseAgcState = createPulseAgcState();
 
-  private readonly BUFFER_SIZE = 300;
+  private readonly BUFFER_SIZE = PPG_BUFFER_SIZE;
   private readonly ACDC_WINDOW = 120;
   private readonly TILE_COLUMNS = 5;
   private readonly TILE_ROWS = 5;
@@ -879,16 +880,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private computeRoiRect(width: number, height: number) {
-    // ROI = frame completo (ya no es un cuadrado central).
-    // El dedo puede estar en cualquier parte del frame; la pulsación confirma presencia.
-    return { 
-      startX: 0, 
-      startY: 0, 
-      endX: width, 
-      endY: height, 
-      roiW: width, 
-      roiH: height 
-    };
+    // ROI = cuadrado central del 70%. El dedo se coloca naturalmente en el centro
+    // de la lente; este recorte maximiza la relación señal/ruido al excluir fondo.
+    const size = Math.min(width, height) * 0.7;
+    const startX = Math.floor((width - size) / 2);
+    const startY = Math.floor((height - size) / 2);
+    const side = Math.floor(size);
+    return { startX, startY, endX: startX + side, endY: startY + side, roiW: side, roiH: side };
   }
 
   private signalRoiFromMetrics(roi: ROIMetrics) {

@@ -6,6 +6,7 @@ import { clamp } from '../utils/math';
 import { robustBounds } from '../utils/stats';
 import { PEAK_DETECTION_DEFAULTS } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
+import { PPG_BUFFER_SIZE } from '../config/constants';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
 import {
   inferCameraRuntimeHints,
@@ -28,7 +29,7 @@ export class HeartBeatProcessor {
 
   private signalBuffer: number[] = [];
   private timestampBuffer: number[] = [];
-  private readonly BUFFER_SIZE = 300;
+  private readonly BUFFER_SIZE = PPG_BUFFER_SIZE;
 
   private lastPeakTime = 0;
   private rrIntervals: number[] = [];

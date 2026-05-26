@@ -198,8 +198,8 @@ export const VITAL_THRESHOLDS = {
   // El dedo cubre parcialmente la lente y eso alcanza — la pulsación
   // (PI) es quien confirma o descarta tras adquisición.
   FINGER: {
-    /** ROI = frame completo (ya no es un cuadrado central). */
-    ROI_SIZE_FRACTION: 1.0,
+    /** ROI = cuadrado central del 70%. Excluye fondo, maximiza SNR. */
+    ROI_SIZE_FRACTION: 0.7,
     /** CenterBias casi plano — el dedo puede estar en cualquier parte del frame */
     ROI_CENTER_BIAS_MULT: 0.20,
     ROI_CENTER_BIAS_MIN: 0.70,

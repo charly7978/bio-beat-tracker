@@ -61,7 +61,15 @@ interface VitalSignsProcessorAPI {
     perfusionIndexFromPpg?: number,
     sqmBundle?: Partial<SignalQualityMetrics>,
     morphologyValue?: number,
-    dividerChannels?: { bpAC?: number; respAC?: number; spo2AC?: number; hrvAC?: number },
+    dividerChannels?: {
+      bpAC?: number;
+      respAC?: number;
+      spo2AC?: number;
+      spo2DC?: number;
+      spo2Quality?: number;
+      hrvAC?: number;
+      hrvQuality?: number;
+    },
   ) => VitalSignsResult;
   setPlacementMode: (mode: FingerPlacementMode) => void;
   setRGBData: (data: RGBData) => void;
@@ -642,12 +650,24 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       //   - HRV usa hrv.acValue (banda 0.4-5 Hz)
       // Si el divisor no produce señal (e.g. arranque), el processor cae
       // al signalValue/morphologyValue clásicos (legacy fallback).
+      // Bundle COMPLETO de canales especializados del SignalDivider.
+      // Cada vital sign consume SU canal optimizado (banda + paleta de color
+      // + AGC + DC mode + SNR específicos por vital):
+      //   BP: canal R, banda 0.5-8Hz, dcMode=partial, sharpen, AGC agresivo
+      //   Resp: canal G, banda 0.1-0.5Hz, AGC con ventana muy larga
+      //   SpO2: canal R, banda 0.5-5Hz, dcMode=preserve (Beer-Lambert), anti-saturación
+      //   HRV: canal G, banda 0.5-3Hz, zeroPhase (sin lag temporal)
+      // Las quality values permiten al VitalSignsProcessor descartar el canal
+      // cuando su calidad es baja en lugar del SQI genérico.
       const dvNow = dividerSignalRef.current;
       const dividerChannels = dvNow ? {
-        bpAC:   dvNow.bp.acValue,
-        respAC: dvNow.resp.acValue,
-        spo2AC: dvNow.spo2.acValue,
-        hrvAC:  dvNow.hrv.acValue,
+        bpAC:         dvNow.bp.acValue,
+        respAC:       dvNow.resp.acValue,
+        spo2AC:       dvNow.spo2.acValue,
+        spo2DC:       dvNow.spo2.dcValue,
+        spo2Quality:  dvNow.spo2.quality,
+        hrvAC:        dvNow.hrv.acValue,
+        hrvQuality:   dvNow.hrv.quality,
       } : undefined;
 
       const vitals = processVitalSigns.processSignal(
