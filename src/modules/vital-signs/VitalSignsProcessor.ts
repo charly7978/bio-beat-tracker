@@ -652,7 +652,7 @@ export class VitalSignsProcessor {
     const arrhythmiaInput = (
       arrhythmiaRR.length >= arrCfg.MIN_INTERVALS &&
       this.measurements.signalQuality >= arrCfg.MIN_SQI &&
-      detectorAgree >= VITAL_THRESHOLDS.QUALITY.MIN_DETECTOR_AGREEMENT_ARRHYTHMIA + 0.06 &&
+      detectorAgree >= VITAL_THRESHOLDS.QUALITY.MIN_DETECTOR_AGREEMENT_ARRHYTHMIA &&
       hr >= VITAL_THRESHOLDS.HR.MIN &&
       hr <= VITAL_THRESHOLDS.HR.MAX &&
       this.validPulseCount >= 3
