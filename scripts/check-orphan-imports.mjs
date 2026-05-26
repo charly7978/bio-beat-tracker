@@ -22,17 +22,14 @@ const ENTRYPOINTS = new Set([
   'src/integrations/supabase/client.ts',
   'src/integrations/supabase/types.ts',
 ]);
-const ALLOWED_ORPHANS = new Set();
 const TYPES_GLOB = /\.d\.ts$/;
-
-function posix(p) { return p.replace(/\\/g, '/'); }
 
 function walk(dir, acc = []) {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
     const st = statSync(p);
     if (st.isDirectory()) walk(p, acc);
-    else if (EXTS.includes(extname(p))) acc.push(posix(p));
+    else if (EXTS.includes(extname(p))) acc.push(p);
   }
   return acc;
 }
@@ -51,7 +48,7 @@ function tryResolve(spec, fromFile) {
     ...RESOLVE_EXTS.map(e => join(base, 'index' + e)),
   ];
   for (const c of candidates) {
-    try { if (statSync(c).isFile()) return posix(c); } catch {}
+    try { if (statSync(c).isFile()) return c; } catch {}
   }
   return false;
 }
@@ -73,7 +70,7 @@ for (const file of files) {
       const resolved = tryResolve(spec, file);
       if (resolved === null) continue; // external pkg
       if (resolved === false) {
-        errors.push(`UNRESOLVED  ${file.replace(ROOT_POSIX, '')}  ->  ${spec}`);
+        errors.push(`UNRESOLVED  ${file.replace(ROOT + '/', '')}  ->  ${spec}`);
       } else {
         targets.add(resolved);
       }
@@ -87,17 +84,15 @@ const referenced = new Set();
 for (const targets of importGraph.values()) for (const t of targets) referenced.add(t);
 for (const ep of ENTRYPOINTS) referenced.add(join(ROOT, ep));
 
-const ROOT_POSIX = posix(ROOT) + '/';
 const orphans = files.filter(f => {
-  const rel = f.replace(ROOT_POSIX, '');
+  const rel = f.replace(ROOT + '/', '');
   if (ENTRYPOINTS.has(rel)) return false;
-  if (ALLOWED_ORPHANS.has(rel)) return false;
   if (TYPES_GLOB.test(rel)) return false; // ambient types
   if (rel.includes('__tests__') || /\.(test|spec)\.[tj]sx?$/.test(rel)) return false;
   return !referenced.has(f);
 });
 
-for (const o of orphans) errors.push(`ORPHAN      ${o.replace(ROOT_POSIX, '')}`);
+for (const o of orphans) errors.push(`ORPHAN      ${o.replace(ROOT + '/', '')}`);
 
 if (errors.length) {
   console.error('❌ Repository hygiene check failed:');

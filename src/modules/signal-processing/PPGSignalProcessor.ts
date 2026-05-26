@@ -1,6 +1,5 @@
 import type { ProcessedSignal, ProcessingError, SignalProcessor as SignalProcessorInterface, ContactState } from '../../types/signal';
 import { BandpassFilter } from './BandpassFilter';
-import { NotchFilter } from './NotchFilter';
 import { createLogger, ppgPerf } from '../../utils/logger';
 import { clamp } from '../../utils/math';
 import { RingF32 } from '../../utils/RingBuffer';
@@ -41,8 +40,6 @@ import {
   DEFAULT_PULSE_AGC,
   resetPulseAgc,
 } from './shared/pulseAgc';
-import { transformPixel, type VisualTransform } from './visualTransform';
-import { PPG_BUFFER_SIZE } from '../../config/constants';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -78,7 +75,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private placementStreak = { mode: 'hybrid' as FingerPlacementMode, count: 0 };
   private readonly pulseAgcState = createPulseAgcState();
 
-  private readonly BUFFER_SIZE = PPG_BUFFER_SIZE;
+  private readonly BUFFER_SIZE = 300;
   private readonly ACDC_WINDOW = 120;
   private readonly TILE_COLUMNS = 5;
   private readonly TILE_ROWS = 5;
@@ -133,15 +130,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private tileYLut: Int8Array | null = null;
   private tileLutKey = '';
 
-  /** Transformación visual aplicada a píxeles RAW antes de promediar tiles.
-   *  null = sin transformación (comportamiento legacy).
-   *  Activar con setVisualTransform() cuando se configure el canal. */
-  private visualTransform: VisualTransform | null = null;
-
-  setVisualTransform(t: VisualTransform | null): void {
-    this.visualTransform = t;
-  }
-
   // AC/DC
   private redDC = 0;
   private redAC = 0;
@@ -173,16 +161,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
   private lastInstantFinger = false;
   private readonly FINGER_CONFIRM_FRAMES = VITAL_THRESHOLDS.FINGER.FINGER_CONFIRM_FRAMES;
-  // Pulsatility verification: after finger acquisition, if no pulse detected for N frames,
-  // force no-contact (rejects red surfaces, flash-to-air, etc.)
-  private pulsatileGraceCounter = 0;
-  // Pulsatility grace: tiempo que el sistema espera ver pulsación antes de
-  // declarar "no es un dedo vivo". Bajamos de 40 → 24 frames (~800ms @30fps).
-  // 1.3s era excesivo: el HR processor ya necesita ~2 latidos para confirmar
-  // BPM, y nosotros estábamos esperando antes de eso, alargando inútilmente
-  // el tiempo de adquisición percibido por el usuario.
-  private readonly PULSATILE_GRACE_FRAMES = 24;
-  private lastPulsatileFrame = 0;
 
   // Suavizado temporal — más lentos = más estable
   private smoothedRed = 0;
@@ -190,20 +168,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private smoothedBlue = 0;
   private smoothedCoverage = 0;
   private smoothedFingerScore = 0;
-  /**
-   * Alpha del EMA para suavizado RGB / coverage / finger score.
-   * Ahora ADAPTATIVO:
-   *  - Pre-adquisición (sin dedo confirmado): alpha rápido (0.22) para que
-   *    los transientes del usuario poniendo el dedo se reflejen en ~5 frames
-   *    (~165ms @30fps). Antes con 0.08 tardaba ~50 frames (1.7s) en converger.
-   *  - Post-adquisición (dedo STABLE): alpha lento (0.08) para máxima
-   *    estabilidad de la señal continua.
-   * Esto reduce significativamente el tiempo percibido "buscando dedo".
-   */
-  private readonly RGB_SMOOTH_ALPHA_PRE = 0.22;
-  private readonly RGB_SMOOTH_ALPHA_POST = 0.08;
-  private readonly COVERAGE_SMOOTH_ALPHA_PRE = 0.26;
-  private readonly COVERAGE_SMOOTH_ALPHA_POST = 0.10;
+  private readonly RGB_SMOOTH_ALPHA = 0.08;
+  private readonly COVERAGE_SMOOTH_ALPHA = 0.10;
 
   /** Ventana corta de R medio en ROI — CV temporal para distinguir tejido pulsátil vs. rojo estático */
   private readonly roiRedPulseRing = new RingF32(VITAL_THRESHOLDS.FINGER.ROI_PULSE_BUFFER);
@@ -240,14 +206,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private lastSourceSwitch = 0;
   private readonly SOURCE_HYSTERESIS_MS = 2000;
 
-  private notchFilter: NotchFilter; // Elimina 50/60 Hz (red eléctrica) antes del bandpass
-
   constructor(
     public onSignalReady?: (signal: ProcessedSignal) => void,
     public onError?: (error: ProcessingError) => void
   ) {
-    // Notch 50Hz (predeterminado — Europa/Asia). Cambia a 60Hz en USA si es necesario.
-    this.notchFilter = new NotchFilter(this.estimatedSampleRate, 50, 20);
     // Pulso (HR): 0.5-4.5Hz — rango cardíaco estándar, 4º orden para mejor rechazo
     this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate, 4.5);
     // Morfología (BP): 0.5-8Hz — preserva escotadura dicrótica y forma completa del pulso
@@ -277,11 +239,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   /** Actualizar perfil según diagnóstico de CameraView (torch/FPS/jitter). */
   setCameraRuntimeHints(diag: Record<string, unknown> | null | undefined): void {
     this.cameraHints = inferCameraRuntimeHints(diag);
-  }
-
-  /** Cambiar frecuencia del notch filter: 50 Hz (Europa/Asia) o 60 Hz (USA/América). */
-  setNotchFrequency(freq: 50 | 60): void {
-    this.notchFilter.setNotchFrequency(freq);
   }
 
   processFrame(imageData: ImageData, frameTimestampMs?: number): void {
@@ -432,11 +389,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.rawBuffer.push(pulseSource.value);
 
     const endFilt = ppgPerf.start('bandpass');
-    // Notch filter primero (50/60Hz) — elimina interferencia de red
-    const notched = this.notchFilter.filter(pulseSource.value);
-    const filtered = this.bandpassFilter.filter(notched);
-    const morphNotched = this.notchFilter.filter(morphSource);
-    const morphFiltered = this.morphBandpassFilter.filter(morphNotched);
+    const filtered = this.bandpassFilter.filter(pulseSource.value);
+    const morphFiltered = this.morphBandpassFilter.filter(morphSource);
     const enhanced = applyPulseAgc(
       this.pulseAgcState,
       filtered,
@@ -604,24 +558,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.fingerConfidenceCount = Math.min(this.fingerConfidenceCount + 1, 100);
       this.stableContactCount++;
 
-      // FAST-PATH de adquisición: cuando la firma del dedo es OBVIA (red
-      // alto + clara dominancia hemoglobina + buena cobertura), confirmamos
-      // en 2 frames en lugar de esperar los 3-6 frames normales. Esto
-      // reduce el tiempo de adquisición percibido cuando el usuario pone
-      // el dedo bien desde el inicio.
-      //
-      // Criterios derivados de literatura PPG smartphone (FibriCheck,
-      // Welltory): red >= 180 (canal saturado por sangre con flash),
-      // r/b >= 1.30 (firma fuerte de hemoglobina), coverage >= 0.18 (dedo
-      // tapando significativamente la lente).
-      const r = this.smoothedRed;
-      const b = this.smoothedBlue;
-      const rb = b > 0 ? r / b : 0;
-      const obviousFinger = r >= 180 && rb >= 1.30 && this.smoothedCoverage >= 0.18;
-      const fastPathFrames = Math.max(2, Math.floor(confirmFrames * 0.5));
-      const effectiveConfirm = obviousFinger ? fastPathFrames : confirmFrames;
-
-      if (this.fingerConfidenceCount >= effectiveConfirm) {
+      if (this.fingerConfidenceCount >= confirmFrames) {
         this.fingerDetected = true;
         this.contactState = 'UNSTABLE_CONTACT';
       }
@@ -659,23 +596,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       } else {
         this.setNoContact(true);
       }
-    }
-
-    // Pulsatility verification: después de adquirir dedo, si no hay pulsación en N frames,
-    // forzar pérdida de contacto (evita medir sobre superficies rojas inertes).
-    if (this.fingerDetected && this.contactState !== 'NO_CONTACT') {
-      if (this.hasPulsatility()) {
-        this.pulsatileGraceCounter = 0;
-        this.lastPulsatileFrame = this.frameCount;
-      } else {
-        this.pulsatileGraceCounter++;
-        if (this.pulsatileGraceCounter > this.PULSATILE_GRACE_FRAMES) {
-          // Superó el período de gracia sin pulsación → no es un dedo vivo
-          this.setNoContact(true);
-        }
-      }
-    } else {
-      this.pulsatileGraceCounter = 0;
     }
 
     if (previousState === 'NO_CONTACT' && this.contactState !== 'NO_CONTACT') {
@@ -726,7 +646,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.instantLostStreak = 0;
     this.lastInstantFinger = false;
     this.liveFingerMissStreak = 0;
-    this.pulsatileGraceCounter = 0;
 
     const shouldHard =
       hardReset &&
@@ -780,15 +699,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     };
   }
 
-  /** Verifica si hay pulsación real (PI o CV de ROI). */
-  private hasPulsatility(): boolean {
-    const F = VITAL_THRESHOLDS.FINGER;
-    return (
-      this.cachedPI >= F.PULSE_HOLD_MIN_PI ||
-      this.lastRoiRedCv >= F.ROI_RED_CV_MIN * 0.5
-    );
-  }
-
   private isLiveFingerFrame(roi: ROIMetrics): boolean {
     const raw = this.rawRgbSnapshotFromRoi(roi);
     const smoothed = this.rgbSnapshotFromSmoothed();
@@ -827,22 +737,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const { rawRed, rawGreen, rawBlue, coverageRatio, fingerScore } = roi;
 
     if (this.smoothedRed === 0) {
-      // Inicialización al primer frame — copia directa, sin EMA.
       this.smoothedRed = rawRed;
       this.smoothedGreen = rawGreen;
       this.smoothedBlue = rawBlue;
       this.smoothedCoverage = coverageRatio;
       this.smoothedFingerScore = fingerScore;
     } else {
-      // Alpha adaptativo: rápido cuando aún no hay dedo (acelera adquisición),
-      // lento una vez confirmado (estabilidad de medición). Esto reemplaza el
-      // alpha fijo lento que producía latencia inicial de ~1.7s "buscando".
-      const a = this.fingerDetected
-        ? this.RGB_SMOOTH_ALPHA_POST
-        : this.RGB_SMOOTH_ALPHA_PRE;
-      const ca = this.fingerDetected
-        ? this.COVERAGE_SMOOTH_ALPHA_POST
-        : this.COVERAGE_SMOOTH_ALPHA_PRE;
+      const a = this.RGB_SMOOTH_ALPHA;
+      const ca = this.COVERAGE_SMOOTH_ALPHA;
       this.smoothedRed = this.smoothedRed * (1 - a) + rawRed * a;
       this.smoothedGreen = this.smoothedGreen * (1 - a) + rawGreen * a;
       this.smoothedBlue = this.smoothedBlue * (1 - a) + rawBlue * a;
@@ -880,31 +782,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private computeRoiRect(width: number, height: number) {
-    // ROI = cuadrado central del 70%. El dedo se coloca naturalmente en el centro
-    // de la lente; este recorte maximiza la relación señal/ruido al excluir fondo.
-    const size = Math.min(width, height) * 0.7;
-    const startX = Math.floor((width - size) / 2);
-    const startY = Math.floor((height - size) / 2);
-    const side = Math.floor(size);
+    const roiSize = Math.min(width, height) * VITAL_THRESHOLDS.FINGER.ROI_SIZE_FRACTION;
+    const startX = Math.floor((width - roiSize) / 2);
+    const startY = Math.floor((height - roiSize) / 2);
+    const side = Math.floor(roiSize);
     return { startX, startY, endX: startX + side, endY: startY + side, roiW: side, roiH: side };
   }
 
   private signalRoiFromMetrics(roi: ROIMetrics) {
     return { x: roi.roiX, y: roi.roiY, width: roi.roiW, height: roi.roiH };
-  }
-
-  private rebuildTileLut(roiWidth: number, roiHeight: number): void {
-    this.tileLutKey = `${roiWidth}x${roiHeight}`;
-    const xLut = new Int8Array(roiWidth);
-    const yLut = new Int8Array(roiHeight);
-    for (let px = 0; px < roiWidth; px++) {
-      xLut[px] = Math.min(this.TILE_COLUMNS - 1, Math.floor((px / roiWidth) * this.TILE_COLUMNS));
-    }
-    for (let py = 0; py < roiHeight; py++) {
-      yLut[py] = Math.min(this.TILE_ROWS - 1, Math.floor((py / roiHeight) * this.TILE_ROWS));
-    }
-    this.tileXLut = xLut;
-    this.tileYLut = yLut;
   }
 
   private buildFingerDiagnostics(
@@ -980,45 +866,19 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const roiWidth = Math.max(1, endX - startX);
     const roiHeight = Math.max(1, endY - startY);
 
-    const lutKey = `${roiWidth}x${roiHeight}`;
-    if (lutKey !== this.tileLutKey) {
-      this.rebuildTileLut(roiWidth, roiHeight);
-    }
-
     // Sample every Nth pixel — N adaptativo (3 normal, 4 bajo backpressure)
-    // Opcionalmente aplica transformación visual por canal antes de promediar
     const stride = this.pixelStride;
-    const xLut = this.tileXLut!;
-    const yLut = this.tileYLut!;
-    const vt = this.visualTransform;
-    if (vt) {
-      for (let y = startY; y < endY; y += stride) {
-        const rowOffset = y - startY;
-        for (let x = startX; x < endX; x += stride) {
-          const i = (y * width + x) * 4;
-          const col = x - startX;
-          const tileIdx = yLut[rowOffset] * this.TILE_COLUMNS + xLut[col];
-          const tile = tiles[tileIdx];
-          const [r, g, b] = transformPixel(data[i], data[i + 1], data[i + 2], vt);
-          tile.red += r;
-          tile.green += g;
-          tile.blue += b;
-          tile.count++;
-        }
-      }
-    } else {
-      for (let y = startY; y < endY; y += stride) {
-        const rowOffset = y - startY;
-        for (let x = startX; x < endX; x += stride) {
-          const i = (y * width + x) * 4;
-          const col = x - startX;
-          const tileIdx = yLut[rowOffset] * this.TILE_COLUMNS + xLut[col];
-          const tile = tiles[tileIdx];
-          tile.red += data[i];
-          tile.green += data[i + 1];
-          tile.blue += data[i + 2];
-          tile.count++;
-        }
+    for (let y = startY; y < endY; y += stride) {
+      for (let x = startX; x < endX; x += stride) {
+        const i = (y * width + x) * 4;
+        const tileX = Math.min(this.TILE_COLUMNS - 1, Math.floor(((x - startX) / roiWidth) * this.TILE_COLUMNS));
+        const tileY = Math.min(this.TILE_ROWS - 1, Math.floor(((y - startY) / roiHeight) * this.TILE_ROWS));
+        const tile = tiles[tileY * this.TILE_COLUMNS + tileX];
+
+        tile.red += data[i];
+        tile.green += data[i + 1];
+        tile.blue += data[i + 2];
+        tile.count++;
       }
     }
 
@@ -1408,7 +1268,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.sourceBuffers.R.reset();
     this.sourceBuffers.G.reset();
     this.sourceBuffers.RG.reset();
-    this.notchFilter.reset();
     this.bandpassFilter.reset();
     this.morphBandpassFilter.reset();
     resetPulseAgc(this.pulseAgcState);
@@ -1466,10 +1325,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.resetBaselines();
     this.roiRedPulseRing.reset();
     this.lastRoiRedCv = 0;
-    this.notchFilter.setSampleRate(this.estimatedSampleRate);
     this.bandpassFilter.setSampleRate(this.estimatedSampleRate);
     this.morphBandpassFilter.setSampleRate(this.estimatedSampleRate);
-    this.notchFilter.reset();
     this.bandpassFilter.reset();
     this.morphBandpassFilter.reset();
     resetPulseAgc(this.pulseAgcState);
@@ -1588,7 +1445,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return {
       redAC: this.redAC, redDC: this.redDC,
       greenAC: this.greenAC, greenDC: this.greenDC,
-      blueAC: this.blueAC, blueDC: this.blueDC,
       rgRatio: this.greenDC > 0 ? this.redDC / this.greenDC : 0,
       ratioOfRatios: this.greenDC > 0 && this.greenAC > 0 && this.redDC > 0
         ? (this.redAC / this.redDC) / (this.greenAC / this.greenDC)

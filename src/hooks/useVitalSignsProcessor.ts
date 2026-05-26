@@ -46,7 +46,7 @@ export const useVitalSignsProcessor = () => {
   }, []);
   
   const processSignal = useCallback((
-    value: number,
+    value: number, 
     quality: number,
     bpm: number,
     rrData?: { intervals: number[], lastPeakTime: number | null, timestampNow?: number },
@@ -54,16 +54,6 @@ export const useVitalSignsProcessor = () => {
     perfusionIndexFromPpg?: number,
     sqmBundle?: Partial<SignalQualityMetrics>,
     morphologyValue?: number,
-    /** Canales especializados del SignalDivider (señal optimizada por vital sign) */
-    dividerChannels?: {
-      bpAC?: number;
-      respAC?: number;
-      spo2AC?: number;
-      spo2DC?: number;
-      spo2Quality?: number;
-      hrvAC?: number;
-      hrvQuality?: number;
-    },
   ): VitalSignsResult => {
     if (!processorRef.current) return createDefaultVitalSignsResult();
 
@@ -75,7 +65,6 @@ export const useVitalSignsProcessor = () => {
       perfusionIndexFromPpg,
       sqmBundle,
       morphologyValue,
-      dividerChannels,
     );
     
     // Guardar la última ventana realmente válida para cierre/exportación

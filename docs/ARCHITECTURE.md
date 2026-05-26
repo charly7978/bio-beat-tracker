@@ -1,7 +1,5 @@
 # Arquitectura — Bio Beat Tracker (PPG por cámara)
 
-> **Idea original y dirección: Carlos Ameghino** — proyecto personal iniciado en 2025, desarrollado contracorriente. Esta app es la concreción de su convicción de que se pueden medir signos vitales con un smartphone, sin conocimientos previos de programación, enfrentando adversidades personales y profesionales.
-
 Documentación alineada al código en `main`. **No es validación clínica SaMD**; describe el pipeline técnico real, sus límites y trazabilidad.
 
 ## Resumen

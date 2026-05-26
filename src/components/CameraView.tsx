@@ -127,33 +127,20 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
         log.warn("Esta cámara no soporta torch");
         return false;
       }
-      // Torch reliability: algunos dispositivos (especialmente Motorola/MIUI)
-      // requieren 2-3 reintentos con delays cortos para activar el flash
-      // (la primera invocación a applyConstraints puede silenciosamente fallar
-      // cuando el track aún no está completamente settled).
-      const attemptShapes = [
+      const attempts = [
         { advanced: [{ torch: true } as TorchCapableConstraint] },
         { torch: true } as TorchCapableConstraint,
       ] as MediaTrackConstraints[];
-      const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-      // Hasta 3 rondas de intentos (5 attempts efectivos: 2 shapes × ~1.5 rondas)
-      for (let round = 0; round < 3; round++) {
-        for (const constraints of attemptShapes) {
-          try {
-            await track.applyConstraints(constraints);
-            // Microtask para que el browser settlee settings antes de leer
-            await Promise.resolve();
-            const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
-            if (settings.torch === true) return true;
-          } catch {
-            /* siguiente shape */
-          }
+      for (const constraints of attempts) {
+        try {
+          await track.applyConstraints(constraints);
+          const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
+          if (settings.torch === true) return true;
+        } catch {
+          /* siguiente método */
         }
-        // Espera incremental antes del siguiente round (Motorola necesita ~200ms)
-        if (round < 2) await sleep(180 * (round + 1));
       }
-      log.warn("Torch solicitado pero no confirmado tras 3 rondas de retry");
+      log.warn("Torch solicitado pero no confirmado en settings");
       return false;
     };
 
@@ -208,13 +195,12 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
 
     const waitForVideo = (video: HTMLVideoElement): Promise<void> => {
       return new Promise((resolve) => {
-        if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA && video.videoWidth > 0) {
+        if (video.readyState >= 2 && video.videoWidth > 0) {
           resolve();
           return;
         }
-        const onReady = async () => {
-          video.removeEventListener("canplay", onReady);
-          video.removeEventListener("loadedmetadata", onReady);
+        const onMeta = async () => {
+          video.removeEventListener("loadedmetadata", onMeta);
           try {
             await video.play();
           } catch {
@@ -222,12 +208,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
           }
           resolve();
         };
-        const onFallback = () => {
-          video.removeEventListener("loadedmetadata", onFallback);
-          onReady();
-        };
-        video.addEventListener("canplay", onReady);
-        video.addEventListener("loadedmetadata", onFallback);
+        video.addEventListener("loadedmetadata", onMeta);
       });
     };
 
@@ -249,7 +230,6 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
             facingMode: { ideal: "environment" },
             width: { ideal: 640, max: 960 },
             height: { ideal: 480, max: 720 },
-            aspectRatio: { ideal: 4 / 3 },
             // 30 fps estable: varios Motorola fallan con ideal 60 + min 24 (overconstraint / AE inestable).
             frameRate: { ideal: 30, min: 15, max: 30 },
           },
@@ -271,8 +251,12 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
         const track = stream.getVideoTracks()[0];
         if (track) {
           await stabilizeTrack(track);
-          const torchResult = await activateTorch(track);
-          if (torchResult) log.info("Flash activado");
+          let torchOn = await activateTorch(track);
+          if (!torchOn) {
+            await new Promise((r) => setTimeout(r, 400));
+            torchOn = await activateTorch(track);
+          }
+          if (torchOn) log.info("Flash activado");
           else log.warn("Flash no confirmado — se usará perfil de cámara tolerante");
         }
 

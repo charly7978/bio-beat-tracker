@@ -64,14 +64,9 @@ describe('fingerSceneClassifier', () => {
     expect(passesLiveFingerContact(fingerRaw, fingerSmooth, spatialFinger)).toBe(true);
   });
 
-  it('passesFingerAcquire acepta R/B moderado en crudo (umbrales relajados)', () => {
+  it('passesFingerAcquire exige R/B estricto en crudo', () => {
     expect(passesFingerAcquire(fingerRaw, fingerSmooth, spatialFinger)).toBe(true);
-    // Con ACQUIRE_RB_STRICT=1.04, un R/B de 1.17 (140/120) todavía pasa.
-    // La verificación de pulsación en PPGSignalProcessor descarta superficies inertes.
     const weakRb = { ...fingerRaw, blue: 120 };
-    expect(passesFingerAcquire(weakRb, fingerSmooth, spatialFinger)).toBe(true);
-    // R/B muy bajo (< 1.04) sigue siendo rechazado
-    const veryWeakRb = { ...fingerRaw, blue: 180 };
-    expect(passesFingerAcquire(veryWeakRb, fingerSmooth, spatialFinger)).toBe(false);
+    expect(passesFingerAcquire(weakRb, fingerSmooth, spatialFinger)).toBe(false);
   });
 });

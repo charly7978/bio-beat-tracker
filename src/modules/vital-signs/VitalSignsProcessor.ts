@@ -38,8 +38,6 @@ export interface RGBData {
   redDC: number;
   greenAC: number;
   greenDC: number;
-  blueAC: number;
-  blueDC: number;
 }
 
 interface RRData {
@@ -90,37 +88,17 @@ export class VitalSignsProcessor {
   /** Buffer más largo para modulación respiratoria (~10 Hz efectivos desde Index). */
   private readonly RESPIRATION_BUFFER = 320;
   private respirationHistory: RingF32 = new RingF32(this.RESPIRATION_BUFFER);
-  /**
-   * Buffer especializado SpO2 alimentado por divider.spo2.acValue cuando el
-   * SignalDivider está activo. Usado para validación de pulsatilidad real
-   * de SpO2 (la señal del divider está filtrada en 0.5-5Hz con DC preservado,
-   * y procesada con paleta R-dominante optimizada para Beer-Lambert).
-   */
-  private readonly SPO2_DIVIDER_BUFFER = 96;
-  private spo2DividerHistory: RingF32 = new RingF32(this.SPO2_DIVIDER_BUFFER);
-  /** Último valor de quality del canal SpO2 del divider (0-100) */
-  private lastSpo2DividerQuality = 0;
-  /**
-   * Buffer especializado HRV alimentado por divider.hrv.acValue.
-   * Banda 0.5-3 Hz con zeroPhase filtering — no introduce lag temporal,
-   * ideal para precisión de localización de picos en variabilidad RR.
-   */
-  private readonly HRV_DIVIDER_BUFFER = 128;
-  private hrvDividerHistory: RingF32 = new RingF32(this.HRV_DIVIDER_BUFFER);
-  /** Último valor de quality del canal HRV del divider (0-100) */
-  private lastHrvDividerQuality = 0;
   private readonly VITAL_SIGNAL_ESTIMATE_HZ = 10;
   private frameCount = 0;  // Contador continuo para logging/diagnóstico
   
   // RGB para SpO2
-  private rgbData: RGBData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0, blueAC: 0, blueDC: 0 };
+  private rgbData: RGBData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
   
   // Gating de estabilidad (Consistencia)
   private stableFramesCount: number = 0;
   private readonly STABILITY_SPO2_FRAMES = 45;  // ~1.5s para SpO2 (actualización rápida)
   private readonly STABILITY_BP_FRAMES = VITAL_THRESHOLDS.BP.STABILITY_FRAMES_HIGH;
   private lastCoherentSpO2: number = 0;
-  private lastRSignalVariance: number = 0;
   
   // Suavizado adaptativo para estabilidad SIN perder respuesta
   // Alpha más bajo = más suavizado = lecturas más estables
@@ -184,7 +162,6 @@ export class VitalSignsProcessor {
     this.respirationHistory.reset();
     this.stableFramesCount = 0;
     this.lastCoherentSpO2 = 0;
-    this.lastRSignalVariance = 0;
     this.lastPpgPerfusionIndex = 0;
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
@@ -205,18 +182,6 @@ export class VitalSignsProcessor {
     this.bloodPressureProcessor.setPlacementMode(mode);
   }
 
-  /**
-   * Procesa un sample del pipeline y actualiza vitales.
-   *
-   * `dividerChannels` (NUEVO): bundle de canales especializados del SignalDivider.
-   * Si está presente, cada vital sign usa SU canal optimizado:
-   *   - morphologyHistory ← bp.acValue (banda 0.5-8 Hz para morfología/dicrotic)
-   *   - respirationHistory ← resp.acValue (banda 0.1-0.7 Hz para respiración)
-   * Si NO está presente, fallback al signalValue del PPG genérico (legacy).
-   *
-   * SpO2 sigue usando RGB raw via setRGBData (independiente del divider).
-   * HR ya se procesa antes en el router con divider.hr.acValue.
-   */
   processSignal(
     signalValue: number,
     signalQuality: number,
@@ -225,15 +190,6 @@ export class VitalSignsProcessor {
     perfusionIndexFromPpg?: number,
     sqmBundle?: Partial<SignalQualityMetrics>,
     morphologyValue?: number,
-    dividerChannels?: {
-      bpAC?: number;
-      respAC?: number;
-      spo2AC?: number;
-      spo2DC?: number;
-      spo2Quality?: number;
-      hrvAC?: number;
-      hrvQuality?: number;
-    },
   ): VitalSignsResult {
     this.frameCount++;
 
@@ -247,43 +203,13 @@ export class VitalSignsProcessor {
 
     this.syncAnthropometric();
 
-    // Selección de samples para cada buffer según disponibilidad de canales
-    // especializados del SignalDivider. Las funciones Number.isFinite() son
-    // necesarias porque un canal puede ser 0 o NaN al inicio.
-    const isFiniteNumber = (v: unknown): v is number =>
-      typeof v === 'number' && Number.isFinite(v);
-
-    // Morfología (BP): canal bp.acValue (banda 0.5-8 Hz, escotadura dicrótica)
-    // o fallback al morphologyValue/signalValue clásico.
-    const morphSample = isFiniteNumber(dividerChannels?.bpAC)
-      ? dividerChannels!.bpAC!
-      : isFiniteNumber(morphologyValue)
-        ? morphologyValue!
+    const morphSample =
+      typeof morphologyValue === 'number' && Number.isFinite(morphologyValue)
+        ? morphologyValue
         : signalValue;
-
-    // Respiración: canal resp.acValue (banda 0.1-0.7 Hz, modulación respiratoria)
-    // o fallback al signalValue clásico.
-    const respSample = isFiniteNumber(dividerChannels?.respAC)
-      ? dividerChannels!.respAC!
-      : signalValue;
-
     this.signalHistory.push(signalValue);
     this.morphologyHistory.push(morphSample);
-    this.respirationHistory.push(respSample);
-
-    // Alimentar buffers especializados del divisor (señal optimizada por vital)
-    if (isFiniteNumber(dividerChannels?.spo2AC)) {
-      this.spo2DividerHistory.push(dividerChannels!.spo2AC!);
-    }
-    if (isFiniteNumber(dividerChannels?.spo2Quality)) {
-      this.lastSpo2DividerQuality = dividerChannels!.spo2Quality!;
-    }
-    if (isFiniteNumber(dividerChannels?.hrvAC)) {
-      this.hrvDividerHistory.push(dividerChannels!.hrvAC!);
-    }
-    if (isFiniteNumber(dividerChannels?.hrvQuality)) {
-      this.lastHrvDividerQuality = dividerChannels!.hrvQuality!;
-    }
+    this.respirationHistory.push(signalValue);
     // Control de calibración
     if (this.isCalibrating) {
       this.calibrationSamples++;
@@ -364,21 +290,16 @@ export class VitalSignsProcessor {
     }
   }
 
-  /** SpO2 ratio-of-ratios: no requiere ventana RR, solo RGB + perfusión mínima.
-   *  Si la varianza de R es muy baja, la señal está "plana" y el SpO₂ no es
-   *  confiable (el modelo siempre dará ~98). */
+  /** SpO2 ratio-of-ratios: no requiere ventana RR, solo RGB + perfusión mínima */
   private getSpo2Confidence(): 'LOW' | 'INVALID' {
     const sq = this.measurements.signalQuality;
     const piRgb = this.rgbData.greenDC > 0 ? this.rgbData.greenAC / this.rgbData.greenDC : 0;
     const pi = Math.max(piRgb, this.lastPpgPerfusionIndex);
-    const adequateSQI = SignalQualityIndex.isAdequateForLiveVitals(sq, pi);
-    const marginalSQI = sq >= 8 && pi >= 0.00015 && this.rgbData.redDC >= 10 && this.rgbData.greenDC >= 5;
-    if (!adequateSQI && !marginalSQI) return 'INVALID';
-    const rValueHistory = this.rValueHistory;
-    if (rValueHistory.length >= 3 && this.lastRSignalVariance < VITAL_THRESHOLDS.SPO2.R_MIN_VARIANCE) {
-      return 'INVALID';
+    if (SignalQualityIndex.isAdequateForLiveVitals(sq, pi)) return 'LOW';
+    if (sq >= 8 && pi >= 0.00015 && this.rgbData.redDC >= 10 && this.rgbData.greenDC >= 5) {
+      return 'LOW';
     }
-    return 'LOW';
+    return 'INVALID';
   }
 
   private currentPerfusionIndex(): number {
@@ -660,29 +581,11 @@ export class VitalSignsProcessor {
     }
     
     // === SpO2 — Basado en física (Beer-Lambert), no estadística ===
-    // SpO2 usa ratios ópticos AC/DC directamente de la cámara (RGB raw).
-    // El SignalDivider provee un canal especializado (banda 0.5-5Hz, paleta
-    // R-dominante, DC preservado) que validamos como GATE: si la señal
-    // pulsátil del divider.spo2 es muy débil, descartamos el cálculo
-    // para no emitir SpO2 sobre ruido.
+    // SpO2 usa ratios ópticos AC/DC directamente de la cámara.
+    // Solo necesita datos RGB válidos y confidence no-INVALID.
     const spo2 = this.calculateSpO2Raw();
     const spo2Conf = this.getSpo2Confidence();
-    // Gate del divider.spo2: la señal AC pulsátil debe tener amplitud mínima
-    // (peak-to-peak) para que el cálculo Beer-Lambert sea válido. Esto evita
-    // emitir SpO2 sobre superficies estáticas con rojo (foto, tela, etc).
-    let spo2DividerPasses = true;
-    if (this.spo2DividerHistory.length >= 16) {
-      const last48 = this.spo2DividerHistory.tail(48);
-      let mn = Infinity, mx = -Infinity;
-      for (const v of last48) {
-        if (v < mn) mn = v;
-        if (v > mx) mx = v;
-      }
-      const peakToPeak = mx - mn;
-      spo2DividerPasses = peakToPeak > 0.02 && this.lastSpo2DividerQuality >= 5;
-    }
-    // Durante warmup (buffer < 16 muestras) no bloquear — se valida después.
-    if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && spo2Conf !== 'INVALID' && spo2DividerPasses) {
+    if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && spo2Conf !== 'INVALID') {
       const isCoherent = this.lastCoherentSpO2 === 0 || Math.abs(spo2 - this.lastCoherentSpO2) < 5;
       if (isCoherent || this.frameCount > 300) {
         this.lastCoherentSpO2 = spo2;
@@ -742,26 +645,17 @@ export class VitalSignsProcessor {
       }
     }
 
-    // Arrhythmia — solo con RR robustos y SQI suficiente.
-    // El canal divider.hrv (banda 0.5-3Hz, zeroPhase, sin lag temporal)
-    // se usa como GATE DE CALIDAD adicional: si su quality es muy baja,
-    // los RR del HR detector probablemente sean ruidosos también.
+    // Arrhythmia — solo con RR robustos y SQI suficiente
     const arrCfg = VITAL_THRESHOLDS.ARRHYTHMIA;
     const arrhythmiaRR = validRR.slice(-arrCfg.RR_WINDOW_SIZE);
     const detectorAgree = this.lastSqmBundle?.detectorAgreement ?? 0;
-    // Gate del divider.hrv: la calidad de la señal HRV especializada debe
-    // ser >= 25 para confiar en los RR del HR detector. Si está vacío
-    // (lastHrvDividerQuality === 0), permite (warmup) para no bloquear.
-    const hrvDividerPasses =
-      this.lastHrvDividerQuality === 0 || this.lastHrvDividerQuality >= 25;
     const arrhythmiaInput = (
       arrhythmiaRR.length >= arrCfg.MIN_INTERVALS &&
       this.measurements.signalQuality >= arrCfg.MIN_SQI &&
       detectorAgree >= VITAL_THRESHOLDS.QUALITY.MIN_DETECTOR_AGREEMENT_ARRHYTHMIA + 0.06 &&
       hr >= VITAL_THRESHOLDS.HR.MIN &&
       hr <= VITAL_THRESHOLDS.HR.MAX &&
-      this.validPulseCount >= 3 &&
-      hrvDividerPasses
+      this.validPulseCount >= 3
     ) ? { ...rrData!, intervals: arrhythmiaRR } : undefined;
 
     const arrhythmiaResult = this.arrhythmiaProcessor.processRRData(arrhythmiaInput);
@@ -787,74 +681,56 @@ export class VitalSignsProcessor {
    */
   // Buffer para valores R (Ratio-of-Ratios) para filtrado de mediana
   private rValueHistory: number[] = [];
-  /** Calcula SpO₂ como ensemble ponderado de múltiples relaciones de canal.
-   *  Sin canal IR real, cada relación de canal (R/G, R/B, G/B) aporta una
-   *  perspectiva distinta. Se ponderan por calidad de perfusión de cada par. */
   private calculateSpO2Raw(): number {
     const spoCfg = VITAL_THRESHOLDS.SPO2;
-    const { redAC, redDC, greenAC, greenDC, blueAC, blueDC } = this.rgbData;
+    const { redAC, redDC, greenAC, greenDC } = this.rgbData;
 
-    if (redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC || blueDC < spoCfg.MIN_BLUE_DC) return 0;
-
-    const piRed = (redAC / redDC) * 100;
+    if (redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC) return 0;
+    
+    const piRed = (redAC / redDC) * 100;   // como %
     const piGreen = (greenAC / greenDC) * 100;
-    const piBlue = blueDC > 0 ? (blueAC / blueDC) * 100 : 0;
 
+    // Log de depuración (~cada 0.3s)
     if (this.frameCount % 10 === 0) {
-      log.info(`[SpO2 Debug] ACr:${redAC.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${greenAC.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}% | ACb:${blueAC.toFixed(3)} DCb:${blueDC.toFixed(0)} PIb:${piBlue.toFixed(3)}%`);
+      log.info(`[SpO2 Debug] ACr:${redAC.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${greenAC.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}%`);
     }
-
+    
     if (piRed < spoCfg.MIN_PI_PERCENT || piGreen < spoCfg.MIN_PI_PERCENT) return 0;
-
-    // Calcular múltiples ratios de canal
+    
     const ratioRed = redAC / redDC;
     const ratioGreen = greenAC / greenDC;
-    const ratioBlue = blueDC > 0 ? blueAC / blueDC : 0;
     if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) return 0;
-
-    // Ensemble: R_gr = R/G, R_gb = G/B, R_rb = R/B
-    const ratios: { r: number; weight: number }[] = [];
-    ratios.push({ r: ratioRed / ratioGreen, weight: 1.0 });
-    if (ratioBlue > 0 && isFinite(ratioBlue)) {
-      ratios.push({ r: ratioGreen / ratioBlue, weight: 0.6 });
-      ratios.push({ r: ratioRed / ratioBlue, weight: 0.4 });
+    
+    const currentR = ratioRed / ratioGreen;
+    
+    // Rango físico de R para tejido humano con cámara+flash:
+    // Con dedo en flash blanco, rojo está cerca de saturación → R puede ser bajo (0.1+)
+    if (currentR < spoCfg.R_VALUE_MIN || currentR > spoCfg.R_VALUE_MAX) {
+      if (this.frameCount % 15 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
+      return 0;
     }
 
-    // Ponderar y promediar
-    let weightedR = 0;
-    let totalWeight = 0;
-    for (const { r, weight } of ratios) {
-      if (r >= spoCfg.R_VALUE_MIN && r <= spoCfg.R_VALUE_MAX) {
-        weightedR += r * weight;
-        totalWeight += weight;
-      }
-    }
-    if (totalWeight === 0) return 0;
-    const currentR = weightedR / totalWeight;
-
-    // Acumular R ensemble para filtrado de mediana y varianza
+    // Acumular R para filtrado de mediana
     this.rValueHistory.push(currentR);
     if (this.rValueHistory.length > spoCfg.R_HISTORY_SAMPLES) {
       this.rValueHistory.shift();
     }
+
     if (this.rValueHistory.length < 3) return 0;
 
-    // Mediana
     const sortedR = [...this.rValueHistory].sort((a, b) => a - b);
     const medianR = sortedR[Math.floor(sortedR.length / 2)] ?? 0;
 
-    // Varianza: detectar señal plana (SpO₂ atascado)
-    const meanR = this.rValueHistory.reduce((a, b) => a + b, 0) / this.rValueHistory.length;
-    const variance = this.rValueHistory.reduce((sum, r) => sum + (r - meanR) ** 2, 0) / this.rValueHistory.length;
-    this.lastRSignalVariance = variance;
-
     const spo2 = Math.min(
       spoCfg.DISPLAY_CAP,
-      Math.max(spoCfg.MIN_VALID, spoCfg.R_MODEL_INTERCEPT - spoCfg.R_MODEL_SLOPE * medianR),
+      Math.max(
+        spoCfg.MIN_VALID,
+        spoCfg.R_MODEL_INTERCEPT - spoCfg.R_MODEL_SLOPE * medianR,
+      ),
     );
-
+    
     if (this.frameCount % 30 === 0) {
-      log.info(`[SpO2] R_ens:${currentR.toFixed(3)} med:${medianR.toFixed(3)} var:${variance.toFixed(6)} → ${spo2.toFixed(0)}%`);
+      log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}% (n=${this.rValueHistory.length})`);
     }
 
     return Number.isFinite(spo2) ? spo2 : 0;
@@ -936,7 +812,6 @@ export class VitalSignsProcessor {
     this.frameCount = 0;
     this.stableFramesCount = 0;
     this.lastCoherentSpO2 = 0;
-    this.lastRSignalVariance = 0;
     this.measurements = {
       spo2: 0,
       systolicPressure: 0,
@@ -946,7 +821,7 @@ export class VitalSignsProcessor {
       lastArrhythmiaData: null,
       signalQuality: 0
     };
-    this.rgbData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0, blueAC: 0, blueDC: 0 };
+    this.rgbData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
     this.lastPpgPerfusionIndex = 0;
     this.displayHold = { spo2: 0, systolic: 0, diastolic: 0, missedFrames: 0 };
     this.isCalibrating = false;

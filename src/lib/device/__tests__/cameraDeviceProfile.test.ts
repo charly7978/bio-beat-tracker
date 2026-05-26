@@ -17,9 +17,7 @@ describe('cameraDeviceProfile', () => {
   it('Samsung/Motorola usan perfil tolerante por defecto', () => {
     const moto = inferCameraRuntimeHints({ userAgent: 'Motorola moto g84' });
     expect(moto.constrained).toBe(true);
-    // Valor actualizado tras ajustes UX 2026: 10 → 8 (~266ms@30fps),
-    // más responsivo para transición a UNSTABLE al perder dedo.
-    expect(moto.instantLostToUnstable).toBe(8);
+    expect(moto.instantLostToUnstable).toBeGreaterThan(10);
 
     const sam = inferCameraRuntimeHints({ userAgent: 'Samsung SM-A546' });
     expect(sam.constrained).toBe(true);
@@ -40,12 +38,7 @@ describe('cameraDeviceProfile', () => {
       fpsEffective: 16,
     });
     expect(h.constrained).toBe(true);
-    // Valor actualizado tras ajustes UX 2026: el grace extendido del perfil
-    // degradado bajó de 40 → 25 frames para no atrapar al usuario por ~2s
-    // después de retirar el dedo. Sigue siendo más tolerante que el baseline
-    // (12 frames) pero no excesivo.
-    expect(h.liveFingerMissGrace).toBeGreaterThanOrEqual(20);
-    expect(h.liveFingerMissGrace).toBeGreaterThan(12); // > baseline TOLERANT_DEFAULT
+    expect(h.liveFingerMissGrace).toBeGreaterThanOrEqual(40);
   });
 });
 

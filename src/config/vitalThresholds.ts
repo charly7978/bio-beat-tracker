@@ -14,27 +14,21 @@ export const VITAL_THRESHOLDS = {
     PHYSIOLOGICAL_RR_MAX_MS: 2200,
   },
   
-  // BLOOD OXYGEN (SpO2) — modelo multi-ratio ensemble para cámara RGB+flash
-  // Sin canal IR real, se usan relaciones R/G, R/B, G/B para extraer algo de
-  // rango dinámico. El ensemble promedia ponderado por calidad de cada ratio.
+  // BLOOD OXYGEN (SpO2) — modelo ratio-of-ratios cámara+flash (verde como proxy IR)
   SPO2: {
     MIN_VALID: 88,
-    MAX_VALID: 99,
+    MAX_VALID: 98,
     CRITICAL_LOW: 90,
     R_VALUE_MIN: 0.1,
-    R_VALUE_MAX: 4.0,
+    R_VALUE_MAX: 2.5,
     /** SpO2 = intercept − slope × R_mediana (calibración smartphone) */
-    R_MODEL_INTERCEPT: 103,
-    R_MODEL_SLOPE: 12,
+    R_MODEL_INTERCEPT: 101,
+    R_MODEL_SLOPE: 10,
     DISPLAY_CAP: 99,
     R_HISTORY_SAMPLES: 7,
     MIN_PI_PERCENT: 0.02,
     MIN_RED_DC: 10,
     MIN_GREEN_DC: 5,
-    MIN_BLUE_DC: 5,
-    /** Si la varianza de R en la ventana es menor a este umbral, la señal
-     *  está "plana" (el SpO₂ no varía realmente). Baja confianza. */
-    R_MIN_VARIANCE: 0.0005,
   },
   
   /** Geometría dedo: unificar punta (HR/SpO2) y almohadilla (PA) */
@@ -194,83 +188,83 @@ export const VITAL_THRESHOLDS = {
   },
 
   // FINGER + ROI (cámara trasera + dedo; hemoglobina + pulsación temporal)
-  // NOTA: umbrales ultra-relajados para NO exigir micro-posición.
-  // El dedo cubre parcialmente la lente y eso alcanza — la pulsación
-  // (PI) es quien confirma o descarta tras adquisición.
+  // NOTA: umbrales relajados para tolerar dedo no perfectamente centrado
+  // (ROI más grande, centerBias más plano, tiles más permisivos)
   FINGER: {
-    /** ROI = cuadrado central del 70%. Excluye fondo, maximiza SNR. */
-    ROI_SIZE_FRACTION: 0.7,
-    /** CenterBias casi plano — el dedo puede estar en cualquier parte del frame */
-    ROI_CENTER_BIAS_MULT: 0.20,
-    ROI_CENTER_BIAS_MIN: 0.70,
-    /** Brillo mínimo en score de tile */
-    TILE_BRIGHTNESS_OFFSET: 40,
-    MIN_RED_INTENSITY: 14,
-    MIN_RED_DOMINANCE: 2,
-    MIN_RG_RATIO: 1.01,
-    MIN_COVERAGE: 0.03,
-    /** R/B mínimo — muy permisivo; el dedo absorbe azul pero aceptamos casi cualquier desbalance */
-    HEMOGLOBIN_MIN_RB: 1.04,
-    SOFT_COVERAGE_MULT: 0.80,
-    /** Adquisición (prácticamente cualquier escena con rojo dominante) */
-    ACQUIRE_RB_STRICT: 1.04,
-    ACQUIRE_INTENSITY_MIN: 18,
-    ACQUIRE_INTENSITY_MAX: 980,
-    ACQUIRE_SMOOTHED_FINGER_MIN: 0.04,
-    ACQUIRE_MAX_MOTION_STRICT: 2.5,
-    /** Adquisición suave */
-    ACQUIRE_SOFT_MIN_RED: 12,
-    ACQUIRE_SOFT_RG: 1.01,
-    ACQUIRE_SOFT_RB: 1.03,
-    ACQUIRE_SOFT_DOMINANCE: 2,
-    ACQUIRE_SOFT_INTENSITY_MIN: 14,
-    ACQUIRE_SOFT_INTENSITY_MAX: 980,
-    ACQUIRE_SOFT_FINGER_SCORE_ROI: 0.05,
-    ACQUIRE_SOFT_SMOOTHED_FINGER: 0.04,
-    ACQUIRE_MAX_MOTION_SOFT: 2.5,
+    /** Fracción del lado corto del frame usada como ROI cuadrado central (0.99 = máximo dedo visible, mayor estabilidad espacial) */
+    ROI_SIZE_FRACTION: 0.99,
+    /** Penalización radial en tiles: menor = más tolerante si el dedo no está perfectamente centrado */
+    ROI_CENTER_BIAS_MULT: 0.50,
+    ROI_CENTER_BIAS_MIN: 0.50,
+    /** Brillo mínimo en score de tile (total RGB medio por celda) */
+    TILE_BRIGHTNESS_OFFSET: 82,
+    MIN_RED_INTENSITY: 36,
+    MIN_RED_DOMINANCE: 7,
+    MIN_RG_RATIO: 1.04,
+    MIN_COVERAGE: 0.10,
+    /** R/B mínimo — dedo absorbe azul; flash sin dedo suele fallar esto */
+    HEMOGLOBIN_MIN_RB: 1.22,
+    SOFT_COVERAGE_MULT: 0.85,
+    /** Adquisición estricta */
+    ACQUIRE_RB_STRICT: 1.2,
+    ACQUIRE_INTENSITY_MIN: 68,
+    ACQUIRE_INTENSITY_MAX: 780,
+    ACQUIRE_SMOOTHED_FINGER_MIN: 0.14,
+    ACQUIRE_MAX_MOTION_STRICT: 1.85,
+    /** Adquisición suave (parcial / flash desigual) */
+    ACQUIRE_SOFT_MIN_RED: 28,
+    ACQUIRE_SOFT_RG: 1.025,
+    ACQUIRE_SOFT_RB: 1.16,
+    ACQUIRE_SOFT_DOMINANCE: 8,
+    ACQUIRE_SOFT_INTENSITY_MIN: 52,
+    ACQUIRE_SOFT_INTENSITY_MAX: 850,
+    ACQUIRE_SOFT_FINGER_SCORE_ROI: 0.18,
+    ACQUIRE_SOFT_SMOOTHED_FINGER: 0.15,
+    ACQUIRE_MAX_MOTION_SOFT: 1.9,
     /** Mantener contacto */
-    MAINTAIN_MIN_RED: 12,
-    MAINTAIN_RG: 1.01,
-    MAINTAIN_RB: 1.03,
-    MAINTAIN_DOMINANCE: 2.0,
-    MAINTAIN_COVERAGE: 0.025,
+    MAINTAIN_MIN_RED: 28,
+    MAINTAIN_RG: 1.03,
+    MAINTAIN_RB: 1.10,
+    MAINTAIN_DOMINANCE: 5.0,
+    MAINTAIN_COVERAGE: 0.065,
     /** Mantener por PI cuando la firma RGB falla un frame */
-    PULSE_HOLD_MIN_PI: 0.00015,
-    PULSE_HOLD_MIN_RED: 14,
-    PULSE_HOLD_RG: 1.01,
-    PULSE_HOLD_RB: 1.02,
-    PULSE_HOLD_COVERAGE: 0.025,
-    PULSE_HOLD_MAX_MOTION: 2.5,
-    /** Pulsación ROI (CV de rawRed) */
+    PULSE_HOLD_MIN_PI: 0.00030,
+    PULSE_HOLD_MIN_RED: 28,
+    PULSE_HOLD_RG: 1.03,
+    PULSE_HOLD_RB: 1.05,
+    PULSE_HOLD_COVERAGE: 0.080,
+    PULSE_HOLD_MAX_MOTION: 1.85,
+    /** Pulsación ROI (CV de rawRed) — tercera vía de adquisición */
     ROI_PULSE_BUFFER: 24,
     ROI_PULSE_MIN_SAMPLES: 12,
-    ROI_RED_CV_MIN: 0.018,
-    PULSATILE_ACQUIRE_MIN_RED: 14,
-    PULSATILE_ACQUIRE_RG: 1.01,
-    PULSATILE_ACQUIRE_RB: 1.02,
-    PULSATILE_ACQUIRE_COVERAGE: 0.025,
-    PULSATILE_ACQUIRE_FINGER_ROI: 0.05,
-    PULSATILE_ACQUIRE_MAX_MOTION: 3.0,
-    PULSATILE_ACQUIRE_MIN_DOMINANCE: 1.5,
-    /** Clasificación por tile — muy permisivo */
-    TILE_MIN_RED: 10,
-    TILE_MIN_TOTAL: 16,
-    TILE_MIN_DOMINANCE: 1.0,
-    TILE_MIN_RG: 1.01,
-    TILE_MIN_COMBINED_SCORE: 0.07,
-    TILE_DOMINANCE_SCORE_OFFSET: 2,
-    MIN_FINGER_TILES_FOR_WEIGHTING: 1,
+    /** Solo para mantener contacto ya adquirido (no adquisición inicial) */
+    ROI_RED_CV_MIN: 0.036,
+    PULSATILE_ACQUIRE_MIN_RED: 26,
+    PULSATILE_ACQUIRE_RG: 1.02,
+    PULSATILE_ACQUIRE_RB: 1.05,
+    PULSATILE_ACQUIRE_COVERAGE: 0.075,
+    PULSATILE_ACQUIRE_FINGER_ROI: 0.12,
+    PULSATILE_ACQUIRE_MAX_MOTION: 2.1,
+    PULSATILE_ACQUIRE_MIN_DOMINANCE: 4.4,
+    /** Clasificación por tile (ROI 5×5) — umbrales relajados para tolerar dedo parcial/ladeado */
+    TILE_MIN_RED: 24,
+    TILE_MIN_TOTAL: 44,
+    TILE_MIN_DOMINANCE: 3,
+    TILE_MIN_RG: 1.04,
+    TILE_MIN_COMBINED_SCORE: 0.21,
+    TILE_DOMINANCE_SCORE_OFFSET: 5,
+    MIN_FINGER_TILES_FOR_WEIGHTING: 2,
     FINGER_CONFIRM_FRAMES: 5,
-    /** Tras perder firma instantánea */
+    /** Tras perder firma instantánea: frames hasta degradar */
     INSTANT_LOST_TO_UNSTABLE: 2,
     INSTANT_LOST_TO_NO_CONTACT: 4,
     FINGER_LOST_FRAMES_UI: 6,
     UNSTABLE_GRACE_FRAMES: 0,
-    /** softHold */
-    SOFT_HOLD_COVERAGE: 0.06,
-    SOFT_HOLD_DOMINANCE_DELTA: 3,
-    SOFT_HOLD_FINGER_SCORE: 0.07,
-    SOFT_HOLD_RG: 1.02,
+    /** softHold al perder instantáneo — solo si la firma RGB aún es válida */
+    SOFT_HOLD_COVERAGE: 0.11,
+    SOFT_HOLD_DOMINANCE_DELTA: 6,
+    SOFT_HOLD_FINGER_SCORE: 0.14,
+    SOFT_HOLD_RG: 1.04,
   },
 };
 

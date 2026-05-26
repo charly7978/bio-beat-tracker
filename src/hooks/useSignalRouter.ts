@@ -28,7 +28,7 @@ import {
   recordVerdict as recordAuditVerdict,
   getNegativeCount as getAuditNegativeCount,
 } from '@/lib/sanity/sanityAuditLog';
-import { toast } from '@/hooks/use-toast';
+import { toast } from '@/components/ui/use-toast';
 
 interface HeartBeatProcessorAPI {
   processSignal: (
@@ -61,19 +61,10 @@ interface VitalSignsProcessorAPI {
     perfusionIndexFromPpg?: number,
     sqmBundle?: Partial<SignalQualityMetrics>,
     morphologyValue?: number,
-    dividerChannels?: {
-      bpAC?: number;
-      respAC?: number;
-      spo2AC?: number;
-      spo2DC?: number;
-      spo2Quality?: number;
-      hrvAC?: number;
-      hrvQuality?: number;
-    },
   ) => VitalSignsResult;
   setPlacementMode: (mode: FingerPlacementMode) => void;
   setRGBData: (data: RGBData) => void;
-  getRGBStats: () => { redAC: number; redDC: number; greenAC: number; greenDC: number; blueAC: number; blueDC: number; rgRatio: number; ratioOfRatios: number };
+  getRGBStats: () => { redAC: number; redDC: number; greenAC: number; greenDC: number; rgRatio: number; ratioOfRatios: number };
 }
 
 interface UseSignalRouterInput {
@@ -134,22 +125,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const SIGNAL_PUSH_THROTTLE_MS = 16;
   const DIAG_PUSH_THROTTLE_MS = 200;
   const VITALS_PROCESS_EVERY_N_FRAMES = 3;
-
-  // Divider signal bundle (5 canales especializados, inyectado externamente desde Index)
-  // Cada vital consume SU canal específico:
-  //   - HR: hr.acValue (bandpass 0.5-4.5Hz, AGC para picos)
-  //   - SpO2: spo2.acValue + dcValue (bandpass 0.5-4Hz, preserva DC)
-  //   - HRV: hrv.acValue (bandpass 0.4-5Hz, ventana extendida)
-  //   - BP: bp.acValue (bandpass 0.5-8Hz, morfología/escotadura dicrótica)
-  //   - Resp: resp.acValue (bandpass 0.1-0.7Hz, modulación respiratoria)
-  interface DividerSignalBundle {
-    hr: { acValue: number; quality: number };
-    spo2: { acValue: number; dcValue: number; quality: number };
-    hrv: { acValue: number; quality: number };
-    resp: { acValue: number; quality: number };
-    bp: { acValue: number; quality: number };
-  }
-  const dividerSignalRef = useRef<DividerSignalBundle | null>(null);
 
   // Sanity checker
   const [sanityProfileId, setSanityProfileId] = useState<string>(() => getActiveProfileId());
@@ -311,31 +286,16 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       (contactState === 'STABLE_CONTACT'
         ? Q.MIN_ENSEMBLE_CONF_STABLE
         : Q.MIN_ENSEMBLE_CONF_UNSTABLE) * hints.ensembleConfScale;
-    // SQI prioriza el canal HR del divisor (especializado en banda 0.5-4.5 Hz),
-    // que es más representativo de la calidad real para detección de picos
-    // que el SQI genérico del PPG. Con el AGC y SQI corregidos, el divider
-    // produce SQI 0-100 significativo: >= 15 indica al menos periodicidad
-    // detectable + SNR mínima.
-    const dv = dividerSignalRef.current;
-    const dividerHrQuality = dv?.hr.quality ?? 0;
-    const rawSqi = dv && dividerHrQuality >= 15
-      ? dividerHrQuality
-      : (diag && typeof diag === 'object' && diag.sqm && typeof diag.sqm.sqi === 'number'
-          ? diag.sqm.sqi
-          : lastSignal.quality) || 0;
+    const rawSqi =
+      (diag && typeof diag === 'object' && diag.sqm && typeof diag.sqm.sqi === 'number'
+        ? diag.sqm.sqi
+        : lastSignal.quality) || 0;
 
-    // PIPELINE LATIDOS: la fuente PRIMARIA es divider.hr.acValue (señal especializada
-    // para detección de picos), con fallback al PPG crudo solo si el divisor no
-    // tiene señal válida. Esto reemplaza el threshold restrictivo (>=15) anterior
-    // que producía que la app usara la señal genérica el 90% del tiempo.
     let hbInput = 0;
     if (fingerConfirmed) {
-      const dividerHrValue = dv?.hr.acValue ?? 0;
-      const useDivider = dv && Math.abs(dividerHrValue) > 1e-7;
-      const inputSource = useDivider ? dividerHrValue : signalValue;
-      if (Math.abs(inputSource) > 1e-7) {
-        lastHbInputRef.current = inputSource;
-        hbInput = inputSource;
+      if (Math.abs(signalValue) > 1e-7) {
+        lastHbInputRef.current = signalValue;
+        hbInput = signalValue;
       } else if (Math.abs(lastHbInputRef.current) > 1e-7) {
         hbInput = lastHbInputRef.current;
       }
@@ -612,8 +572,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
           redDC: rgbStats.redDC,
           greenAC: rgbStats.greenAC,
           greenDC: rgbStats.greenDC,
-          blueAC: rgbStats.blueAC,
-          blueDC: rgbStats.blueDC,
         });
       }
 
@@ -644,33 +602,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
             ? { ...lastRrSnapshotRef.current, timestampNow: nowT }
             : undefined;
 
-      // Bundle de canales especializados del SignalDivider para que cada
-      // vital sign use SU señal optimizada (en lugar del PPG genérico):
-      //   - BP usa bp.acValue (banda 0.5-8 Hz, escotadura dicrótica)
-      //   - Resp usa resp.acValue (banda 0.1-0.7 Hz)
-      //   - HRV usa hrv.acValue (banda 0.4-5 Hz)
-      // Si el divisor no produce señal (e.g. arranque), el processor cae
-      // al signalValue/morphologyValue clásicos (legacy fallback).
-      // Bundle COMPLETO de canales especializados del SignalDivider.
-      // Cada vital sign consume SU canal optimizado (banda + paleta de color
-      // + AGC + DC mode + SNR específicos por vital):
-      //   BP: canal R, banda 0.5-8Hz, dcMode=partial, sharpen, AGC agresivo
-      //   Resp: canal G, banda 0.1-0.5Hz, AGC con ventana muy larga
-      //   SpO2: canal R, banda 0.5-5Hz, dcMode=preserve (Beer-Lambert), anti-saturación
-      //   HRV: canal G, banda 0.5-3Hz, zeroPhase (sin lag temporal)
-      // Las quality values permiten al VitalSignsProcessor descartar el canal
-      // cuando su calidad es baja en lugar del SQI genérico.
-      const dvNow = dividerSignalRef.current;
-      const dividerChannels = dvNow ? {
-        bpAC:         dvNow.bp.acValue,
-        respAC:       dvNow.resp.acValue,
-        spo2AC:       dvNow.spo2.acValue,
-        spo2DC:       dvNow.spo2.dcValue,
-        spo2Quality:  dvNow.spo2.quality,
-        hrvAC:        dvNow.hrv.acValue,
-        hrvQuality:   dvNow.hrv.quality,
-      } : undefined;
-
       const vitals = processVitalSigns.processSignal(
         lastSignal.filteredValue,
         rawSqi || lastSignal.quality || 0,
@@ -679,7 +610,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         lastSignal.perfusionIndex,
         enrichedSqm,
         lastSignal.morphologyValue ?? lastSignal.filteredValue,
-        dividerChannels,
       );
 
       vitalSignsRef.current = vitals;
@@ -765,7 +695,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     // Callbacks
     handleSignalRealtime,
-    setDividerSignal: (v: DividerSignalBundle | null) => { dividerSignalRef.current = v; },
     resetFingerContactSession,
     resetSessionRefs,
     setIsMonitoringRef,

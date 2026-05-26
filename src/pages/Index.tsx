@@ -15,8 +15,6 @@ import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
 import type { ContactState } from "@/types/signal";
 import { usePerfTelemetry } from "@/hooks/usePerfTelemetry";
 import type { BackpressureConfig } from "@/lib/perf/backpressureConfig";
-import { useSignalDivider } from "@/hooks/useSignalDivider";
-import { toast } from "@/hooks/use-toast";
 
 const Index = () => {
   // Canvas sincrónico (render-phase, fuera de effects)
@@ -54,8 +52,6 @@ const Index = () => {
     reacquirePeaks: reacquireHeartPeaks,
   } = useHeartBeatProcessor();
 
-  const divider = useSignalDivider();
-
   const { 
     processSignal: processVitalSigns,
     setPlacementMode: setVitalsPlacementMode,
@@ -81,6 +77,14 @@ const Index = () => {
     setHeartBeatRuntimeHints(cameraHintsRef.current);
   }, [setCameraRuntimeHints, setHeartBeatRuntimeHints]);
 
+  // Frame loop
+  const { startFrameLoop, stopFrameLoop } = useFrameLoop({
+    cameraRef,
+    canvasRef,
+    ctxRef,
+    processFrame,
+  });
+
   // Signal router (encapsula todo el routing de señal, throttling, latch, sanity)
   const router = useSignalRouter({
     processHeartBeat: {
@@ -97,49 +101,6 @@ const Index = () => {
       getRGBStats,
     },
     cameraHintsRef,
-  });
-
-  // Frame loop — envuelve processFrame para ejecutar SignalDivider antes
-  const baseProcessFrameRef = useRef(processFrame);
-  baseProcessFrameRef.current = processFrame;
-  const dividerProcessFrameRef = useRef(divider.processFrame);
-  dividerProcessFrameRef.current = divider.processFrame;
-  const routerSetDividerRef = useRef(router.setDividerSignal);
-  routerSetDividerRef.current = router.setDividerSignal;
-
-  const combinedProcessFrame: (imageData: ImageData, ts?: number) => void = useCallback((imageData: ImageData, ts?: number) => {
-    // 1. SignalDivider procesa el frame en 5 canales especializados.
-    //    Cada canal aplica su propio bandpass + AGC + SNR espectral.
-    dividerProcessFrameRef.current(imageData, ts);
-
-    // 2. Publicar el bundle COMPLETO al router. Antes solo se publicaba el
-    //    canal HR; ahora todos los canales especializados llegan al router
-    //    para que cada vital sign consuma SU canal optimizado.
-    const result = divider.lastResultRef.current;
-    if (result) {
-      const ch = result.channels;
-      routerSetDividerRef.current({
-        hr:   { acValue: ch.hr.acValue,   quality: ch.hr.quality   },
-        spo2: { acValue: ch.spo2.acValue, dcValue: ch.spo2.dcValue, quality: ch.spo2.quality },
-        hrv:  { acValue: ch.hrv.acValue,  quality: ch.hrv.quality  },
-        resp: { acValue: ch.resp.acValue, quality: ch.resp.quality },
-        bp:   { acValue: ch.bp.acValue,   quality: ch.bp.quality   },
-      });
-    } else {
-      routerSetDividerRef.current(null);
-    }
-
-    // 3. PPGSignalProcessor sigue corriendo para: RGB raw (SpO2), detección
-    //    de dedo, diagnostics de calidad. Su filteredValue se usa como
-    //    FALLBACK si el divisor no produce señal válida.
-    baseProcessFrameRef.current(imageData, ts);
-  }, []);
-
-  const { startFrameLoop, stopFrameLoop } = useFrameLoop({
-    cameraRef,
-    canvasRef,
-    ctxRef,
-    processFrame: combinedProcessFrame,
   });
 
   // Session management
@@ -191,15 +152,6 @@ const Index = () => {
     router.setIsMonitoringRef(session.isMonitoring);
   }, [session.isMonitoring, router]);
 
-  // Iniciar/detener sensores del divider con el monitoreo
-  useEffect(() => {
-    if (session.isMonitoring) {
-      divider.start();
-    } else {
-      divider.stop();
-    }
-  }, [session.isMonitoring, divider]);
-
   // Sincronizar resultados post-medición
   useEffect(() => {
     if (lastValidResults && !session.isMonitoring) {
@@ -245,17 +197,17 @@ const Index = () => {
       if (typeof cfg.forceStride === 'number' || !cfg.enabled) return;
     } catch { return; }
     if (currentStride > prev) {
-      toast({
+      import('@/components/ui/use-toast').then(({ toast }) => toast({
         title: "⚡ Modo ahorro activado",
         description: `Rendimiento bajo detectado (stride ${currentStride}).`,
         duration: 3000,
-      });
+      }));
     } else {
-      toast({
+      import('@/components/ui/use-toast').then(({ toast }) => toast({
         title: "✓ Rendimiento restaurado",
         description: `Muestreo completo (stride ${currentStride}).`,
         duration: 2500,
-      });
+      }));
     }
   }, [currentStride, session.isMonitoring, getBackpressureConfig]);
 
@@ -305,11 +257,11 @@ const Index = () => {
   // Camera error toast
   useEffect(() => {
     const handler = () => {
-      toast({
+      import('@/components/ui/use-toast').then(({ toast }) => toast({
         title: "Cámara trasera no disponible",
         description: "Verifica los permisos de cámara e intenta nuevamente.",
         duration: 5000,
-      });
+      }));
     };
     window.addEventListener('camera-error', handler);
     return () => window.removeEventListener('camera-error', handler);

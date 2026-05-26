@@ -4,22 +4,24 @@ import { passesUnifiedFingerAcquire } from './fingerPlacementProfile';
 
 /**
  * Flash al aire / superficie roja: brillo alto, G y B aún altos, R/B bajo.
- * Solo atrapa casos extremos (flash directo a superficie blanca/brillante).
- * La pulsación es quien finalmente distingue dedo de superficie inerte.
+ * La causa habitual de “detecta más sin dedo”.
  */
 export function isOpenFlashWithoutContact(s: FingerRgbSnapshot): boolean {
   const r = s.red;
   const g = Math.max(1, s.green);
   const b = Math.max(1, s.blue);
   const total = r + g + b;
-  if (total < 60) return false;
+  if (total < 45) return false;
 
   const rb = r / b;
+  const rg = r / g;
   const dom = r - (g + b) / 2;
 
-  // Solo flash directo a superficie muy brillante sin nada de hemoglobina
-  if (total > 200 && dom < 20 && rb < 1.2) return true;
-  if (total > 280 && rb < 1.4 && g > 80 && b > 70) return true;
+  if (total > 175 && rb < 1.45 && rg < 1.25) return true;
+  if (total > 140 && rb < 1.32 && rg < 1.18) return true;
+  if (total > 105 && rb < 1.48 && rg < 1.2 && dom < 44) return true;
+  if (g > 88 && b > 72 && dom < 36) return true;
+  if (r > 0 && g > 0.68 * r && b > 0.6 * r && total > 115) return true;
 
   return false;
 }
@@ -141,13 +143,13 @@ export function isFingerOnLensScene(
   const dom = r - (g + b) / 2;
 
   return (
-    total >= 24 &&
-    total <= 580 &&
-    rb >= 1.04 &&
-    rg >= 1.01 &&
-    dom >= 3 &&
-    coverage >= 0.04 &&
-    fingerScore >= 0.05 &&
-    snap.coverage >= 0.03
+    total >= 48 &&
+    total <= 520 &&
+    rb >= 1.14 &&
+    rg >= 1.05 &&
+    dom >= 10 &&
+    coverage >= 0.11 &&
+    fingerScore >= 0.14 &&
+    snap.coverage >= 0.1
   );
 }
