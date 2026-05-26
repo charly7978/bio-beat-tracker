@@ -560,8 +560,8 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
         state.pendingTrendArr = true;
         const retroRR = lastRR > 0 ? lastRR : 800;
         const retroDuration = Math.min(Math.max(retroRR, 400), 1500);
-        buffer.markArrhythmiaBack(retroDuration);
-        state.arrActiveUntil = state.now + retroDuration * 1.2;
+        buffer.markArrhythmiaBack(retroDuration * 0.35);
+        state.arrActiveUntil = state.now + retroDuration * 0.65;
       }
       const storedRR = isPhysiologicalRR(lastRR) ? Math.round(lastRR) : 0;
       state.beatHistory.push({
