@@ -263,7 +263,4 @@ export class BloodPressureProcessor {
     this.estimateHistory = [];
   }
 
-  fullReset(): void {
-    this.reset();
-  }
 }

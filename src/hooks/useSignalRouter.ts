@@ -28,7 +28,7 @@ import {
   recordVerdict as recordAuditVerdict,
   getNegativeCount as getAuditNegativeCount,
 } from '@/lib/sanity/sanityAuditLog';
-import { toast } from '@/components/ui/use-toast';
+import { toast } from '@/hooks/use-toast';
 
 interface HeartBeatProcessorAPI {
   processSignal: (

@@ -1,3 +1,4 @@
+import { clamp } from '../../utils/math';
 import { createLogger } from '../../utils/logger';
 import { getMonotonicNow } from '../../utils/physio';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
@@ -288,7 +289,7 @@ export class ArrhythmiaProcessor {
     // where lo = "normal" cutoff and hi = "strong AF" cutoff.
 
     const safeRange = (val: number, lo: number, hi: number): number =>
-      clamp01((val - lo) / (hi > lo ? hi - lo : 1));
+      clamp((val - lo) / (hi > lo ? hi - lo : 1), 0, 1);
 
     const sRHRMSSD = safeRange(m.rmssd, A.RMSSD_LO, A.RMSSD_HI);
     const sCV      = safeRange(m.cv, A.CV_LO, A.CV_HI);
@@ -447,7 +448,4 @@ export class ArrhythmiaProcessor {
   }
 }
 
-/** Clamp a number to [0, 1]. */
-function clamp01(v: number): number {
-  return v < 0 ? 0 : v > 1 ? 1 : v;
-}
+

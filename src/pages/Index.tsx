@@ -197,13 +197,13 @@ const Index = () => {
       if (typeof cfg.forceStride === 'number' || !cfg.enabled) return;
     } catch { return; }
     if (currentStride > prev) {
-      import('@/components/ui/use-toast').then(({ toast }) => toast({
+      import('@/hooks/use-toast').then(({ toast }) => toast({
         title: "⚡ Modo ahorro activado",
         description: `Rendimiento bajo detectado (stride ${currentStride}).`,
         duration: 3000,
       }));
     } else {
-      import('@/components/ui/use-toast').then(({ toast }) => toast({
+      import('@/hooks/use-toast').then(({ toast }) => toast({
         title: "✓ Rendimiento restaurado",
         description: `Muestreo completo (stride ${currentStride}).`,
         duration: 2500,
@@ -257,7 +257,7 @@ const Index = () => {
   // Camera error toast
   useEffect(() => {
     const handler = () => {
-      import('@/components/ui/use-toast').then(({ toast }) => toast({
+      import('@/hooks/use-toast').then(({ toast }) => toast({
         title: "Cámara trasera no disponible",
         description: "Verifica los permisos de cámara e intenta nuevamente.",
         duration: 5000,

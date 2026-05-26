@@ -827,7 +827,7 @@ export class VitalSignsProcessor {
     this.isCalibrating = false;
     this.calibrationSamples = 0;
     this.arrhythmiaProcessor.reset();
-    this.bloodPressureProcessor.fullReset();
+    this.bloodPressureProcessor.reset();
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
