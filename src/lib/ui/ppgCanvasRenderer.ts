@@ -145,6 +145,7 @@ export interface PpgRenderState {
   buffer: CircularBuffer | null;
   lastArrhythmiaCount: number;
   pendingTrendArr: boolean;
+  lastPeakProcessedTime: number;
 }
 
 export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: number): void {
@@ -543,27 +544,32 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   if (p.isPeak) state.sweepPulse = 1;
 
   if (p.isPeak) {
-    const currentCount = p.arrhythmiaCount || 0;
-    const rrArr = p.rrIntervals;
-    const lastRR = rrArr && rrArr.length > 0 ? rrArr[rrArr.length - 1] : 0;
+    const peakAge = state.now - state.lastPeakProcessedTime;
+    if (peakAge > 200) {
+      state.lastPeakProcessedTime = state.now;
 
-    const isNewArr = currentCount > state.lastArrhythmiaCount;
+      const currentCount = p.arrhythmiaCount || 0;
+      const rrArr = p.rrIntervals;
+      const lastRR = rrArr && rrArr.length > 0 ? rrArr[rrArr.length - 1] : 0;
 
-    if (isNewArr) {
-      state.lastArrhythmiaCount = currentCount;
-      state.pendingTrendArr = true;
-      const retroRR = lastRR > 0 ? lastRR : 800;
-      const retroDuration = Math.min(Math.max(retroRR, 400), 1500);
-      buffer.markArrhythmiaBack(retroDuration);
-    }
-    const storedRR = isPhysiologicalRR(lastRR) ? Math.round(lastRR) : 0;
-    state.beatHistory.push({
-      isArrhythmia: isNewArr,
-      time: state.now - VISUAL_DELAY_MS,
-      rr: storedRR,
-    });
-    if (state.beatHistory.length > BEAT_HISTORY_MAX) {
-      state.beatHistory = state.beatHistory.slice(-BEAT_HISTORY_MAX);
+      const isNewArr = currentCount > state.lastArrhythmiaCount;
+
+      if (isNewArr) {
+        state.lastArrhythmiaCount = currentCount;
+        state.pendingTrendArr = true;
+        const retroRR = lastRR > 0 ? lastRR : 800;
+        const retroDuration = Math.min(Math.max(retroRR, 400), 1500);
+        buffer.markArrhythmiaBack(retroDuration);
+      }
+      const storedRR = isPhysiologicalRR(lastRR) ? Math.round(lastRR) : 0;
+      state.beatHistory.push({
+        isArrhythmia: isNewArr,
+        time: state.now - VISUAL_DELAY_MS,
+        rr: storedRR,
+      });
+      if (state.beatHistory.length > BEAT_HISTORY_MAX) {
+        state.beatHistory = state.beatHistory.slice(-BEAT_HISTORY_MAX);
+      }
     }
   }
 

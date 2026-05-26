@@ -107,6 +107,7 @@ const PPGSignalMeter = ({
 
   const sweepPulseRef = useRef(0);
   const lastPeakTimeRef = useRef(0);
+  const lastPeakProcessedRef = useRef(0);
   const [showPulse, setShowPulse] = useState(false);
 
   const lastArrhythmiaCountRef = useRef(0);
@@ -364,6 +365,7 @@ const PPGSignalMeter = ({
         buffer: dataBufferRef.current,
         lastArrhythmiaCount: lastArrhythmiaCountRef.current,
         pendingTrendArr: pendingTrendArrRef.current,
+        lastPeakProcessedTime: lastPeakProcessedRef.current,
       };
 
       drawBackground(ctx, layoutRef.current.width, layoutRef.current.height);
@@ -375,6 +377,7 @@ const PPGSignalMeter = ({
       drawFooter(ctx, renderState);
 
       sweepPulseRef.current = renderState.sweepPulse;
+      lastPeakProcessedRef.current = renderState.lastPeakProcessedTime;
       lastArrhythmiaCountRef.current = renderState.lastArrhythmiaCount;
       pendingTrendArrRef.current = renderState.pendingTrendArr;
       beatHistoryRef.current = renderState.beatHistory;
@@ -396,6 +399,7 @@ const PPGSignalMeter = ({
     amplitudeStatsRef.current = { min: -50, max: 50, range: 100 };
     beatHistoryRef.current = [];
     lastArrhythmiaCountRef.current = 0;
+    lastPeakProcessedRef.current = 0;
     ibiDisplayRef.current = 0;
     hrvDisplayRef.current = { sdnn: 0, rmssd: 0, pnn50: 0, cv: 0 };
     bpmStatsRef.current = { min: 0, max: 0, sum: 0, n: 0 };
