@@ -16,6 +16,7 @@ import type { ContactState } from "@/types/signal";
 import { usePerfTelemetry } from "@/hooks/usePerfTelemetry";
 import type { BackpressureConfig } from "@/lib/perf/backpressureConfig";
 import { useSignalDivider } from "@/hooks/useSignalDivider";
+import { toast } from "@/hooks/use-toast";
 
 const Index = () => {
   // Canvas sincrónico (render-phase, fuera de effects)
@@ -225,17 +226,17 @@ const Index = () => {
       if (typeof cfg.forceStride === 'number' || !cfg.enabled) return;
     } catch { return; }
     if (currentStride > prev) {
-      import('@/components/ui/use-toast').then(({ toast }) => toast({
+      toast({
         title: "⚡ Modo ahorro activado",
         description: `Rendimiento bajo detectado (stride ${currentStride}).`,
         duration: 3000,
-      }));
+      });
     } else {
-      import('@/components/ui/use-toast').then(({ toast }) => toast({
+      toast({
         title: "✓ Rendimiento restaurado",
         description: `Muestreo completo (stride ${currentStride}).`,
         duration: 2500,
-      }));
+      });
     }
   }, [currentStride, session.isMonitoring, getBackpressureConfig]);
 
@@ -285,11 +286,11 @@ const Index = () => {
   // Camera error toast
   useEffect(() => {
     const handler = () => {
-      import('@/components/ui/use-toast').then(({ toast }) => toast({
+      toast({
         title: "Cámara trasera no disponible",
         description: "Verifica los permisos de cámara e intenta nuevamente.",
         duration: 5000,
-      }));
+      });
     };
     window.addEventListener('camera-error', handler);
     return () => window.removeEventListener('camera-error', handler);
