@@ -42,29 +42,31 @@ export interface SignalChannelPreset {
 // AGC presets — derivados de literatura PPG smartphone
 // ─────────────────────────────────────────────────────────────────
 
-/** HR/HRV: target moderado, ventana media (~1.6s @30fps) */
+/** HR/HRV: target 0.5, ventana media (~1.6s @30fps)
+ *  Satura la escala máxima en señales muy débiles y regula cuando el bandpass
+ *  supera target/scaleMax = 0.05. */
 const AGC_HR_LIKE: ChannelAgcParams = {
-  target: 40, tail: 48, scaleMin: 0.5, scaleMax: 8.0, smoothAlpha: 0.20,
+  target: 0.5, tail: 48, scaleMin: 0.5, scaleMax: 10.0, smoothAlpha: 0.20,
 };
 
-/** SpO2: target bajo (anti-saturación clave para Beer-Lambert), ventana larga */
+/** SpO2: target bajo (preserva rango dinámico para Beer-Lambert), ventana larga */
 const AGC_SPO2: ChannelAgcParams = {
-  target: 30, tail: 72, scaleMin: 0.3, scaleMax: 6.0, smoothAlpha: 0.12,
+  target: 0.3, tail: 72, scaleMin: 0.3, scaleMax: 8.0, smoothAlpha: 0.12,
 };
 
 /** HRV: igual que HR pero ventana mayor para estabilidad temporal de RR */
 const AGC_HRV: ChannelAgcParams = {
-  target: 40, tail: 64, scaleMin: 0.5, scaleMax: 8.0, smoothAlpha: 0.18,
+  target: 0.5, tail: 64, scaleMin: 0.5, scaleMax: 10.0, smoothAlpha: 0.18,
 };
 
-/** RESP: target alto, ventana MUY larga (señal lenta 0.1-0.5Hz) */
+/** RESP: target 0.5, ventana MUY larga (señal lenta 0.1-0.5Hz) */
 const AGC_RESP: ChannelAgcParams = {
-  target: 50, tail: 120, scaleMin: 0.4, scaleMax: 10.0, smoothAlpha: 0.08,
+  target: 0.5, tail: 120, scaleMin: 0.4, scaleMax: 10.0, smoothAlpha: 0.08,
 };
 
-/** BP: target alto, ventana CORTA (preserva morfología/dicrotic notch viva) */
+/** BP: target 0.5, ventana CORTA (preserva morfología/dicrotic notch viva) */
 const AGC_BP: ChannelAgcParams = {
-  target: 55, tail: 32, scaleMin: 0.6, scaleMax: 10.0, smoothAlpha: 0.28,
+  target: 0.5, tail: 32, scaleMin: 0.5, scaleMax: 10.0, smoothAlpha: 0.28,
 };
 
 export const HR_CHANNEL: SignalChannelPreset = {

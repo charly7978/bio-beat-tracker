@@ -310,7 +310,7 @@ export class SignalDivider {
       const abs = Math.abs(acBuf[idx]);
       if (abs > peak) peak = abs;
     }
-    if (peak > 0.1) {
+    if (peak > 5e-4) {
       const targetScale = agcCfg.target / peak;
       agcScale += (targetScale - agcScale) * agcCfg.smoothAlpha;
       agcScale = clamp(agcScale, agcCfg.scaleMin, agcCfg.scaleMax);
@@ -398,8 +398,7 @@ export class SignalDivider {
     const mean = sum / n;
     const variance = (sumSq / n) - (mean * mean);
     if (variance <= 0) return 0;
-    // A mayor varianza = más energía de señal = mejor (hasta cierto punto)
-    const score = Math.min(40, variance * 200);
+    const score = Math.min(40, variance * 50000);
     return score;
   }
 

@@ -313,11 +313,12 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         : Q.MIN_ENSEMBLE_CONF_UNSTABLE) * hints.ensembleConfScale;
     // SQI prioriza el canal HR del divisor (especializado en banda 0.5-4.5 Hz),
     // que es más representativo de la calidad real para detección de picos
-    // que el SQI genérico del PPG. Umbral bajado a >=5 para no descartar
-    // señal usable (antes 15 era demasiado restrictivo y caía al PPG genérico).
+    // que el SQI genérico del PPG. Con el AGC y SQI corregidos, el divider
+    // produce SQI 0-100 significativo: >= 15 indica al menos periodicidad
+    // detectable + SNR mínima.
     const dv = dividerSignalRef.current;
     const dividerHrQuality = dv?.hr.quality ?? 0;
-    const rawSqi = dv && dividerHrQuality >= 5
+    const rawSqi = dv && dividerHrQuality >= 15
       ? dividerHrQuality
       : (diag && typeof diag === 'object' && diag.sqm && typeof diag.sqm.sqi === 'number'
           ? diag.sqm.sqi

@@ -679,7 +679,7 @@ export class VitalSignsProcessor {
         if (v > mx) mx = v;
       }
       const peakToPeak = mx - mn;
-      spo2DividerPasses = peakToPeak > 1.0 && this.lastSpo2DividerQuality >= 20;
+      spo2DividerPasses = peakToPeak > 0.02 && this.lastSpo2DividerQuality >= 5;
     }
     // Durante warmup (buffer < 16 muestras) no bloquear — se valida después.
     if (spo2 > 0 && spo2 >= 70 && spo2 <= 100 && spo2Conf !== 'INVALID' && spo2DividerPasses) {
