@@ -1419,6 +1419,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       return;
     }
 
+    // No cambiar stride durante medición activa: el salto de muestreo espacial
+    // crea una discontinuidad DC que el bandpass interpreta como latido.
+    if (this.contactState === 'STABLE_CONTACT') return;
+
     const fps = ppgPerf.snapshot().fps;
     if (fps <= 0) return;
 

@@ -196,12 +196,13 @@ export const VITAL_THRESHOLDS = {
     ROI_CENTER_BIAS_MIN: 0.50,
     /** Brillo mínimo en score de tile (total RGB medio por celda) */
     TILE_BRIGHTNESS_OFFSET: 82,
+    /** Umbral absoluto de rojo (se escala adaptativamente por brillo en fingerContactSignature) */
     MIN_RED_INTENSITY: 36,
-    MIN_RED_DOMINANCE: 7,
-    MIN_RG_RATIO: 1.04,
-    MIN_COVERAGE: 0.10,
+    MIN_RED_DOMINANCE: 5,
+    MIN_RG_RATIO: 1.00,
+    MIN_COVERAGE: 0.09,
     /** R/B mínimo — dedo absorbe azul; flash sin dedo suele fallar esto */
-    HEMOGLOBIN_MIN_RB: 1.22,
+    HEMOGLOBIN_MIN_RB: 1.15,
     SOFT_COVERAGE_MULT: 0.85,
     /** Adquisición estricta */
     ACQUIRE_RB_STRICT: 1.2,

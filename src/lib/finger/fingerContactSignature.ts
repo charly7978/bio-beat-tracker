@@ -9,6 +9,12 @@ export interface FingerRgbSnapshot {
   fingerScore: number;
 }
 
+/** Escala el umbral de rojo absoluto según el brillo total de la escena (melanina absorbe más → umbral más bajo). */
+function adaptiveRedThreshold(r: number, g: number, b: number): number {
+  const total = r + g + b;
+  return Math.max(18, Math.min(VITAL_THRESHOLDS.FINGER.MIN_RED_INTENSITY, total * 0.12));
+}
+
 /**
  * Firma mínima de dedo con flash: R domina y B bajo (hemoglobina).
  * Rechaza escena iluminada por flash sin contacto (R≈G≈B alto).
@@ -25,7 +31,7 @@ export function hasFingerHemoglobinSignature(s: FingerRgbSnapshot): boolean {
   const rg = r / g;
   const rb = r / b;
 
-  if (r < F.MIN_RED_INTENSITY) return false;
+  if (r < adaptiveRedThreshold(r, g, b)) return false;
   if (rg < F.MIN_RG_RATIO) return false;
   if (rb < F.HEMOGLOBIN_MIN_RB) return false;
   if (redDominance < F.MIN_RED_DOMINANCE) return false;

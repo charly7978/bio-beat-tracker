@@ -160,26 +160,12 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
         constraints.push({ exposureMode: "continuous" });
       }
 
-      if (caps.exposureCompensation) {
-        const minExp = caps.exposureCompensation.min ?? -2;
-        const maxExp = caps.exposureCompensation.max ?? 2;
-        const targetExp = Math.max(minExp, Math.min(maxExp, -0.35));
-        constraints.push({ exposureCompensation: targetExp });
-      }
-
       if (caps.whiteBalanceMode?.includes("manual")) {
         constraints.push({ whiteBalanceMode: "manual" });
       }
 
-      if (caps.iso) {
-        const minISO = caps.iso.min ?? 50;
-        const maxISO = caps.iso.max ?? 400;
-        const targetISO = Math.max(minISO, Math.min(maxISO, 140));
-        constraints.push({ iso: targetISO });
-      }
-
       if (caps.focusMode?.includes("manual")) {
-        constraints.push({ focusMode: "manual" });
+        constraints.push({ focusMode: "manual", focusDistance: 0 });
       } else if (caps.focusMode?.includes("continuous")) {
         constraints.push({ focusMode: "continuous" });
       }
@@ -189,6 +175,49 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
           await track.applyConstraints({ advanced: constraints });
         } catch (e) {
           log.warn("No se pudieron estabilizar parámetros de cámara", e);
+        }
+      }
+    };
+
+    const applyTorchDependentParams = async (track: MediaStreamTrack, torchOn: boolean) => {
+      const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
+      const constraints: AdvancedConstraint[] = [];
+
+      if (torchOn) {
+        // Flash activo: ISO bajo y exposición negativa para evitar saturación
+        if (caps.iso) {
+          const minISO = caps.iso.min ?? 50;
+          const maxISO = caps.iso.max ?? 400;
+          const targetISO = Math.max(minISO, Math.min(maxISO, 140));
+          constraints.push({ iso: targetISO });
+        }
+        if (caps.exposureCompensation) {
+          const minExp = caps.exposureCompensation.min ?? -2;
+          const maxExp = caps.exposureCompensation.max ?? 2;
+          const targetExp = Math.max(minExp, Math.min(maxExp, -0.35));
+          constraints.push({ exposureCompensation: targetExp });
+        }
+      } else {
+        // Sin flash: ISO más alto y sin compensation negativa para no subexponer
+        if (caps.iso) {
+          const minISO = caps.iso.min ?? 50;
+          const maxISO = caps.iso.max ?? 800;
+          const targetISO = Math.max(minISO, Math.min(maxISO, 400));
+          constraints.push({ iso: targetISO });
+        }
+        if (caps.exposureCompensation) {
+          const minExp = caps.exposureCompensation.min ?? -2;
+          const maxExp = caps.exposureCompensation.max ?? 2;
+          const targetExp = Math.max(minExp, Math.min(maxExp, 0));
+          constraints.push({ exposureCompensation: targetExp });
+        }
+      }
+
+      if (constraints.length > 0) {
+        try {
+          await track.applyConstraints({ advanced: constraints });
+        } catch (e) {
+          log.warn("No se pudieron aplicar parámetros post-torch", e);
         }
       }
     };
@@ -258,6 +287,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
           }
           if (torchOn) log.info("Flash activado");
           else log.warn("Flash no confirmado — se usará perfil de cámara tolerante");
+          await applyTorchDependentParams(track, torchOn);
         }
 
         log.info(
