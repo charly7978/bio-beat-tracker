@@ -547,7 +547,9 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     const rrArr = p.rrIntervals;
     const lastRR = rrArr && rrArr.length > 0 ? rrArr[rrArr.length - 1] : 0;
 
-    if (currentCount > state.lastArrhythmiaCount) {
+    const isNewArr = currentCount > state.lastArrhythmiaCount;
+
+    if (isNewArr) {
       state.lastArrhythmiaCount = currentCount;
       state.pendingTrendArr = true;
       const retroRR = lastRR > 0 ? lastRR : 800;
@@ -556,7 +558,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     }
     const storedRR = isPhysiologicalRR(lastRR) ? Math.round(lastRR) : 0;
     state.beatHistory.push({
-      isArrhythmia: false,
+      isArrhythmia: isNewArr,
       time: state.now - VISUAL_DELAY_MS,
       rr: storedRR,
     });
