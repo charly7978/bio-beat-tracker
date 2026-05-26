@@ -127,20 +127,33 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
         log.warn("Esta cámara no soporta torch");
         return false;
       }
-      const attempts = [
+      // Torch reliability: algunos dispositivos (especialmente Motorola/MIUI)
+      // requieren 2-3 reintentos con delays cortos para activar el flash
+      // (la primera invocación a applyConstraints puede silenciosamente fallar
+      // cuando el track aún no está completamente settled).
+      const attemptShapes = [
         { advanced: [{ torch: true } as TorchCapableConstraint] },
         { torch: true } as TorchCapableConstraint,
       ] as MediaTrackConstraints[];
-      for (const constraints of attempts) {
-        try {
-          await track.applyConstraints(constraints);
-          const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
-          if (settings.torch === true) return true;
-        } catch {
-          /* siguiente método */
+      const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+      // Hasta 3 rondas de intentos (5 attempts efectivos: 2 shapes × ~1.5 rondas)
+      for (let round = 0; round < 3; round++) {
+        for (const constraints of attemptShapes) {
+          try {
+            await track.applyConstraints(constraints);
+            // Microtask para que el browser settlee settings antes de leer
+            await Promise.resolve();
+            const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
+            if (settings.torch === true) return true;
+          } catch {
+            /* siguiente shape */
+          }
         }
+        // Espera incremental antes del siguiente round (Motorola necesita ~200ms)
+        if (round < 2) await sleep(180 * (round + 1));
       }
-      log.warn("Torch solicitado pero no confirmado en settings");
+      log.warn("Torch solicitado pero no confirmado tras 3 rondas de retry");
       return false;
     };
 

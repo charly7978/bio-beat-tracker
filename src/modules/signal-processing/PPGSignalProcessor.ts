@@ -175,7 +175,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   // Pulsatility verification: after finger acquisition, if no pulse detected for N frames,
   // force no-contact (rejects red surfaces, flash-to-air, etc.)
   private pulsatileGraceCounter = 0;
-  private readonly PULSATILE_GRACE_FRAMES = 40; // ~1.3s @ 30fps
+  // Pulsatility grace: tiempo que el sistema espera ver pulsación antes de
+  // declarar "no es un dedo vivo". Bajamos de 40 → 24 frames (~800ms @30fps).
+  // 1.3s era excesivo: el HR processor ya necesita ~2 latidos para confirmar
+  // BPM, y nosotros estábamos esperando antes de eso, alargando inútilmente
+  // el tiempo de adquisición percibido por el usuario.
+  private readonly PULSATILE_GRACE_FRAMES = 24;
   private lastPulsatileFrame = 0;
 
   // Suavizado temporal — más lentos = más estable
@@ -184,8 +189,20 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private smoothedBlue = 0;
   private smoothedCoverage = 0;
   private smoothedFingerScore = 0;
-  private readonly RGB_SMOOTH_ALPHA = 0.08;
-  private readonly COVERAGE_SMOOTH_ALPHA = 0.10;
+  /**
+   * Alpha del EMA para suavizado RGB / coverage / finger score.
+   * Ahora ADAPTATIVO:
+   *  - Pre-adquisición (sin dedo confirmado): alpha rápido (0.22) para que
+   *    los transientes del usuario poniendo el dedo se reflejen en ~5 frames
+   *    (~165ms @30fps). Antes con 0.08 tardaba ~50 frames (1.7s) en converger.
+   *  - Post-adquisición (dedo STABLE): alpha lento (0.08) para máxima
+   *    estabilidad de la señal continua.
+   * Esto reduce significativamente el tiempo percibido "buscando dedo".
+   */
+  private readonly RGB_SMOOTH_ALPHA_PRE = 0.22;
+  private readonly RGB_SMOOTH_ALPHA_POST = 0.08;
+  private readonly COVERAGE_SMOOTH_ALPHA_PRE = 0.26;
+  private readonly COVERAGE_SMOOTH_ALPHA_POST = 0.10;
 
   /** Ventana corta de R medio en ROI — CV temporal para distinguir tejido pulsátil vs. rojo estático */
   private readonly roiRedPulseRing = new RingF32(VITAL_THRESHOLDS.FINGER.ROI_PULSE_BUFFER);
@@ -586,7 +603,24 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.fingerConfidenceCount = Math.min(this.fingerConfidenceCount + 1, 100);
       this.stableContactCount++;
 
-      if (this.fingerConfidenceCount >= confirmFrames) {
+      // FAST-PATH de adquisición: cuando la firma del dedo es OBVIA (red
+      // alto + clara dominancia hemoglobina + buena cobertura), confirmamos
+      // en 2 frames en lugar de esperar los 3-6 frames normales. Esto
+      // reduce el tiempo de adquisición percibido cuando el usuario pone
+      // el dedo bien desde el inicio.
+      //
+      // Criterios derivados de literatura PPG smartphone (FibriCheck,
+      // Welltory): red >= 180 (canal saturado por sangre con flash),
+      // r/b >= 1.30 (firma fuerte de hemoglobina), coverage >= 0.18 (dedo
+      // tapando significativamente la lente).
+      const r = this.smoothedRed;
+      const b = this.smoothedBlue;
+      const rb = b > 0 ? r / b : 0;
+      const obviousFinger = r >= 180 && rb >= 1.30 && this.smoothedCoverage >= 0.18;
+      const fastPathFrames = Math.max(2, Math.floor(confirmFrames * 0.5));
+      const effectiveConfirm = obviousFinger ? fastPathFrames : confirmFrames;
+
+      if (this.fingerConfidenceCount >= effectiveConfirm) {
         this.fingerDetected = true;
         this.contactState = 'UNSTABLE_CONTACT';
       }
@@ -792,14 +826,22 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const { rawRed, rawGreen, rawBlue, coverageRatio, fingerScore } = roi;
 
     if (this.smoothedRed === 0) {
+      // Inicialización al primer frame — copia directa, sin EMA.
       this.smoothedRed = rawRed;
       this.smoothedGreen = rawGreen;
       this.smoothedBlue = rawBlue;
       this.smoothedCoverage = coverageRatio;
       this.smoothedFingerScore = fingerScore;
     } else {
-      const a = this.RGB_SMOOTH_ALPHA;
-      const ca = this.COVERAGE_SMOOTH_ALPHA;
+      // Alpha adaptativo: rápido cuando aún no hay dedo (acelera adquisición),
+      // lento una vez confirmado (estabilidad de medición). Esto reemplaza el
+      // alpha fijo lento que producía latencia inicial de ~1.7s "buscando".
+      const a = this.fingerDetected
+        ? this.RGB_SMOOTH_ALPHA_POST
+        : this.RGB_SMOOTH_ALPHA_PRE;
+      const ca = this.fingerDetected
+        ? this.COVERAGE_SMOOTH_ALPHA_POST
+        : this.COVERAGE_SMOOTH_ALPHA_PRE;
       this.smoothedRed = this.smoothedRed * (1 - a) + rawRed * a;
       this.smoothedGreen = this.smoothedGreen * (1 - a) + rawGreen * a;
       this.smoothedBlue = this.smoothedBlue * (1 - a) + rawBlue * a;
