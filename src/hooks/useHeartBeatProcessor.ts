@@ -35,10 +35,11 @@ export const useHeartBeatProcessor = () => {
   const noContactFramesRef = useRef<number>(0);
   const wasNoContactRef = useRef(true);
 
-  /** ~0,8 s sin dedo antes de re-adquisición suave (evita vaciar buffer en micro-parpadeos) */
-  const NO_CONTACT_PEAK_RESET_FRAMES = 24;
-  /** ~1,2 s sin dedo: reset completo del procesador */
-  const NO_CONTACT_FULL_RESET_FRAMES = 36;
+  /** ~1,1 s sin dedo antes de re-adquisición suave (más tolerante: un artefacto
+   * breve no corta la detección ni obliga a "ponerse en ritmo" de nuevo) */
+  const NO_CONTACT_PEAK_RESET_FRAMES = 33;
+  /** ~1,6 s sin dedo: reset completo del procesador (tolerante a parpadeos breves) */
+  const NO_CONTACT_FULL_RESET_FRAMES = 48;
 
   useEffect(() => {
     const t = Date.now().toString(36);
