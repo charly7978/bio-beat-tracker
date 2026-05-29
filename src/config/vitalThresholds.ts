@@ -125,6 +125,51 @@ export const VITAL_THRESHOLDS = {
   },
 
   /**
+   * ACQUISITION STABILIZATION — fase inicial de colocación del dedo.
+   *
+   * Fusiona métricas ya calculadas por el pipeline (PI, periodicidad,
+   * SQI, cobertura, movimiento) en una confianza suavizada [0..1] con
+   * histéresis y dwell, produciendo un estado SEARCHING → STABILIZING →
+   * READY y un progreso monótono para la UI. Evita el parpadeo de
+   * "dedo sí/no" y entrega una lectura inicial firme.
+   *
+   * Base: la cámara y el AE tardan ~1–3 s en estabilizarse al apoyar el
+   * dedo (frames iniciales ruidosos); un periodo de warm-up + persistencia
+   * temporal del SQI es la práctica validada para PPG por smartphone.
+   */
+  ACQUISITION: {
+    /** Frames mínimos con contacto antes de poder declarar READY (≈1,2 s @30 fps). */
+    WARMUP_FRAMES: 36,
+    /** Frames sostenidos sobre el umbral de entrada antes de pasar a READY (debounce). */
+    READY_DWELL_FRAMES: 10,
+    /** Frames bajo el umbral de salida antes de abandonar READY (debounce anti-parpadeo). */
+    EXIT_DWELL_FRAMES: 8,
+    /** Confianza para entrar en READY (histéresis alta). */
+    CONF_ENTER_READY: 0.55,
+    /** Confianza para salir de READY (histéresis baja). */
+    CONF_EXIT_READY: 0.38,
+    /** EMA de subida de la confianza (sube relativamente rápido). */
+    CONF_ATTACK: 0.14,
+    /** EMA de bajada de la confianza (cae lento → lectura firme, sin oscilar). */
+    CONF_RELEASE: 0.05,
+    /** Objetivos de normalización por métrica (rangos típicos cámara+dedo). */
+    PI_TARGET: 0.0018,
+    PERIODICITY_TARGET: 0.42,
+    SQI_TARGET: 45,
+    COVERAGE_TARGET: 0.15,
+    /** Movimiento por encima del cual se penaliza la confianza (escala 0..1 del score). */
+    MOTION_TOLERANCE: 0.6,
+    /** Pesos de fusión (suman 1.0). */
+    W_PI: 0.30,
+    W_PERIODICITY: 0.28,
+    W_SQI: 0.24,
+    W_COVERAGE: 0.18,
+    /** Suavizado del progreso UI: subida máxima por frame y caída lenta. */
+    PROGRESS_MAX_RISE: 0.035,
+    PROGRESS_DECAY: 0.02,
+  },
+
+  /**
    * Arrhythmia / AF detection via weighted scoring over a multi-feature set.
    *
    * Sub-scores: clamp01((value - LO) / (HI - LO)) → [0,1].
@@ -190,9 +235,9 @@ export const VITAL_THRESHOLDS = {
   // (ROI más grande, centerBias más plano, tiles más permisivos)
   FINGER: {
     /** Fracción del lado corto del frame usada como ROI cuadrado central.
-     *  0.65 captura zona central del dedo (mejor relación señal/ruido, menos luz ambiental perimetral)
-     *  y reduce ~57% los píxeles a procesar frente a 0.99. */
-    ROI_SIZE_FRACTION: 0.65,
+     *  0.82 captura la mayor parte del dedo con buena relación señal/ruido,
+     *  permitiendo que el dedo no esté perfectamente centrado. */
+    ROI_SIZE_FRACTION: 0.82,
     /** Penalización radial en tiles: menor = más tolerante si el dedo no está perfectamente centrado */
     ROI_CENTER_BIAS_MULT: 0.50,
     ROI_CENTER_BIAS_MIN: 0.50,

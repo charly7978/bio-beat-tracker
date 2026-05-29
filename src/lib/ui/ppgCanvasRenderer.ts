@@ -114,6 +114,8 @@ export interface PpgRenderProps {
     message?: string;
     placementHint?: string;
     hasPulsatility?: boolean;
+    acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY';
+    acquisitionProgress?: number;
     sqm?: { fpsEffective?: number; timestampJitterMs?: number; underexposureRatio?: number };
     peakDetection?: {
       confidence?: number;
@@ -222,7 +224,23 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     diag.hasPulsatility === true;
   const placementHint =
     typeof diag?.placementHint === 'string' ? diag.placementHint : '';
-  if (placementHint && detected) {
+  const stage = diag?.acquisitionStage;
+  // Blockers accionables (el usuario puede corregirlos) tienen prioridad sobre
+  // el mensaje calmado de "estabilizando".
+  const hardBlocker =
+    diag?.status === 'MOTION_ARTIFACT' ||
+    diag?.status === 'SATURATED' ||
+    diag?.status === 'UNDEREXPOSED' ||
+    diag?.status === 'LOW_FPS' ||
+    diag?.status === 'TORCH_UNAVAILABLE';
+
+  if (detected && stage === 'STABILIZING' && !hardBlocker) {
+    const pct = Math.round((diag?.acquisitionProgress ?? 0) * 100);
+    ctx.fillStyle = COLORS.TEXT_INFO;
+    ctx.font = `bold 10px ${FONT_MONO}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(`ESTABILIZANDO SEÑAL · ${pct}%`, header.w / 2, header.y + 12);
+  } else if (placementHint && detected && stage === 'READY') {
     ctx.fillStyle = COLORS.TEXT_INFO;
     ctx.font = `9px ${FONT_MONO}`;
     ctx.textAlign = 'center';
@@ -945,6 +963,60 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   const contact = formatContactState(p.contactState);
   ctx.fillStyle = '#94a3b8';
   ctx.fillText(contact, plot.x + plot.w - 12, plot.y + 66);
+
+  ctx.restore();
+}
+
+/**
+ * Overlay calmado durante la fase de estabilización inicial. Atenúa el trazo
+ * ruidoso del warm-up y muestra un progreso firme, dando una experiencia de
+ * colocación de dedo cómoda y sin parpadeo. No se dibuja en READY (trazo limpio).
+ */
+export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
+  const p = state.props;
+  const diag = p.diagnostics;
+  if (!diag || diag.acquisitionStage !== 'STABILIZING') return;
+  if (!p.isFingerDetected || p.preserveResults) return;
+
+  const { plot } = state.layout;
+  const progress = Math.max(0, Math.min(1, diag.acquisitionProgress ?? 0));
+  const cx = plot.x + plot.w / 2;
+  const cy = plot.centerY;
+  const pulse = (Math.sin(state.now / 520) + 1) / 2;
+
+  ctx.save();
+
+  // Panel translúcido sobre el área de señal para calmar el trazo inicial.
+  ctx.fillStyle = 'rgba(2, 6, 12, 0.72)';
+  ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = COLORS.TEXT_INFO;
+  ctx.font = `bold 15px ${FONT_MONO}`;
+  ctx.fillText('ESTABILIZANDO SEÑAL', cx, cy - 34);
+
+  // Barra de progreso firme (monótona, sin saltos).
+  const barW = Math.min(280, plot.w - 64);
+  const barH = 8;
+  const barX = cx - barW / 2;
+  const barY = cy - 8;
+
+  ctx.fillStyle = 'rgba(148, 163, 184, 0.18)';
+  ctx.fillRect(barX, barY, barW, barH);
+
+  const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+  grad.addColorStop(0, 'rgba(34, 197, 94, 0.85)');
+  grad.addColorStop(1, 'rgba(103, 232, 249, 0.95)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(barX, barY, Math.max(barH, barW * progress), barH);
+
+  ctx.fillStyle = COLORS.TEXT_PRIMARY;
+  ctx.font = `bold 22px ${FONT_MONO}`;
+  ctx.fillText(`${Math.round(progress * 100)}%`, cx, barY + 40);
+
+  ctx.fillStyle = `rgba(148, 163, 184, ${(0.55 + pulse * 0.35).toFixed(2)})`;
+  ctx.font = `11px ${FONT_MONO}`;
+  ctx.fillText('Mantenga el dedo firme y quieto', cx, barY + 62);
 
   ctx.restore();
 }

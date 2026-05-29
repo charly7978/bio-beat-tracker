@@ -32,6 +32,12 @@ export interface ProcessedSignal {
     placementHint?: string;
     status?: import('./measurements').MeasurementStatus;
     sqm?: Partial<import('./measurements').SignalQualityMetrics>;
+    /** Estado de la estabilización de adquisición (fase inicial de colocación). */
+    acquisitionStage?: import('../lib/acquisition/AcquisitionStabilizer').AcquisitionStage;
+    /** Confianza de adquisición suavizada [0..1]. */
+    acquisitionConfidence?: number;
+    /** Progreso monótono de estabilización [0..1] para la UI. */
+    acquisitionProgress?: number;
   };
 }
 

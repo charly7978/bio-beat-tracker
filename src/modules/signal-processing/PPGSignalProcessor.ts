@@ -40,6 +40,11 @@ import {
   DEFAULT_PULSE_AGC,
   resetPulseAgc,
 } from './shared/pulseAgc';
+import {
+  createAcquisitionState,
+  updateAcquisition,
+  type AcquisitionState,
+} from '../../lib/acquisition/AcquisitionStabilizer';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -195,6 +200,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private periodicitySkip = 0;
   private readonly diagStatusState: DiagnosticStatusState = createDiagnosticStatusState();
 
+  // Estabilización de adquisición (fase inicial de colocación del dedo):
+  // fusiona PI/periodicidad/SQI/cobertura/movimiento en una confianza firme.
+  private readonly acquisitionState: AcquisitionState = createAcquisitionState();
+
   // === MULTI-SOURCE RANKING (CHROM eliminado — amplifica ruido sin dedo) ===
   private readonly SOURCE_BUFFER_SIZE = 120;
   private readonly sourceBuffers: { [key: string]: RingF32 } = {
@@ -288,6 +297,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.signalQuality = 0;
       this.displaySqiEma = 0;
       Object.assign(this.diagStatusState, createDiagnosticStatusState());
+      this.stepAcquisition(false);
       this.onSignalReady({
         timestamp,
         rawValue: 0,
@@ -467,6 +477,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       : 0;
     const rawSqiOut = signalPathActive ? this.signalQuality : 0;
 
+    this.stepAcquisition(fingerUi);
+
     const now = timestamp;
     if (now - this.lastLogTime >= 2000) {
       this.lastLogTime = now;
@@ -542,6 +554,22 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   private getFingerConfirmFrames(): number {
     return this.cameraHints.fingerConfirmFrames;
+  }
+
+  /**
+   * Avanza la estabilización de adquisición un frame con las métricas ya
+   * calculadas. Cuando no hay contacto usable, la confianza decae sola.
+   */
+  private stepAcquisition(fingerDetected: boolean): void {
+    updateAcquisition(this.acquisitionState, {
+      fingerDetected,
+      contactState: this.contactState,
+      perfusionIndex: this.cachedPI,
+      periodicity: this.cachedPeriodicity,
+      sqi: this.signalQuality,
+      motionScore: this.motionScore,
+      coverageRatio: this.smoothedCoverage,
+    });
   }
 
   // === ESTADO DE CONTACTO UNIFICADO ===
@@ -817,6 +845,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       placementMode: extras?.placementMode,
       placementHint: extras?.placementHint,
       status,
+      acquisitionStage: this.acquisitionState.stage,
+      acquisitionConfidence: this.acquisitionState.confidence,
+      acquisitionProgress: this.acquisitionState.progress,
     };
   }
 
@@ -1334,6 +1365,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     resetPulseAgc(this.pulseAgcState);
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
+    Object.assign(this.acquisitionState, createAcquisitionState());
   }
 
   private handleMotionEvent = (event: DeviceMotionEvent) => {

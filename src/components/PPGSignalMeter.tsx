@@ -17,6 +17,7 @@ import {
   drawMetricsBar,
   drawECGGrid,
   drawSignal,
+  drawAcquisitionOverlay,
   drawTrendStrip,
   drawFooter,
 } from '@/lib/ui/ppgCanvasRenderer';
@@ -53,6 +54,8 @@ export interface PPGSignalMeterProps {
     message?: string;
     placementHint?: string;
     hasPulsatility?: boolean;
+    acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY';
+    acquisitionProgress?: number;
     sqm?: {
       fpsEffective?: number;
       timestampJitterMs?: number;
@@ -375,6 +378,7 @@ const PPGSignalMeter = ({
       drawMetricsBar(ctx, renderState);
       drawECGGrid(ctx, renderState);
       drawSignal(ctx, renderState);
+      drawAcquisitionOverlay(ctx, renderState);
       drawTrendStrip(ctx, renderState);
       drawFooter(ctx, renderState);
 
