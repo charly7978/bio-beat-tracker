@@ -214,7 +214,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private activeSource: string = 'RG';
   private sourceScores: { [key: string]: number } = { R: 0, G: 0, RG: 0 };
   private lastSourceSwitch = 0;
-  private readonly SOURCE_HYSTERESIS_MS = 2000;
+  private readonly SOURCE_HYSTERESIS_MS = 4000;
 
   constructor(
     public onSignalReady?: (signal: ProcessedSignal) => void,
@@ -1151,9 +1151,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       }
     }
 
-    // Only switch if new source is significantly better (>20%)
+    // Solo cambia si la nueva fuente es CLARAMENTE mejor (>50%). Umbral alto +
+    // histéresis larga (4 s) → el switching R/G/RG es raro: evita los saltos de
+    // escala/offset al alternar fuente, que se veían como onda inestable/ruidosa.
     const currentScore = this.sourceScores[this.activeSource] ?? 0;
-    if (bestSource !== this.activeSource && bestScore > currentScore * 1.2) {
+    if (bestSource !== this.activeSource && bestScore > currentScore * 1.5) {
       this.activeSource = bestSource;
       this.lastSourceSwitch = now;
     }
