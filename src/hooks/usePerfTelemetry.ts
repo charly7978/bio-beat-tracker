@@ -13,10 +13,6 @@ export function getPerfConsent(): boolean {
   try { return localStorage.getItem(CONSENT_KEY) === '1'; } catch { return false; }
 }
 
-export function setPerfConsent(value: boolean): void {
-  try { localStorage.setItem(CONSENT_KEY, value ? '1' : '0'); } catch {}
-}
-
 function deviceInfo() {
   const nav = typeof navigator !== 'undefined' ? navigator : null;
   const scr = typeof screen !== 'undefined' ? screen : null;
