@@ -64,31 +64,6 @@ export function movingAverage(x: number[], win: number): number[] {
   return out;
 }
 
-export function derivativeCentral(x: number[], fs: number): number[] {
-  const n = x.length;
-  const out = new Array<number>(n).fill(0);
-  if (n < 3 || fs <= 0) return out;
-  for (let i = 1; i < n - 1; i++) {
-    out[i] = ((x[i + 1] - x[i - 1]) / 2) * fs;
-  }
-  return out;
-}
-
-export function movingWindowIntegration(x: number[], samples: number): number[] {
-  const n = x.length;
-  if (n === 0 || samples < 1) return [];
-  const out = new Array<number>(n).fill(0);
-  let acc = 0;
-  const q: number[] = [];
-  for (let i = 0; i < n; i++) {
-    acc += x[i];
-    q.push(x[i]);
-    if (q.length > samples) acc -= q.shift()!;
-    out[i] = acc / q.length;
-  }
-  return out;
-}
-
 export function hampel1D(y: number[], window: number, nSigma = 3): number[] {
   const n = y.length;
   const out = [...y];
@@ -198,18 +173,6 @@ export function autocorrDominantLag(
     }
   }
   return { lag: bestLag, score: best };
-}
-
-export function bpmFromAutocorr(signal: number[], fs: number): { bpm: number; score: number } {
-  if (signal.length < 40 || fs < 8) return { bpm: 0, score: 0 };
-  const det = detrendLinear(signal);
-  const mean = det.reduce((a, b) => a + b, 0) / det.length;
-  const centered = det.map((v) => v - mean);
-  const minLag = Math.max(3, Math.round((fs * 60) / 200));
-  const maxLag = Math.min(centered.length - 3, Math.round((fs * 60) / 38));
-  const { lag, score } = autocorrDominantLag(centered, minLag, maxLag);
-  if (lag <= 0 || score < 0.12) return { bpm: 0, score };
-  return { bpm: (60 * fs) / lag, score };
 }
 
 export function bandpassOffline(signal: number[], fs: number): number[] {
