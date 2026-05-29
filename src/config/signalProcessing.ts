@@ -11,8 +11,20 @@ export const PEAK_DETECTION_DEFAULTS = {
   maxPeakDistanceMs: VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS,
   /** Ventana corta tipo Elgendi (~111 ms @ fs nominal) */
   peakWindowMs: 111,
-  /** Ventana larga tipo Elgendi (~667 ms) */
+  /** Ventana larga tipo Elgendi (~667 ms) — referencia del umbral MA_beat */
   beatWindowMs: 667,
+  /**
+   * Beat-window ADAPTATIVO a la frecuencia: a baja HR (RR largo) la ventana fija
+   * de 667 ms es MÁS CORTA que un latido, así que el umbral no se asienta bajo el
+   * pico sistólico lento/ancho y cuesta detectar latidos lentos/débiles. Se escala
+   * `beatWindow = clamp(RR_mediana · factor, 667, max)`: a HR alta (RR<785 ms) queda
+   * en 667 (no cambia lo que ya anda); a HR baja se ensancha → umbral suave bajo el
+   * pico lento. FP-seguro: una ventana MAYOR baja el umbral entre latidos pero el
+   * burst sistólico (energía cuadrada, MA_peak) y el ancho mínimo de bloque siguen
+   * exigiendo un latido real; no crea picos espurios.
+   */
+  beatWindowRrFactor: 0.85,
+  beatWindowMsMax: 1100,
   /** Prominencia mínima de referencia (Elgendi); se escala por calibración en ventana */
   minProminence: 0.019,
   /** Peso del offset adaptativo MA_beat (referencia; calibración ajusta por SQI/PI) */

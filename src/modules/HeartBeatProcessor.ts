@@ -123,6 +123,31 @@ export class HeartBeatProcessor {
     return clamp(Math.max(localSqi, this.ppgSqi * 0.65 + localSqi * 0.35), 0, 100);
   }
 
+  /**
+   * Beat-window (W2 de Elgendi) adaptado al ritmo YA detectado: a baja HR se
+   * ensancha para que el umbral se asiente bajo el pico sistólico lento/ancho.
+   * Usa la mediana RR emitida; sin ritmo aún (<3 RR) devuelve el default → a HR
+   * alta queda en 667 ms (no cambia lo que ya anda bien).
+   */
+  private adaptiveBeatWindowMs(): number {
+    const rr = this.rrIntervals;
+    let medRr = 0;
+    if (rr.length >= 3) {
+      const sorted = [...rr].sort((a, b) => a - b);
+      medRr = sorted[Math.floor(sorted.length / 2)] ?? 0;
+    } else if (this.cachedPeriodicity.bpm > 0 && this.cachedPeriodicity.score >= 0.3) {
+      // Aún sin RR emitidos: usa la estimación espectral (autocorr) para que la
+      // ventana se ensanche desde el ARRANQUE a baja frecuencia (no solo al sostener).
+      medRr = 60000 / this.cachedPeriodicity.bpm;
+    }
+    if (medRr <= 0) return PEAK_DETECTION_DEFAULTS.beatWindowMs;
+    return clamp(
+      medRr * PEAK_DETECTION_DEFAULTS.beatWindowRrFactor,
+      PEAK_DETECTION_DEFAULTS.beatWindowMs,
+      PEAK_DETECTION_DEFAULTS.beatWindowMsMax,
+    );
+  }
+
   private gateRangeMin(): number {
     const base = this.GATE_RANGE_MIN * this.cameraHints.gateRangeScale;
     if (this.placementMode === 'pad') return base * 0.9;
@@ -223,6 +248,7 @@ export class HeartBeatProcessor {
         samplingRateHz: sampleRate,
         sqi: ensSqi,
         perfusionIndex: this.ppgPerfusionIndex,
+        beatWindowMs: this.adaptiveBeatWindowMs(),
       });
       ensembleConf = ens.confidence;
 

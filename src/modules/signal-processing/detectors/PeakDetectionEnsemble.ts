@@ -16,6 +16,8 @@ export interface PeakDetectionEnsembleInput {
   samplingRateHz: number;
   sqi?: number;
   perfusionIndex?: number;
+  /** Beat-window adaptativo (ms) según ritmo detectado; default Elgendi si se omite. */
+  beatWindowMs?: number;
   legacyPeakIndices?: number[];
 }
 
@@ -72,6 +74,7 @@ export class PeakDetectionEnsemble {
       sqi,
       minProminence: calibration.elgendiMinProminence,
       offsetWeight: calibration.elgendiOffsetWeight,
+      beatWindowMs: input.beatWindowMs,
     });
 
     const elTimeAt = (j: number): number => {
