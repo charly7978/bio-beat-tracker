@@ -23,8 +23,22 @@ export const PEAK_DETECTION_DEFAULTS = {
    * SQI/PI lo escala vía `offsetWeight` (β_efectivo = beatOffset·offsetWeight/0.22).
    */
   beatOffset: 0.02,
-  /** Factor mínimo del RR fisiológico entre emisiones de pico (anti-doble latido) */
-  peakEmitRefractoryFactor: 0.80,
+  /**
+   * Periodo refractario de EMISIÓN de pico (anti muesca dícrota / doble conteo).
+   * minGap = max(refractoryMinMs, refractoryFraction · RR_mediano).
+   * 300 ms es el mínimo validado (HR máx ~200 bpm); la fracción del RR alarga el
+   * refractario a HR bajas (donde la dícrota cae dentro del ciclo) sin bloquear
+   * latidos reales a HR altas (RR > 300 ms hasta ~200 bpm).
+   */
+  peakEmitRefractoryMinMs: 300,
+  peakEmitRefractoryFraction: 0.5,
+  /**
+   * Rechazo relativo de amplitud en Elgendi: se descartan picos cuya prominencia
+   * sea menor que esta fracción de la prominencia mediana (muesca dícrota/ruido
+   * son de menor amplitud que el pico sistólico). Conservador para no perder
+   * latidos reales con modulación respiratoria.
+   */
+  peakAmplitudeRejectFraction: 0.35,
   minSQI: 10,
   /** Ventana para emitir pico respecto al frame actual (ms) — ~½ RR @ 45 BPM */
   peakEmitWindowMs: 720,

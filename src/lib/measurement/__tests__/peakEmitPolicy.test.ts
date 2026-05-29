@@ -105,6 +105,42 @@ describe('peakEmitPolicy', () => {
     expect(d.emit).toBe(false);
   });
 
+  it('refractario de arranque (300 ms) bloquea un segundo pico demasiado cercano', () => {
+    // Sin RR previo el refractario es 300 ms; un pico a 220 ms (típico de muesca
+    // dícrota / ruido) debe rechazarse. (Antes, con 216 ms, se emitía → falso positivo.)
+    const ens = buildTestPeakResult([5220], [0.7]);
+    const d = decidePeakEmit({
+      ens,
+      lastEmittedPeakMs: 5000,
+      minPeakConf: 0.1,
+      sampleRateHz: 30,
+      windowSamples: 90,
+      fingerContactConfirmed: true,
+      nowMs: 5260,
+      emittedPeakCount: 1,
+      recentRrMs: [],
+    });
+    expect(d.emit).toBe(false);
+  });
+
+  it('acepta latido a HR alta (~140 bpm, RR 430 ms) fuera del refractario', () => {
+    // Refractario = max(300, 0.5·430) = 300 ms; 430 ms > 300 ms → se emite.
+    const ens = buildTestPeakResult([5430], [0.7]);
+    const d = decidePeakEmit({
+      ens,
+      lastEmittedPeakMs: 5000,
+      minPeakConf: 0.1,
+      sampleRateHz: 30,
+      windowSamples: 90,
+      fingerContactConfirmed: true,
+      nowMs: 5480,
+      emittedPeakCount: 5,
+      recentRrMs: [430, 430, 430],
+    });
+    expect(d.emit).toBe(true);
+    expect(d.peakTimeMs).toBe(5430);
+  });
+
   it('bpmFromEmittedRr usa mediana RR', () => {
     expect(bpmFromEmittedRr([800, 820, 810])).toBeCloseTo(74.07, 0);
   });

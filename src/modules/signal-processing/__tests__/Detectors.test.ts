@@ -18,6 +18,25 @@ function makeSinePeaks(fs: number, durationSec: number, bpm: number, noise = 0):
   return { y, t };
 }
 
+/** PPG con pico sistólico + muesca dícrota (bump menor ~0.3× tras el sistólico). */
+function makePpgWithDicrotic(fs: number, durationSec: number, bpm: number): { y: number[]; t: number[] } {
+  const n = Math.floor(fs * durationSec);
+  const y: number[] = [];
+  const t: number[] = [];
+  const periodMs = 60000 / bpm;
+  const gauss = (frac: number, center: number, width: number) =>
+    Math.exp(-(((frac - center) / width) ** 2));
+  for (let i = 0; i < n; i++) {
+    const ti = (i / fs) * 1000;
+    t.push(ti);
+    const frac = (ti % periodMs) / periodMs;
+    const systolic = gauss(frac, 0.18, 0.08);
+    const dicrotic = 0.3 * gauss(frac, 0.45, 0.07);
+    y.push((systolic + dicrotic) * 1.2);
+  }
+  return { y, t };
+}
+
 describe('ElgendiPeakDetector', () => {
   it('detecta picos en señal PPG periódica limpia', () => {
     const fs = 30;
@@ -83,6 +102,23 @@ describe('ElgendiPeakDetector', () => {
       const estBpm = 60000 / medRR;
       expect(Math.abs(estBpm - bpm)).toBeLessThanOrEqual(6);
     }
+  });
+
+  it('no cuenta dos veces por la muesca dícrota (sin doble conteo)', () => {
+    const fs = 30;
+    const bpm = 60;
+    const durationSec = 12;
+    const { y, t } = makePpgWithDicrotic(fs, durationSec, bpm);
+    const r = ElgendiPeakDetector.detect({
+      signal: y,
+      timestampsMs: t,
+      samplingRateHz: fs,
+      sqi: 45,
+    });
+    const cycles = (durationSec * bpm) / 60; // ≈ 12
+    // Si contara la dícrota como latido habría ~2× ciclos. Debe quedar cerca de 1×.
+    expect(r.peaks.length).toBeLessThanOrEqual(Math.ceil(cycles * 1.4));
+    expect(r.peaks.length).toBeGreaterThanOrEqual(Math.floor(cycles * 0.6));
   });
 });
 
