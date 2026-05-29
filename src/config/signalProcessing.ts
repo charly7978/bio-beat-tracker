@@ -17,6 +17,12 @@ export const PEAK_DETECTION_DEFAULTS = {
   minProminence: 0.019,
   /** Peso del offset adaptativo MA_beat (referencia; calibración ajusta por SQI/PI) */
   offsetWeight: 0.22,
+  /**
+   * Offset β del umbral Elgendi canónico: THR1 = MA_beat + β·media(energía).
+   * Valor validado en NeuroKit2/Elgendi 2013 = 0.02. La calibración por
+   * SQI/PI lo escala vía `offsetWeight` (β_efectivo = beatOffset·offsetWeight/0.22).
+   */
+  beatOffset: 0.02,
   /** Factor mínimo del RR fisiológico entre emisiones de pico (anti-doble latido) */
   peakEmitRefractoryFactor: 0.80,
   minSQI: 10,

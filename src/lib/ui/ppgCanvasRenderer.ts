@@ -968,9 +968,10 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 }
 
 /**
- * Overlay calmado durante la fase de estabilización inicial. Atenúa el trazo
- * ruidoso del warm-up y muestra un progreso firme, dando una experiencia de
- * colocación de dedo cómoda y sin parpadeo. No se dibuja en READY (trazo limpio).
+ * Indicador fino de estabilización. NO oculta el trazo PPG real: dibuja solo una
+ * barra delgada en el borde superior del área de señal, ligada a la confianza real
+ * de adquisición. Así la lectura inicial se ve real (la onda del pulso es visible)
+ * en lugar de una pantalla de carga artificial. No se dibuja en READY.
  */
 export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const p = state.props;
@@ -980,44 +981,22 @@ export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: Ppg
 
   const { plot } = state.layout;
   const progress = Math.max(0, Math.min(1, diag.acquisitionProgress ?? 0));
-  const cx = plot.x + plot.w / 2;
-  const cy = plot.centerY;
-  const pulse = (Math.sin(state.now / 520) + 1) / 2;
+
+  const barX = plot.x + 12;
+  const barW = plot.w - 24;
+  const barH = 4;
+  const barY = plot.y + 4;
 
   ctx.save();
-
-  // Panel translúcido sobre el área de señal para calmar el trazo inicial.
-  ctx.fillStyle = 'rgba(2, 6, 12, 0.72)';
-  ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
-
-  ctx.textAlign = 'center';
-  ctx.fillStyle = COLORS.TEXT_INFO;
-  ctx.font = `bold 15px ${FONT_MONO}`;
-  ctx.fillText('ESTABILIZANDO SEÑAL', cx, cy - 34);
-
-  // Barra de progreso firme (monótona, sin saltos).
-  const barW = Math.min(280, plot.w - 64);
-  const barH = 8;
-  const barX = cx - barW / 2;
-  const barY = cy - 8;
-
-  ctx.fillStyle = 'rgba(148, 163, 184, 0.18)';
+  // Pista tenue de la barra.
+  ctx.fillStyle = 'rgba(148, 163, 184, 0.16)';
   ctx.fillRect(barX, barY, barW, barH);
-
+  // Progreso = confianza real de adquisición (se estanca si la señal es pobre).
   const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-  grad.addColorStop(0, 'rgba(34, 197, 94, 0.85)');
+  grad.addColorStop(0, 'rgba(34, 197, 94, 0.9)');
   grad.addColorStop(1, 'rgba(103, 232, 249, 0.95)');
   ctx.fillStyle = grad;
   ctx.fillRect(barX, barY, Math.max(barH, barW * progress), barH);
-
-  ctx.fillStyle = COLORS.TEXT_PRIMARY;
-  ctx.font = `bold 22px ${FONT_MONO}`;
-  ctx.fillText(`${Math.round(progress * 100)}%`, cx, barY + 40);
-
-  ctx.fillStyle = `rgba(148, 163, 184, ${(0.55 + pulse * 0.35).toFixed(2)})`;
-  ctx.font = `11px ${FONT_MONO}`;
-  ctx.fillText('Mantenga el dedo firme y quieto', cx, barY + 62);
-
   ctx.restore();
 }
 

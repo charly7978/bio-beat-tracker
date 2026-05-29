@@ -58,6 +58,32 @@ describe('ElgendiPeakDetector', () => {
     });
     expect(r.peaks.length).toBeGreaterThanOrEqual(4);
   });
+
+  it('estima BPM con precisión (±6) en señal limpia a 60 y 100 bpm', () => {
+    const fs = 30;
+    for (const bpm of [60, 100]) {
+      const { y, t } = makeSinePeaks(fs, 16, bpm, 0.02);
+      const r = ElgendiPeakDetector.detect({
+        signal: y,
+        timestampsMs: t,
+        samplingRateHz: fs,
+        sqi: 45,
+      });
+      const expectedBeats = Math.floor((16 * bpm) / 60);
+      // Detección casi completa (≥70 % de los latidos esperados).
+      expect(r.peaks.length).toBeGreaterThanOrEqual(Math.floor(expectedBeats * 0.7));
+      // BPM por mediana de RR cercano al real.
+      const rr: number[] = [];
+      for (let i = 1; i < r.peakTimes.length; i++) {
+        rr.push(r.peakTimes[i] - r.peakTimes[i - 1]);
+      }
+      expect(rr.length).toBeGreaterThan(3);
+      const sorted = [...rr].sort((a, b) => a - b);
+      const medRR = sorted[Math.floor(sorted.length / 2)];
+      const estBpm = 60000 / medRR;
+      expect(Math.abs(estBpm - bpm)).toBeLessThanOrEqual(6);
+    }
+  });
 });
 
 describe('PeakDetectionEnsemble', () => {

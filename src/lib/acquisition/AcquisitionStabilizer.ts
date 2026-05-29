@@ -134,9 +134,11 @@ export function updateAcquisition(state: AcquisitionState, sample: AcquisitionSa
   if (state.stage === 'READY') {
     state.progress = Math.min(1, state.progress + A.PROGRESS_MAX_RISE);
   } else {
+    // El progreso refleja sobre todo la confianza real (se estanca si la señal
+    // es pobre), no un temporizador — así la estabilización se siente real.
     const warmTerm = clamp01(state.framesInContact / A.WARMUP_FRAMES);
     const confTerm = clamp01(state.confidence / A.CONF_ENTER_READY);
-    const target = clamp01(warmTerm * 0.45 + confTerm * 0.55) * 0.96;
+    const target = clamp01(confTerm * 0.75 + warmTerm * 0.25) * 0.96;
     if (target > state.progress) {
       state.progress = Math.min(target, state.progress + A.PROGRESS_MAX_RISE);
     } else {

@@ -40,13 +40,6 @@ export interface ElgendiPeakDetectorOutput {
   parametersUsed: Record<string, number>;
 }
 
-function stdSample(x: number[], mean: number): number {
-  if (x.length < 2) return 0;
-  let v = 0;
-  for (let i = 0; i < x.length; i++) v += (x[i] - mean) ** 2;
-  return Math.sqrt(v / (x.length - 1));
-}
-
 /** MA deslizante O(n) con suma acumulativa, escribe en `out` pre-asignado. */
 function slidingMA(x: number[], win: number, out: number[]): void {
   const n = x.length;
@@ -125,21 +118,27 @@ export class ElgendiPeakDetector {
     slidingMA(energy, w1, maPeak);
     slidingMA(energy, w2, maBeat);
 
-    const warm = Math.min(n, Math.max(8, Math.floor(fs * 1.5)));
-    let warmMean = 0;
-    for (let i = 0; i < warm; i++) warmMean += maPeak[i];
-    warmMean /= warm;
-    const offset = offsetW * stdSample(maPeak.slice(0, warm), warmMean);
+    // Umbral Elgendi canónico (Elgendi 2013 / NeuroKit2):
+    //   THR1[n] = MA_beat[n] + β · media(energía)
+    // con β = beatOffset · (offsetW / offsetWeight_ref). La calibración por
+    // SQI/PI ajusta offsetW (β sube en señal pobre, baja en señal buena).
+    let meanEnergy = 0;
+    for (let i = 0; i < n; i++) meanEnergy += energy[i];
+    meanEnergy /= n;
+    const beta =
+      PEAK_DETECTION_DEFAULTS.beatOffset * (offsetW / PEAK_DETECTION_DEFAULTS.offsetWeight);
+    const thrOffset = beta * meanEnergy;
 
     const minDist = Math.max(1, Math.round((60000 / maxBpm / 1000) * fs));
     const maxDist = Math.max(minDist + 1, Math.round((60000 / minBpm / 1000) * fs));
-    const minBlock = Math.max(2, Math.floor(minDist * 0.35));
+    // Ancho mínimo del bloque de interés = W1 (peakwindow) — criterio canónico.
+    const minBlock = Math.max(2, w1);
     const maxBlock = Math.ceil(maxDist * 1.25);
     const maxPeaks = Math.ceil(n / minDist) + 2;
 
     const thr = new Array<number>(n);
     for (let i = 0; i < n; i++) {
-      thr[i] = maBeat[i] + offset * (0.85 + 0.15 * (maPeak[i] / (Math.abs(maBeat[i]) + 1e-6)));
+      thr[i] = maBeat[i] + thrOffset;
     }
 
     // Pre-alloc block detection
@@ -243,9 +242,11 @@ export class ElgendiPeakDetector {
         resampled: uniform.resampled,
         fsEffective: fs,
         rrCount,
+        meanEnergy,
+        thrOffset,
       },
       reason: pk > 0 ? 'OK' : 'NO_PEAKS',
-      parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, minProm, fs, w1, w2 },
+      parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, beta, minProm, fs, w1, w2 },
     };
   }
 }

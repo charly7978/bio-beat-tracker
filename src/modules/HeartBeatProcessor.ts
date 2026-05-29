@@ -7,6 +7,7 @@ import { robustBounds } from '../utils/stats';
 import { PEAK_DETECTION_DEFAULTS } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
+import { autocorrDominantLag } from './signal-processing/shared/dsp';
 import {
   inferCameraRuntimeHints,
   type CameraRuntimeHints,
@@ -419,29 +420,11 @@ export class HeartBeatProcessor {
 
     const minLag = Math.max(5, Math.round((sampleRate * 60) / 200));
     const maxLag = Math.min(centered.length - 8, Math.round((sampleRate * 60) / 38));
+    // Autocorrelación compartida (dsp.autocorrDominantLag) — sin duplicar el bucle.
+    const { lag, score } = autocorrDominantLag(centered, minLag, maxLag);
 
-    let bestLag = 0;
-    let bestScore = 0;
-
-    for (let lag = minLag; lag <= maxLag; lag++) {
-      let cross = 0;
-      let eA = 0;
-      let eB = 0;
-      for (let i = lag; i < centered.length; i++) {
-        cross += centered[i] * centered[i - lag];
-        eA += centered[i] ** 2;
-        eB += centered[i - lag] ** 2;
-      }
-      if (eA === 0 || eB === 0) continue;
-      const correlation = cross / Math.sqrt(eA * eB);
-      if (correlation > bestScore) {
-        bestScore = correlation;
-        bestLag = lag;
-      }
-    }
-
-    if (bestLag === 0 || bestScore < 0.18) return { bpm: 0, score: Math.max(0, bestScore) };
-    return { bpm: (60 * sampleRate) / bestLag, score: clamp(bestScore, 0, 1) };
+    if (lag === 0 || score < 0.18) return { bpm: 0, score: Math.max(0, score) };
+    return { bpm: (60 * sampleRate) / lag, score: clamp(score, 0, 1) };
   }
 
   private calculateSQI(range: number, periodicityScore: number): number {
@@ -476,13 +459,6 @@ export class HeartBeatProcessor {
       sqi = clamp(sqi + agree * 10, 0, 100);
     }
     return sqi;
-  }
-
-  private calculateRRCV(): number {
-    if (this.rrIntervals.length < 2) return 1;
-    const m = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
-    const v = this.rrIntervals.reduce((a, rr) => a + (rr - m) ** 2, 0) / this.rrIntervals.length;
-    return Math.sqrt(v) / Math.max(1, m);
   }
 
   private calculateConfidence(ensembleConf: number, isPeak: boolean): number {
