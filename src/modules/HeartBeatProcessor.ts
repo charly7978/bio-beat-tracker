@@ -13,6 +13,7 @@ import {
 } from '../lib/device/cameraDeviceProfile';
 import { bpmFromEmittedRr, decidePeakEmit } from '../lib/measurement/peakEmitPolicy';
 import type { FingerPlacementMode } from '../types/signal';
+// ONNX modules removed (all returned null under useNN=false)
 
 export interface HeartBeatProcessDiagnostics {
   ensemble?: Record<string, unknown>;
@@ -60,6 +61,8 @@ export class HeartBeatProcessor {
   /** SQI del pipeline PPG (SignalQualityIndex) — fuente primaria para el ensemble */
   private ppgSqi = 0;
   private ppgPerfusionIndex = 0;
+
+  // NN scorers removed (all returned null)
 
   constructor() {
     this.setupAudio();
@@ -179,6 +182,8 @@ export class HeartBeatProcessor {
     }
     this.signalQualityIndex = this.calculateSQI(range, this.cachedPeriodicity.score);
 
+    // NN SQI refiner removed (always returned null)
+
     let isPeak = false;
     let emitReason = 'WAITING';
     const sampleRate = this.estimateSampleRate();
@@ -255,6 +260,8 @@ export class HeartBeatProcessor {
             }
           }
         }
+
+        // NN peak scorer removed (always returned null)
 
         const instantBpm = bpmFromEmittedRr(this.rrIntervals);
         this.consecutivePeaks += 1;
@@ -350,7 +357,9 @@ export class HeartBeatProcessor {
   }
 
   private normalizeSignal(value: number, windowLen: number = 150): { normalizedValue: number; range: number } {
-    const { low, high, range } = this.normBounds(windowLen);
+    const recent = this.signalBuffer.slice(-windowLen);
+    const { low, high, range } = robustBounds(recent);
+    const scale = PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_SCALE;
     if (range < this.minNormalizeRange()) {
       return {
         normalizedValue: value * PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_FALLBACK_GAIN,
@@ -358,24 +367,21 @@ export class HeartBeatProcessor {
       };
     }
     const clipped = Math.min(high, Math.max(low, value));
-    const normalizedValue = ((clipped - low) / range - 0.5) * PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_SCALE;
+    const normalizedValue = ((clipped - low) / range - 0.5) * scale;
     return { normalizedValue, range };
   }
 
   private normalizeWindow(values: number[], windowLen: number = 150): number[] {
-    const { low, high, range } = this.normBounds(windowLen);
+    const refWindow = this.signalBuffer.slice(-windowLen);
+    const { low, high, range } = robustBounds(refWindow);
+    const scale = PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_SCALE;
     if (range < this.minNormalizeRange()) {
       return values.map((v) => v * PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_FALLBACK_GAIN);
     }
     return values.map((v) => {
       const c = Math.min(high, Math.max(low, v));
-      return ((c - low) / range - 0.5) * PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_SCALE;
+      return ((c - low) / range - 0.5) * scale;
     });
-  }
-
-  private normBounds(windowLen: number): { low: number; high: number; range: number } {
-    const recent = this.signalBuffer.slice(-windowLen);
-    return robustBounds(recent);
   }
 
   private estimateSampleRate(): number {
@@ -472,12 +478,21 @@ export class HeartBeatProcessor {
     return sqi;
   }
 
+  private calculateRRCV(): number {
+    if (this.rrIntervals.length < 2) return 1;
+    const m = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
+    const v = this.rrIntervals.reduce((a, rr) => a + (rr - m) ** 2, 0) / this.rrIntervals.length;
+    return Math.sqrt(v) / Math.max(1, m);
+  }
+
   private calculateConfidence(ensembleConf: number, isPeak: boolean): number {
     const effectiveSqi = this.signalQualityIndex;
     const sqiFactor = effectiveSqi / 100;
     const peakSupport = Math.min(1, this.consecutivePeaks / 5);
     const ens = clamp(ensembleConf, 0, 1);
     const peakBoost = isPeak ? 0.12 : 0;
+    const nnBoost = 0;
+
     if (this.rrIntervals.length < 2) {
       return clamp(sqiFactor * 0.22 + peakSupport * 0.22 + ens * 0.36 + peakBoost + nnBoost, 0, 0.85);
     }

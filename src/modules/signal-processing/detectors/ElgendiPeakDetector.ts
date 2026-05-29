@@ -34,6 +34,7 @@ export interface ElgendiPeakDetectorOutput {
   peakTimes: number[];
   peakValues: number[];
   confidence: number;
+  rejectedCandidates: Array<{ index: number; reason: string }>;
   diagnostics: Record<string, unknown>;
   reason: string;
   parametersUsed: Record<string, number>;
@@ -79,7 +80,7 @@ export class ElgendiPeakDetector {
     if (nSig !== input.timestampsMs.length || nSig < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble) {
       return {
         peaks: [], peakTimes: [], peakValues: [],
-        confidence: 0,
+        confidence: 0, rejectedCandidates: [],
         diagnostics: { stage: 'insufficient_input' },
         reason: 'INSUFFICIENT_WINDOW',
         parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, minProm, fs: input.samplingRateHz },
@@ -96,7 +97,7 @@ export class ElgendiPeakDetector {
       if (!Number.isFinite(sig[i])) {
         return {
           peaks: [], peakTimes: [], peakValues: [],
-          confidence: 0,
+          confidence: 0, rejectedCandidates: [],
           diagnostics: { nonFinite: true },
           reason: 'NO_VALID_SIGNAL',
           parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, minProm, fs },
@@ -155,6 +156,7 @@ export class ElgendiPeakDetector {
     }
 
     // Pre-alloc result arrays
+    const rejectedCandidates: Array<{ index: number; reason: string }> = [];
     const peaks = new Array<number>(maxPeaks);
     const peakTimes = new Array<number>(maxPeaks);
     const peakValues = new Array<number>(maxPeaks);
@@ -235,6 +237,7 @@ export class ElgendiPeakDetector {
       peakTimes: outPeakTimes,
       peakValues: outPeakValues,
       confidence,
+      rejectedCandidates,
       diagnostics: {
         blocks: blocks.length,
         resampled: uniform.resampled,

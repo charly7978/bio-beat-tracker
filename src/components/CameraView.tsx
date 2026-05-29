@@ -74,6 +74,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
           active: true,
           label: track.label,
           readyState: track.readyState,
+          browser: navigator.userAgent,
           userAgent: navigator.userAgent,
           supportedConstraints: Object.keys(navigator.mediaDevices.getSupportedConstraints()),
           capabilities: caps,

@@ -1172,8 +1172,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         sortedScratch[i] = window[i];
       }
       const rms = Math.sqrt(sumSq / n);
+      // In-place sort sobre la porción usada del scratch (sin alocar).
       const view = sortedScratch.subarray(0, n);
-      view.sort((a, b) => a - b);
+      view.sort();
       const p5 = view[Math.floor(n * 0.05)] ?? 0;
       const p95 = view[Math.floor(n * 0.95)] ?? 0;
       const p2p = p95 - p5;
