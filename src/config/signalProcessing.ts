@@ -65,15 +65,19 @@ export const PEAK_DETECTION_DEFAULTS = {
   /**
    * Nº de primeros picos emitidos considerados "warm-up": durante esta fase
    * inicial se exige mayor calidad (skewness, agreement, weightedScore) para
-   * evitar picos espurios mientras el AGC/AE/filtros aún se asientan.
+   * evitar picos espurios mientras el AGC/AE/filtros aún se asientan. 6 (~6 s a
+   * 60 bpm) cubre mejor el transitorio inicial errático que reportó el usuario
+   * sin frenar la detección establecida (el resto del arranque lo domina el
+   * acondicionamiento de señal + el gate de micro-movimiento).
    */
-  peakEmitWarmupCount: 4,
+  peakEmitWarmupCount: 6,
   /**
    * weightedScore mínimo durante warm-up (más estricto que en régimen estable).
    * Reduce el arranque errático: solo se publican picos de alta evidencia hasta
-   * que el ritmo está bien establecido.
+   * que el ritmo está bien establecido. Knob primario para ajustar el balance
+   * "arranque firme" vs "primer latido rápido" según prueba en dispositivo.
    */
-  peakEmitWarmupMinScore: 0.42,
+  peakEmitWarmupMinScore: 0.46,
   /**
    * Rechazo relativo de amplitud en Elgendi: se descartan picos cuya prominencia
    * sea menor que esta fracción de la prominencia mediana (muesca dícrota/ruido
