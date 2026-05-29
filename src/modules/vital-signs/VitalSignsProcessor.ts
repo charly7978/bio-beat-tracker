@@ -96,7 +96,6 @@ export class VitalSignsProcessor {
   
   // Gating de estabilidad (Consistencia)
   private stableFramesCount: number = 0;
-  private readonly STABILITY_SPO2_FRAMES = 45;  // ~1.5s para SpO2 (actualización rápida)
   private readonly STABILITY_BP_FRAMES = VITAL_THRESHOLDS.BP.STABILITY_FRAMES_HIGH;
   private lastCoherentSpO2: number = 0;
   

@@ -3,8 +3,11 @@ import { isPhysiologicalRR } from '../../utils/physio';
 import {
   buildRhythmPanel,
   formatContactState,
-  ibiSegmentLabel,
+  hrZoneLabel,
+  spo2ZoneLabel,
+  bpZoneLabel,
   levelColor,
+  ibiSegmentLabel,
 } from './ppgMonitorClinical';
 
 export const FONT_MONO = '"SF Mono", Consolas, "Roboto Mono", monospace';
@@ -292,20 +295,12 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
   ctx.fillText('BPM', 16, metrics.y + 90);
 
-  let hrLabel = '';
-  if (dispBpm > 0) {
-    if (dispBpm < 50) hrLabel = 'BRADICARDIA SEVERA';
-    else if (dispBpm < 60) hrLabel = 'BRADICARDIA';
-    else if (dispBpm <= 100) hrLabel = 'NORMAL (SINUSAL)';
-    else if (dispBpm <= 120) hrLabel = 'TAQUICARDIA LEVE';
-    else if (dispBpm <= 150) hrLabel = 'TAQUICARDIA';
-    else hrLabel = 'TAQUICARDIA SEVERA';
-  }
-  if (hrLabel) {
+  const hrLabelObj = hrZoneLabel(dispBpm);
+  if (hrLabelObj.text && hrLabelObj.text !== '—') {
     ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.fillStyle = hrColor;
+    ctx.fillStyle = levelColor(hrLabelObj.level);
     ctx.textAlign = 'right';
-    ctx.fillText(hrLabel, colW - 12, metrics.y + 90);
+    ctx.fillText(hrLabelObj.text, colW - 12, metrics.y + 90);
   }
 
   const s = state.bpmStats;
@@ -334,17 +329,11 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
   ctx.fillText('%', colW + 16 + (dispSpo2 > 0 ? 64 : 32), metrics.y + 72);
 
-  let spLabel = '';
-  if (dispSpo2 > 0) {
-    if (dispSpo2 >= 95) spLabel = 'NORMOXIA';
-    else if (dispSpo2 >= 90) spLabel = 'HIPOXEMIA LEVE';
-    else if (dispSpo2 >= 85) spLabel = 'HIPOXEMIA MODERADA';
-    else spLabel = 'HIPOXEMIA SEVERA';
-  }
+  const spLabelObj = spo2ZoneLabel(dispSpo2);
   ctx.font = `bold 10px ${FONT_MONO}`;
-  ctx.fillStyle = spo2Color;
+  ctx.fillStyle = levelColor(spLabelObj.level);
   ctx.textAlign = 'right';
-  if (spLabel) ctx.fillText(spLabel, colW * 2 - 12, metrics.y + 90);
+  if (spLabelObj.text && spLabelObj.text !== '—') ctx.fillText(spLabelObj.text, colW * 2 - 12, metrics.y + 90);
 
   if (pi > 0) {
     ctx.font = `9px ${FONT_MONO}`;
@@ -395,14 +384,10 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.textAlign = 'right';
     ctx.fillText(`MAP ${map} · PP ${pp}`, metrics.w - 12, metrics.y + 68);
 
-    let bpLabel = '';
-    if (sys >= 140 || dia >= 90) bpLabel = 'HIPERTENSIÓN';
-    else if (sys >= 130 || dia >= 80) bpLabel = 'ELEVADA';
-    else if (sys < 90 || dia < 60) bpLabel = 'HIPOTENSIÓN';
-    else bpLabel = 'NORMAL';
+    const bpLabelObj = bpZoneLabel(sys, dia);
     ctx.font = `bold 10px ${FONT_MONO}`;
-    ctx.fillStyle = bpColor;
-    ctx.fillText(bpLabel, metrics.w - 12, metrics.y + 102);
+    ctx.fillStyle = levelColor(bpLabelObj.level);
+    ctx.fillText(bpLabelObj.text, metrics.w - 12, metrics.y + 102);
   }
 
   const rhythm = buildRhythmPanel(
