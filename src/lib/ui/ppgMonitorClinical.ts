@@ -1,6 +1,7 @@
 /**
  * Etiquetas y umbrales clínicos para el monitor PPG (solo presentación).
  */
+import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import { isPhysiologicalRR } from '@/utils/physio';
 
 export type ClinicalLevel = 'normal' | 'warn' | 'danger' | 'dim';
@@ -9,6 +10,9 @@ export interface ClinicalLabel {
   text: string;
   level: ClinicalLevel;
 }
+
+const HR = VITAL_THRESHOLDS.HR;
+const SPO2 = VITAL_THRESHOLDS.SPO2;
 
 export function hrZoneLabel(bpm: number): ClinicalLabel {
   if (bpm <= 0) return { text: '—', level: 'dim' };
@@ -49,6 +53,18 @@ export function formatContactState(state?: string): string {
   }
 }
 
+export function formatAcquisitionStatus(status?: string): string {
+  if (!status) return '—';
+  return status.replace(/_/g, ' ');
+}
+
+export function formatArrhythmiaStatus(status?: string, count = 0): string {
+  if (!status || status === 'NORMAL' || status === 'SINUS_RHYTHM') {
+    return count > 0 ? `RITMO REGULAR · ${count} eventos` : 'RITMO REGULAR';
+  }
+  return `${status.replace(/_/g, ' ')}${count > 0 ? ` · ${count}` : ''}`;
+}
+
 export function levelColor(level: ClinicalLevel): string {
   switch (level) {
     case 'normal':
@@ -60,6 +76,14 @@ export function levelColor(level: ClinicalLevel): string {
     default:
       return 'rgba(148, 163, 184, 0.75)';
   }
+}
+
+export function isHrInRange(bpm: number): boolean {
+  return bpm >= HR.MIN && bpm <= HR.MAX;
+}
+
+export function isSpo2InRange(spo2: number): boolean {
+  return spo2 >= SPO2.MIN_VALID && spo2 <= SPO2.MAX_VALID;
 }
 
 /** Índice de irregularidad RR (CV %) — referencia flux-interval / FA PPG ~20%. */

@@ -23,8 +23,72 @@ export const PEAK_DETECTION_DEFAULTS = {
    * SQI/PI lo escala vía `offsetWeight` (β_efectivo = beatOffset·offsetWeight/0.22).
    */
   beatOffset: 0.02,
-  /** Factor mínimo del RR fisiológico entre emisiones de pico (anti-doble latido) */
-  peakEmitRefractoryFactor: 0.80,
+  /**
+   * Periodo refractario FIJO de EMISIÓN de pico (anti muesca dícrota / doble
+   * conteo). 300 ms es el mínimo validado (HR máx ~200 bpm). Es FIJO (no escala
+   * con la mediana RR) para no bloquear latidos prematuros en arritmias ni
+   * frenar la detección tras un latido perdido.
+   */
+  peakEmitRefractoryMinMs: 300,
+  /**
+   * Guard "latido imposiblemente temprano": rechaza un pico cuyo RR sea menor
+   * que esta fracción de la mediana RR reciente (probable muesca dícrota a HR
+   * baja o doble conteo que superó el refractario fijo). Sólo actúa por el lado
+   * bajo del RR → no bloquea pausas/arritmias (los PVC acoplan >0.5× la mediana)
+   * ni se re-sincroniza mal tras un latido perdido (un RR largo siempre pasa), y
+   * a HR altas queda por debajo del refractario (no recorta la frecuencia máxima).
+   */
+  peakEmitMinRrFrac: 0.45,
+  /**
+   * Movimiento (IMU, motionScore EMA) por encima del cual se SUPRIME la emisión
+   * de latidos: durante un movimiento claro la señal está corrupta y los picos
+   * son artefactos. Conservador (rest ≈ 0.1–0.3; artefacto duro = 0.75) → no
+   * actúa en reposo. Degrada con gracia: sin permiso de IMU motionScore = 0.
+   */
+  peakEmitMotionSuppress: 0.6,
+  /**
+   * Skewness mínima de la ventana de señal para emitir pico (Elgendi 2016).
+   * El SQI por skewness es el más fuerte para distinguir PPG limpia (skew > 0)
+   * de PPG corrupta por movimiento (skew ≈ 0 o negativa, simétrica). 0.18 es
+   * conservador para no rechazar latidos reales con variabilidad respiratoria.
+   * Ref: M. Elgendi, "Optimal Signal Quality Index for Photoplethysmogram
+   * Signals", Bioengineering, 2016.
+   */
+  peakEmitMinSkewness: 0.18,
+  /**
+   * Acuerdo Elgendi mínimo (fracción de candidatos consensuados / candidatos
+   * totales) requerido DURANTE el warm-up para emitir picos. Equivalente al
+   * principio de doble-detector concordance de NeuroKit2 ho2025: un latido es
+   * fiable si dos detectores lo encuentran en la misma posición ± tolerancia.
+   */
+  peakEmitMinAgreementWarmup: 0.55,
+  /**
+   * Nº de primeros picos emitidos considerados "warm-up": durante esta fase
+   * inicial se exige mayor calidad (skewness, agreement, weightedScore) para
+   * evitar picos espurios mientras el AGC/AE/filtros aún se asientan.
+   */
+  peakEmitWarmupCount: 4,
+  /**
+   * weightedScore mínimo durante warm-up (más estricto que en régimen estable).
+   * Reduce el arranque errático: solo se publican picos de alta evidencia hasta
+   * que el ritmo está bien establecido.
+   */
+  peakEmitWarmupMinScore: 0.42,
+  /**
+   * Rechazo relativo de amplitud en Elgendi: se descartan picos cuya prominencia
+   * sea menor que esta fracción de la prominencia mediana (muesca dícrota/ruido
+   * son de menor amplitud que el pico sistólico). Conservador para no perder
+   * latidos reales con modulación respiratoria.
+   */
+  peakAmplitudeRejectFraction: 0.35,
+  /**
+   * Cota SUPERIOR de amplitud relativa: se descartan picos cuya prominencia
+   * supere esta fracción × la mediana. El micro-movimiento del dedo produce
+   * excursiones bruscas (picos de amplitud anómala) — un latido real no supera
+   * ~2.6× la prominencia mediana ni con potenciación post-extrasístole. Relativo
+   * → no afecta señales débiles; alto → no descarta latidos reales ni PVC.
+   */
+  peakAmplitudeRejectUpper: 2.6,
   minSQI: 10,
   /** Ventana para emitir pico respecto al frame actual (ms) — ~½ RR @ 45 BPM */
   peakEmitWindowMs: 720,

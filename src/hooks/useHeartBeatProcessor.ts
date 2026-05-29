@@ -61,7 +61,7 @@ export const useHeartBeatProcessor = () => {
     contactState: ContactState = 'STABLE_CONTACT',
     timestamp?: number,
     fingerConfirmed = true,
-    ppgQuality?: { sqi: number; perfusionIndex?: number },
+    ppgQuality?: { sqi: number; perfusionIndex?: number; motionScore?: number },
   ): HeartBeatResult => {
     if (!processorRef.current || processingStateRef.current !== 'ACTIVE') {
       return {
@@ -81,6 +81,7 @@ export const useHeartBeatProcessor = () => {
       processorRef.current.setPpgQualityMetrics(
         ppgQuality.sqi,
         ppgQuality.perfusionIndex,
+        ppgQuality.motionScore,
       );
     }
 
@@ -161,6 +162,10 @@ export const useHeartBeatProcessor = () => {
     processorRef.current?.softReacquirePeaks(timestamp);
   }, []);
 
+  const resetHistoryKeepBuffers = useCallback((nowMs: number) => {
+    processorRef.current?.resetHistoryKeepBuffers(nowMs);
+  }, []);
+
   const reset = useCallback(() => {
     if (processingStateRef.current === 'RESETTING') return;
     processingStateRef.current = 'RESETTING';
@@ -184,6 +189,7 @@ export const useHeartBeatProcessor = () => {
     setRuntimeHints,
     reacquirePeaks,
     reset,
+    resetHistoryKeepBuffers,
     debugInfo: {
       sessionId: sessionIdRef.current,
       processingState: processingStateRef.current,

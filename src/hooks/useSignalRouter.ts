@@ -36,7 +36,7 @@ interface HeartBeatProcessorAPI {
     contactState: ContactState,
     timestamp?: number,
     fingerConfirmed?: boolean,
-    ppgQuality?: { sqi: number; perfusionIndex?: number },
+    ppgQuality?: { sqi: number; perfusionIndex?: number; motionScore?: number },
   ) => {
     bpm: number;
     confidence: number;
@@ -50,6 +50,7 @@ interface HeartBeatProcessorAPI {
   setRuntimeHints: (hints: CameraRuntimeHints) => void;
   reacquirePeaks: (timestamp?: number) => void;
   reset: () => void;
+  resetHistoryKeepBuffers: (nowMs: number) => void;
 }
 
 interface VitalSignsProcessorAPI {
@@ -111,6 +112,12 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const displayHrRef = useRef(0);
   const displaySpo2Ref = useRef(0);
   const displayBpRef = useRef({ systolic: 0, diastolic: 0 });
+  // Latch de estabilización de adquisición: hasta que la señal estabiliza
+  // (acquisitionStage READY) no se publica el número de HR (evita BPM errático
+  // mientras la cámara/AE y el contacto se asientan). Una vez estabilizado, se
+  // mantiene durante toda la sesión de contacto.
+  const acqReadyLatchRef = useRef(false);
+  const hasStabilizedThisSessionRef = useRef(false);
 
   // Throttle timers
   const lastHrPushRef = useRef(0);
@@ -187,6 +194,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastBpmSeenAtRef.current = 0;
     lastRrSnapshotRef.current = null;
     unstableFrameCounter.current = 0;
+    acqReadyLatchRef.current = false;
+    hasStabilizedThisSessionRef.current = false;
     setRRIntervals([]);
     setBeatMarker(0);
     if (beatMarkerTimerRef.current) {
@@ -311,6 +320,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       {
         sqi: rawSqi,
         perfusionIndex: lastSignal.perfusionIndex ?? 0,
+        motionScore: typeof sqm.motionScore === 'number' ? sqm.motionScore : 0,
       },
     );
 
@@ -368,6 +378,29 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const bpmOut =
       hasUsableContact && fingerConfirmed && bpmLive > 0 ? bpmLive : 0;
 
+    // Latch de estabilización: solo se publica el número de HR tras alcanzar
+    // acquisitionStage READY (señal asentada) — evita mostrar BPM errático
+    // mientras la cámara/AE y el contacto se estabilizan. El pipeline interno
+    // (latch de sesión, vitales, RR) sigue usando bpmOut sin cambios.
+    const acqStage =
+      diag && typeof diag === 'object' && typeof (diag as Record<string, unknown>).acquisitionStage === 'string'
+        ? ((diag as Record<string, unknown>).acquisitionStage as string)
+        : undefined;
+    if (acqStage === 'READY') acqReadyLatchRef.current = true;
+    const acqStabilized = acqReadyLatchRef.current;
+
+    // Al estabilizar la adquisición por primera vez en la sesión, reseteamos el historial
+    // para desechar picos erráticos detectados durante la autoexposición inicial y el transitorio IIR.
+    if (acqStabilized && !hasStabilizedThisSessionRef.current) {
+      hasStabilizedThisSessionRef.current = true;
+      processHeartBeat.resetHistoryKeepBuffers(performance.now());
+      bpmSanityRef.current.reset();
+      sanityErrorRef.current = null;
+      setSanityError(null);
+    }
+
+    const bpmDisplay = acqStabilized ? bpmOut : 0;
+
     const piMin = Q.MIN_PI * Math.max(0.04, hints.minPiScale * 0.18);
     const readiness = evaluateMeasurementReadiness({
       hasUsableContact,
@@ -395,15 +428,15 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       lastHrPushRef.current = nowT;
       const sqRounded = Math.round(rawSqi);
       const hrStatus: import('@/types/measurements').MeasurementStatus =
-        contactState === 'STABLE_CONTACT' && bpmLive > 0 && hrReady
+        acqStabilized && contactState === 'STABLE_CONTACT' && bpmLive > 0 && hrReady
           ? 'VALID'
-          : bpmOut > 0
+          : bpmDisplay > 0
             ? 'WARMUP'
             : 'NO_VALID_SIGNAL';
       setVitalSigns(prev => {
         const next = {
           ...prev,
-          heartRate: { ...prev.heartRate, value: bpmOut, status: hrStatus },
+          heartRate: { ...prev.heartRate, value: bpmDisplay, status: hrStatus },
           signalQuality: sqRounded,
         };
         vitalSignsRef.current = next;

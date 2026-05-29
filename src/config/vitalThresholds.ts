@@ -138,8 +138,8 @@ export const VITAL_THRESHOLDS = {
    * temporal del SQI es la práctica validada para PPG por smartphone.
    */
   ACQUISITION: {
-    /** Frames mínimos con contacto antes de poder declarar READY (≈1,2 s @30 fps). */
-    WARMUP_FRAMES: 36,
+    /** Frames mínimos con contacto antes de poder declarar READY (≈3,0 s @30 fps). */
+    WARMUP_FRAMES: 90,
     /** Frames sostenidos sobre el umbral de entrada antes de pasar a READY (debounce). */
     READY_DWELL_FRAMES: 10,
     /** Frames bajo el umbral de salida antes de abandonar READY (debounce anti-parpadeo). */
@@ -210,7 +210,7 @@ export const VITAL_THRESHOLDS = {
     RRVAR_LO: 0.07,
     RRVAR_HI: 0.25,
 
-    // ── Feature weights (must sum ≅ 1.0)
+    // ── Feature weights (RMSSD..RRVAR suman 1.0; ECTOPY se añade y se renormaliza)
     W_RMSSD: 0.15,
     W_CV: 0.10,
     W_PNN31: 0.20,
@@ -222,6 +222,29 @@ export const VITAL_THRESHOLDS = {
     W_OUTLIER: 0.05,
     W_ABRUPT: 0.03,
     W_RRVAR: 0.02,
+    /** Latidos prematuros (ectopia): peso del sub-score en el total. */
+    W_ECTOPY: 0.12,
+
+    /**
+     * Latidos prematuros (PVC/PAC) — firma fisiológica "acoplamiento corto +
+     * pausa compensatoria": un latido adelantado seguido de una pausa, cuya
+     * suma se aproxima a 2× el RR basal (PVC: pausa completa; PAC: incompleta).
+     * Umbrales conservadores para no confundir el jitter de detección de picos
+     * con extrasístoles reales.
+     */
+    PREMATURE_SHORT_FRAC: 0.75,
+    PREMATURE_COMP_MIN: 1.10,
+    PREMATURE_PAIR_TOL: 0.18,
+    /** ≥ este nº de prematuros en la ventana → arritmia (ectopia frecuente: trigeminismo+). */
+    ECTOPY_MIN_FLAG: 3,
+    /** Saturación del sub-score de ectopia. */
+    ECTOPY_HI: 3,
+    /**
+     * Confirmación temporal: la arritmia debe SOSTENERSE este tiempo (ms) antes
+     * de marcarse, para rechazar falsos positivos transitorios (jitter, un latido
+     * mal detectado). Una arritmia real (FA, ectopia frecuente) es persistente.
+     */
+    ARRHYTHMIA_CONFIRM_MS: 2500,
 
     // ── Score cutoffs
     MILD_THRESHOLD: 0.30,
@@ -312,4 +335,10 @@ export const VITAL_THRESHOLDS = {
     SOFT_HOLD_FINGER_SCORE: 0.14,
     SOFT_HOLD_RG: 1.04,
   },
+};
+
+export const CALIBRATION_CONFIG = {
+  SPO2_REQUIRED_SAMPLES: 15,
+  BP_REQUIRED_SAMPLES: 25,
+  EXPIRATION_DAYS: 30,
 };

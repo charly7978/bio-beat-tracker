@@ -20,6 +20,26 @@ function feed(
   });
 }
 
+/**
+ * Alimenta la misma ventana repetidamente avanzando el tiempo, para superar la
+ * confirmación temporal (ARRHYTHMIA_CONFIRM_MS). `repeats×stepMs` debe exceder
+ * la confirmación (14×300 = 4200 ms > 2500 ms). Con pocos `repeats` simula una
+ * irregularidad transitoria que NO debe confirmarse.
+ */
+function feedSustained(
+  proc: ArrhythmiaProcessor,
+  intervals: number[],
+  repeats = 14,
+  stepMs = 300,
+) {
+  let r = feed(proc, intervals);
+  for (let k = 1; k < repeats; k++) {
+    vi.advanceTimersByTime(stepMs);
+    r = feed(proc, intervals);
+  }
+  return r;
+}
+
 describe('ArrhythmiaProcessor', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
@@ -52,21 +72,64 @@ describe('ArrhythmiaProcessor', () => {
     });
   });
 
-  describe('AF-like rhythm — true positive', () => {
-    it('RR altamente irregulares (simulando AF) → ARRITMIA DETECTADA', () => {
+  describe('AF-like rhythm — true positive (sostenido)', () => {
+    it('RR altamente irregulares (simulando AF) SOSTENIDO → ARRITMIA DETECTADA', () => {
       const proc = calibratedProc();
-      // AF pattern: chaotic RR with large successive diffs
-      const r = feed(proc, [490, 810, 380, 920, 410, 780, 340, 960, 450, 850]);
+      // AF pattern: chaotic RR with large successive diffs, sostenido > confirmación.
+      const r = feedSustained(proc, [490, 810, 380, 920, 410, 780, 340, 960, 450, 850]);
       expect(r.arrhythmiaStatus).toContain('ARRITMIA DETECTADA');
       expect(r.arrhythmiaScore).toBeGreaterThanOrEqual(0.45);
     });
 
-    it('RR con patrón bigeminio → detectado (score moderado)', () => {
+    it('RR con patrón bigeminio sostenido → detectado', () => {
       const proc = calibratedProc();
       // Bigeminy: short-long-short-long alternation
-      const r = feed(proc, [520, 1080, 510, 1100, 530, 1050, 540, 1070, 520, 1090]);
+      const r = feedSustained(proc, [520, 1080, 510, 1100, 530, 1050, 540, 1070, 520, 1090]);
       expect(r.arrhythmiaStatus).toContain('ARRITMIA DETECTADA');
       expect(r.arrhythmiaScore).toBeGreaterThanOrEqual(0.40);
+    });
+
+    it('irregularidad TRANSITORIA (<CONFIRM_MS) NO se detecta — anti falso positivo', () => {
+      const proc = calibratedProc();
+      // Solo ~0.9 s de evidencia (3×300 ms) → por debajo de la confirmación (2.5 s).
+      const r = feedSustained(proc, [490, 810, 380, 920, 410, 780, 340, 960, 450, 850], 4, 300);
+      expect(r.arrhythmiaStatus).not.toContain('ARRITMIA DETECTADA');
+    });
+  });
+
+  describe('latidos prematuros (PVC/PAC) — pausa compensatoria', () => {
+    it('extrasístoles frecuentes sostenidas (trigeminismo) → detectado + count ≥3', () => {
+      const proc = calibratedProc();
+      // 3 PVC: acoplamiento ~400 ms + pausa ~1200 ms (suma ≈ 2×800).
+      const r = feedSustained(proc, [400, 1200, 400, 1200, 400, 1200, 800, 810, 805, 815]);
+      expect(r.arrhythmiaStatus).toContain('ARRITMIA DETECTADA');
+      expect(r.lastArrhythmiaData).not.toBeNull();
+      if (r.lastArrhythmiaData) {
+        expect(r.lastArrhythmiaData.metrics.prematureBeatCount).toBeGreaterThanOrEqual(3);
+      }
+    });
+
+    it('bigeminismo sostenido expone conteo de prematuros en métricas', () => {
+      const proc = calibratedProc();
+      const r = feedSustained(proc, [520, 1080, 510, 1100, 530, 1050, 540, 1070, 520, 1090]);
+      expect(r.arrhythmiaStatus).toContain('ARRITMIA DETECTADA');
+      if (r.lastArrhythmiaData) {
+        expect(r.lastArrhythmiaData.metrics.prematureBeatCount).toBeGreaterThanOrEqual(3);
+      }
+    });
+
+    it('ritmo normal → cero prematuros y sin detección', () => {
+      const proc = calibratedProc();
+      const r = feedSustained(proc, [812, 818, 815, 821, 809, 816, 814, 820, 813, 817]);
+      expect(r.arrhythmiaStatus).not.toContain('ARRITMIA DETECTADA');
+      expect(r.arrhythmiaScore).toBeLessThan(0.30);
+    });
+
+    it('variación respiratoria (sinus arrhythmia, <25%) sostenida no dispara', () => {
+      const proc = calibratedProc();
+      // Variación gradual — ningún acoplamiento <75% del basal.
+      const r = feedSustained(proc, [780, 810, 795, 825, 770, 805, 790, 815, 785, 810]);
+      expect(r.arrhythmiaStatus).not.toContain('ARRITMIA DETECTADA');
     });
   });
 
@@ -124,15 +187,15 @@ describe('ArrhythmiaProcessor', () => {
       expect(r.arrhythmiaScore).toBe(0);
     });
 
-    it('callback se dispara en cambios de estado', () => {
+    it('callback se dispara en cambios de estado (tras confirmación)', () => {
       const cb = vi.fn();
       const proc = calibratedProc();
       proc.setArrhythmiaDetectionCallback(cb);
 
-      feed(proc, [812, 818, 815, 821, 809, 816, 814, 820, 813, 817]);
+      feedSustained(proc, [812, 818, 815, 821, 809, 816, 814, 820, 813, 817]);
       expect(cb).not.toHaveBeenCalledWith(true);
 
-      feed(proc, [490, 810, 380, 920, 410, 780, 340, 960, 450, 850]);
+      feedSustained(proc, [490, 810, 380, 920, 410, 780, 340, 960, 450, 850]);
       expect(cb).toHaveBeenCalledWith(true);
 
       proc.reset();
@@ -162,9 +225,10 @@ describe('ArrhythmiaProcessor', () => {
       expect(r).toHaveProperty('lastArrhythmiaData');
     });
 
-    it('lastArrhythmiaData incluye metrics cuando hay detección', () => {
+    it('lastArrhythmiaData incluye metrics cuando hay detección (sostenida)', () => {
       const proc = calibratedProc();
-      const r = feed(proc, [490, 810, 380, 920, 410, 780, 340, 960, 450, 850]);
+      const r = feedSustained(proc, [490, 810, 380, 920, 410, 780, 340, 960, 450, 850]);
+      expect(r.lastArrhythmiaData).not.toBeNull();
       if (r.lastArrhythmiaData) {
         expect(r.lastArrhythmiaData.metrics).toBeDefined();
         expect(r.lastArrhythmiaData.metrics.rmssd).toBeGreaterThan(0);

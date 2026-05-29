@@ -51,8 +51,11 @@ function runSession(stride: 3 | 4): { bpms: number[]; confidences: number[]; sig
 
   for (let i = 0; i < 600; i++) {
     proc.processFrame(makePulseFrame(64, 64, i, targetBpm, fs));
+    // PPG sintético realista: sistole rápida (sin^8), diástole lenta. La
+    // senoidal pura (skew ≈ 0) la rechazaría el SQI de skewness Elgendi 2016.
     const phase = (2 * Math.PI * targetBpm * i) / (60 * fs);
-    const syntheticPulse = 72 * Math.sin(phase);
+    const sis = Math.max(0, Math.sin(phase));
+    const syntheticPulse = 72 * (Math.pow(sis, 8) - 0.12);
     const r = hb.processSignal(syntheticPulse, i * (1000 / fs));
     if (i > 300) {
       bpms.push(r.bpm);

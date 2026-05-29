@@ -1,6 +1,6 @@
 import { clamp } from '../../utils/math';
 import { createLogger } from '../../utils/logger';
-import { getMonotonicNow } from '../../utils/physio';
+import { getMonotonicNow, computeRrHrv } from '../../utils/physio';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 
 const log = createLogger('ArrhythmiaProcessor');
@@ -23,6 +23,8 @@ export interface ArrhythmiaMetrics {
   rrVariation: number;
   outlierCount: number;
   abruptDiffCount: number;
+  /** Latidos prematuros (PVC/PAC) en la ventana — pausa compensatoria. */
+  prematureBeatCount: number;
 }
 
 export type ArrhythmiaConfidence = 'none' | 'mild' | 'moderate' | 'severe';
@@ -75,6 +77,11 @@ export class ArrhythmiaProcessor {
   // Current metrics & cached score (updated atomically after each detection)
   private metrics: ArrhythmiaMetrics = this.emptyMetrics();
   private lastScore = 0;
+  /** Tipo dominante de la última detección, para enriquecer el estado de UI. */
+  private lastDetectionKind: '' | 'RITMO IRREGULAR' | 'LATIDOS PREMATUROS' = '';
+  /** Confirmación temporal (integrador con fugas) — evidencia sostenida de arritmia. */
+  private confirmAccumMs = 0;
+  private lastEvalTime = 0;
 
   private onArrhythmiaDetection?: (detected: boolean) => void;
 
@@ -109,6 +116,7 @@ export class ArrhythmiaProcessor {
         this.detectArrhythmia(now);
       } else if (!hasFreshRhythm) {
         this.arrhythmiaDetected = false;
+        this.confirmAccumMs = 0;
       }
     } else {
       this.lastPeakTime = null;
@@ -117,7 +125,7 @@ export class ArrhythmiaProcessor {
     const status = this.isLearningPhase
       ? 'CALIBRANDO...'
       : this.arrhythmiaDetected
-        ? 'ARRITMIA DETECTADA'
+        ? `ARRITMIA DETECTADA${this.lastDetectionKind ? ' · ' + this.lastDetectionKind : ''}`
         : 'RITMO NORMAL';
 
     return {
@@ -170,33 +178,21 @@ export class ArrhythmiaProcessor {
 
     const n = valid.length;
 
-    // --- 1. RMSSD & CV ---
-    let sumSqDiff = 0;
-    let sumRR = 0;
-    for (let i = 0; i < n; i++) {
-      sumRR += valid[i];
-      if (i > 0) {
-        const d = valid[i] - valid[i - 1];
-        sumSqDiff += d * d;
-      }
-    }
-    const meanRR = sumRR / n;
-    const rmssd = n > 1 ? Math.sqrt(sumSqDiff / (n - 1)) : 0;
-    let sqSum = 0;
-    for (let i = 0; i < n; i++) sqSum += (valid[i] - meanRR) ** 2;
-    const std = Math.sqrt(sqSum / n);
-    const cv = meanRR > 0 ? std / meanRR : 0;
+    // --- 1. HRV núcleo (RMSSD, CV, pNN50, SDNN) — compartido con display ---
+    const hrv = computeRrHrv(valid);
+    const rmssd = hrv.rmssd;
+    const std = hrv.sdnn;
+    const cv = hrv.cv;
+    const pnn50 = hrv.pnn50;
 
-    // --- 2. pNN50, pNN31, pNN3.25% ---
-    let c50 = 0, c31 = 0, c325 = 0;
+    // --- 2. pNN31 (mejor umbral absoluto) y pNN3.25% (mejor relativo) ---
+    let c31 = 0, c325 = 0;
     for (let i = 1; i < n; i++) {
       const absd = Math.abs(valid[i] - valid[i - 1]);
-      if (absd > 50) c50++;
       if (absd > 31) c31++;
       if (absd > valid[i - 1] * 0.0325) c325++;
     }
     const denom = n - 1;
-    const pnn50 = denom > 0 ? c50 / denom : 0;
     const pnn31 = denom > 0 ? c31 / denom : 0;
     const pnn325 = denom > 0 ? c325 / denom : 0;
 
@@ -241,6 +237,9 @@ export class ArrhythmiaProcessor {
     // --- 8. RR variation (last vs median) ---
     const rrVariation = Math.abs(valid[n - 1] - median) / Math.max(1, median);
 
+    // --- 9. Latidos prematuros (PVC/PAC): acoplamiento corto + pausa compensatoria ---
+    const prematureBeatCount = this.countPrematureBeats(valid, median);
+
     this.metrics = {
       rmssd, cv, pnn50, pnn31, pnn325, tpr,
       shannonEntropy: shannon,
@@ -248,20 +247,45 @@ export class ArrhythmiaProcessor {
       rrVariation,
       outlierCount,
       abruptDiffCount,
+      prematureBeatCount,
     };
 
-    // ── Weighted scoring ──
+    // ── Evidencia cruda por ventana: irregularidad global (FA) por score
+    // ponderado O ectopia frecuente (latidos prematuros). ──
     this.lastScore = this.computeScore();
-    const newDetected = this.lastScore >= this.A.DETECTION_THRESHOLD;
+    const irregularByScore = this.lastScore >= this.A.DETECTION_THRESHOLD;
+    const ectopyFrequent = prematureBeatCount >= this.A.ECTOPY_MIN_FLAG;
+    const rawDetected = irregularByScore || ectopyFrequent;
 
-    if (newDetected !== this.arrhythmiaDetected) {
+    // ── Confirmación temporal (integrador con fugas) ──
+    // La arritmia real es SOSTENIDA; el jitter/ruido transitorio no. Se acumula
+    // tiempo mientras hay evidencia y se drena al doble cuando no la hay; sólo se
+    // confirma tras ARRHYTHMIA_CONFIRM_MS de evidencia neta. Esto elimina los
+    // falsos positivos por un latido mal detectado o variación pasajera.
+    // dt acotado a [0, 1000] ms: robusto ante timestamps fuera de orden o saltos de reloj.
+    const dt = this.lastEvalTime > 0 ? Math.min(Math.max(0, now - this.lastEvalTime), 1000) : 0;
+    this.lastEvalTime = now;
+    if (rawDetected) {
+      this.confirmAccumMs = Math.min(this.confirmAccumMs + dt, this.A.ARRHYTHMIA_CONFIRM_MS * 1.5);
+    } else {
+      this.confirmAccumMs = Math.max(0, this.confirmAccumMs - dt * 2);
+    }
+    const confirmed = this.confirmAccumMs >= this.A.ARRHYTHMIA_CONFIRM_MS;
+
+    this.lastDetectionKind = confirmed
+      ? irregularByScore
+        ? 'RITMO IRREGULAR'
+        : 'LATIDOS PREMATUROS'
+      : '';
+
+    if (confirmed !== this.arrhythmiaDetected) {
       if (this.onArrhythmiaDetection) {
-        this.onArrhythmiaDetection(newDetected);
-        log.info(`Estado → ${newDetected ? 'ARRITMIA' : 'NORMAL'} score=${this.lastScore.toFixed(3)}`);
+        this.onArrhythmiaDetection(confirmed);
+        log.info(`Estado → ${confirmed ? 'ARRITMIA' : 'NORMAL'} score=${this.lastScore.toFixed(3)} confirmMs=${this.confirmAccumMs.toFixed(0)}`);
       }
     }
 
-    if (newDetected && now - this.lastArrhythmiaTime >= this.MIN_EVENT_INTERVAL_MS) {
+    if (confirmed && now - this.lastArrhythmiaTime >= this.MIN_EVENT_INTERVAL_MS) {
       this.arrhythmiaCount++;
       this.lastArrhythmiaTime = now;
       log.warn(
@@ -269,11 +293,12 @@ export class ArrhythmiaProcessor {
         `rmssd=${rmssd.toFixed(1)} cv=${cv.toFixed(3)} ` +
         `pnn50=${pnn50.toFixed(2)} pnn31=${pnn31.toFixed(2)} pnn325=${pnn325.toFixed(2)} ` +
         `tpr=${tpr.toFixed(3)} shannon=${shannon.toFixed(2)} sampEn=${sampleEntropy.toFixed(3)} ` +
-        `outlier=${outlierCount} abrupt=${abruptDiffCount} rrv=${rrVariation.toFixed(3)}`
+        `outlier=${outlierCount} abrupt=${abruptDiffCount} rrv=${rrVariation.toFixed(3)} ` +
+        `premature=${prematureBeatCount} [${this.lastDetectionKind}]`
       );
     }
 
-    this.arrhythmiaDetected = newDetected;
+    this.arrhythmiaDetected = confirmed;
   }
 
   /**
@@ -302,9 +327,11 @@ export class ArrhythmiaProcessor {
     const sOutlier = safeRange(m.outlierCount, A.OUTLIER_LO, A.OUTLIER_HI);
     const sAbrupt  = safeRange(m.abruptDiffCount, A.ABRUPT_LO, A.ABRUPT_HI);
     const sRRVar   = safeRange(m.rrVariation, A.RRVAR_LO, A.RRVAR_HI);
+    const sEctopy  = safeRange(m.prematureBeatCount, 0, A.ECTOPY_HI);
 
     const totalWeight = A.W_RMSSD + A.W_CV + A.W_PNN31 + A.W_PNN325 + A.W_PNN50 +
-                        A.W_TPR + A.W_SHANNON + A.W_SAMPEN + A.W_OUTLIER + A.W_ABRUPT + A.W_RRVAR;
+                        A.W_TPR + A.W_SHANNON + A.W_SAMPEN + A.W_OUTLIER + A.W_ABRUPT +
+                        A.W_RRVAR + A.W_ECTOPY;
 
     const weightedSum =
       sRHRMSSD * A.W_RMSSD +
@@ -317,7 +344,8 @@ export class ArrhythmiaProcessor {
       sSampEn  * A.W_SAMPEN +
       sOutlier * A.W_OUTLIER +
       sAbrupt  * A.W_ABRUPT +
-      sRRVar   * A.W_RRVAR;
+      sRRVar   * A.W_RRVAR +
+      sEctopy  * A.W_ECTOPY;
 
     return totalWeight > 0 ? weightedSum / totalWeight : 0;
   }
@@ -373,6 +401,41 @@ export class ArrhythmiaProcessor {
 
     if (B === 0) return 0;
     return -Math.log(A / B);
+  }
+
+  // ──────────────────────────────────────────────
+  // Latidos prematuros (PVC / PAC)
+  // ──────────────────────────────────────────────
+
+  /**
+   * Cuenta latidos prematuros (extrasístoles) por su firma fisiológica:
+   * un acoplamiento CORTO (RR ≤ PREMATURE_SHORT_FRAC × basal, ≥20 % adelantado)
+   * seguido de una PAUSA compensatoria (RR siguiente ≥ PREMATURE_COMP_MIN × basal),
+   * cuya suma se aproxima a 2× el RR basal (PVC: pausa completa → suma ≈ 2× basal;
+   * PAC: incompleta → suma algo menor, aún dentro de PREMATURE_PAIR_TOL).
+   *
+   * La restricción de la suma ≈ 2× basal lo hace ROBUSTO al ruido: dos RR cortos
+   * aleatorios rara vez forman una pareja corto+pausa que sume ~2× el basal.
+   */
+  private countPrematureBeats(intervals: number[], baseline: number): number {
+    if (baseline <= 0 || intervals.length < 3) return 0;
+    const A = this.A;
+    const shortMax = baseline * A.PREMATURE_SHORT_FRAC;
+    const compMin = baseline * A.PREMATURE_COMP_MIN;
+    const pairTarget = 2 * baseline;
+    let count = 0;
+    for (let i = 0; i < intervals.length - 1; i++) {
+      const coupling = intervals[i];
+      const pause = intervals[i + 1];
+      if (coupling >= shortMax) continue;          // no adelantado
+      if (pause <= compMin) continue;              // sin pausa compensatoria
+      const pairSum = coupling + pause;
+      if (Math.abs(pairSum - pairTarget) / pairTarget <= A.PREMATURE_PAIR_TOL) {
+        count++;
+        i++; // la pausa pertenece a esta extrasístole; no la reutilices como acoplamiento
+      }
+    }
+    return count;
   }
 
   // ──────────────────────────────────────────────
@@ -436,6 +499,9 @@ export class ArrhythmiaProcessor {
     this.measurementStartTime = getMonotonicNow();
     this.metrics = this.emptyMetrics();
     this.lastScore = 0;
+    this.lastDetectionKind = '';
+    this.confirmAccumMs = 0;
+    this.lastEvalTime = 0;
     if (this.onArrhythmiaDetection) this.onArrhythmiaDetection(false);
   }
 
@@ -444,6 +510,7 @@ export class ArrhythmiaProcessor {
       rmssd: 0, cv: 0, pnn50: 0, pnn31: 0, pnn325: 0, tpr: 0,
       shannonEntropy: 0, sampleEntropy: 0,
       rrVariation: 0, outlierCount: 0, abruptDiffCount: 0,
+      prematureBeatCount: 0,
     };
   }
 }

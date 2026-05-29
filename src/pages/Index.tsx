@@ -50,6 +50,7 @@ const Index = () => {
     setRuntimeHints: setHeartBeatRuntimeHints,
     reset: resetHeartBeat,
     reacquirePeaks: reacquireHeartPeaks,
+    resetHistoryKeepBuffers: resetHeartHistory,
   } = useHeartBeatProcessor();
 
   const { 
@@ -93,6 +94,7 @@ const Index = () => {
       setRuntimeHints: setHeartBeatRuntimeHints,
       reacquirePeaks: reacquireHeartPeaks,
       reset: resetHeartBeat,
+      resetHistoryKeepBuffers: resetHeartHistory,
     },
     processVitalSigns: {
       processSignal: processVitalSigns,
@@ -151,6 +153,24 @@ const Index = () => {
   useEffect(() => {
     router.setIsMonitoringRef(session.isMonitoring);
   }, [session.isMonitoring, router]);
+
+  // Al estabilizarse el contacto, bloquear la exposición de la cámara a la
+  // escena real del dedo iluminado. Frena la deriva del auto-exposure (causa del
+  // arranque errático de ~25-30 s). Se re-arma al perder el contacto.
+  const exposureLockedRef = useRef(false);
+  useEffect(() => {
+    const cs = lastSignal?.contactState;
+    if (cs === 'NO_CONTACT' || cs == null) {
+      exposureLockedRef.current = false;
+      return;
+    }
+    const d = lastSignal?.diagnostics as Record<string, unknown> | undefined;
+    const stage = d?.acquisitionStage;
+    if (!exposureLockedRef.current && stage === 'READY') {
+      exposureLockedRef.current = true;
+      cameraRef.current?.lockExposureToScene?.();
+    }
+  }, [lastSignal?.contactState, (lastSignal?.diagnostics as Record<string, unknown> | undefined)?.acquisitionStage]);
 
   // Sincronizar resultados post-medición
   useEffect(() => {

@@ -41,6 +41,10 @@ export function getActiveProfileId(): string {
   try { return localStorage.getItem(ACTIVE_KEY) || "default"; } catch { return "default"; }
 }
 
+export function setActiveProfileId(id: string): void {
+  try { localStorage.setItem(ACTIVE_KEY, id); } catch { /* noop */ }
+}
+
 export function getCustomOverrides(): Partial<VitalsSanityOptions> {
   try {
     const raw = localStorage.getItem(CUSTOM_KEY);
@@ -48,6 +52,13 @@ export function getCustomOverrides(): Partial<VitalsSanityOptions> {
     const obj = JSON.parse(raw);
     return obj && typeof obj === "object" ? obj : {};
   } catch { return {}; }
+}
+
+export function setCustomOverrides(overrides: Partial<VitalsSanityOptions> | null): void {
+  try {
+    if (!overrides || Object.keys(overrides).length === 0) localStorage.removeItem(CUSTOM_KEY);
+    else localStorage.setItem(CUSTOM_KEY, JSON.stringify(overrides));
+  } catch { /* noop */ }
 }
 
 /** Resolve effective options = preset + custom overrides (custom wins). */

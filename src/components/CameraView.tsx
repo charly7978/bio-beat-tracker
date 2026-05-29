@@ -6,6 +6,8 @@ const log = createLogger("CameraView");
 export interface CameraViewHandle {
   getVideoElement: () => HTMLVideoElement | null;
   getDiagnostics: () => Record<string, unknown>;
+  /** Re-fija la exposición a la escena actual (dedo iluminado) para frenar la deriva del AE. */
+  lockExposureToScene: () => void;
 }
 
 interface CameraViewProps {
@@ -40,12 +42,97 @@ type ExtendedCapabilities = MediaTrackCapabilities & {
   focusMode?: string[];
   frameRate?: { min?: number; max?: number };
 };
-type ExtendedSettings = MediaTrackSettings & { 
+type ExtendedSettings = MediaTrackSettings & {
   torch?: boolean;
   exposureMode?: string;
   whiteBalanceMode?: string;
   focusMode?: string;
 };
+
+/**
+ * Fija exposición/WB/foco a valores estables. Llamada DOS veces:
+ *  1) al iniciar (escena previa al dedo),
+ *  2) al estabilizarse el contacto (escena real iluminada del dedo) → bloquea la
+ *     exposición en modo "manual" cuando está disponible, frenando la deriva del
+ *     auto-exposure (AE), que es la causa del arranque errático de ~25–30 s.
+ */
+async function stabilizeTrack(track: MediaStreamTrack): Promise<void> {
+  const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
+  const constraints: AdvancedConstraint[] = [];
+
+  if (caps.frameRate) {
+    const maxFps = caps.frameRate.max ?? 30;
+    const targetFps = Math.min(30, maxFps);
+    constraints.push({ frameRate: targetFps });
+  }
+
+  if (caps.exposureMode?.includes("manual")) {
+    constraints.push({ exposureMode: "manual" });
+  } else if (caps.exposureMode?.includes("continuous")) {
+    constraints.push({ exposureMode: "continuous" });
+  }
+
+  if (caps.whiteBalanceMode?.includes("manual")) {
+    constraints.push({ whiteBalanceMode: "manual" });
+  }
+
+  if (caps.focusMode?.includes("manual")) {
+    constraints.push({ focusMode: "manual", focusDistance: 0 });
+  } else if (caps.focusMode?.includes("continuous")) {
+    constraints.push({ focusMode: "continuous" });
+  }
+
+  if (constraints.length > 0) {
+    try {
+      await track.applyConstraints({ advanced: constraints });
+    } catch (e) {
+      log.warn("No se pudieron estabilizar parámetros de cámara", e);
+    }
+  }
+}
+
+async function applyTorchDependentParams(track: MediaStreamTrack, torchOn: boolean): Promise<void> {
+  const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
+  const constraints: AdvancedConstraint[] = [];
+
+  if (torchOn) {
+    // Flash activo: ISO bajo y exposición negativa para evitar saturación
+    if (caps.iso) {
+      const minISO = caps.iso.min ?? 50;
+      const maxISO = caps.iso.max ?? 400;
+      const targetISO = Math.max(minISO, Math.min(maxISO, 140));
+      constraints.push({ iso: targetISO });
+    }
+    if (caps.exposureCompensation) {
+      const minExp = caps.exposureCompensation.min ?? -2;
+      const maxExp = caps.exposureCompensation.max ?? 2;
+      const targetExp = Math.max(minExp, Math.min(maxExp, -0.35));
+      constraints.push({ exposureCompensation: targetExp });
+    }
+  } else {
+    // Sin flash: ISO más alto y sin compensation negativa para no subexponer
+    if (caps.iso) {
+      const minISO = caps.iso.min ?? 50;
+      const maxISO = caps.iso.max ?? 800;
+      const targetISO = Math.max(minISO, Math.min(maxISO, 400));
+      constraints.push({ iso: targetISO });
+    }
+    if (caps.exposureCompensation) {
+      const minExp = caps.exposureCompensation.min ?? -2;
+      const maxExp = caps.exposureCompensation.max ?? 2;
+      const targetExp = Math.max(minExp, Math.min(maxExp, 0));
+      constraints.push({ exposureCompensation: targetExp });
+    }
+  }
+
+  if (constraints.length > 0) {
+    try {
+      await track.applyConstraints({ advanced: constraints });
+    } catch (e) {
+      log.warn("No se pudieron aplicar parámetros post-torch", e);
+    }
+  }
+}
 
 const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
   onStreamReady,
@@ -93,6 +180,16 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
       } catch {
         return { active: true, error: "caps_unavailable" };
       }
+    },
+    lockExposureToScene: () => {
+      const track = streamRef.current?.getVideoTracks?.()[0];
+      if (!track) return;
+      const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
+      const torchOn = settings.torch === true;
+      // Bloquea exposición/WB/foco a la escena ya iluminada y re-aplica ISO/EV.
+      void stabilizeTrack(track)
+        .then(() => applyTorchDependentParams(track, torchOn))
+        .catch(() => { /* best-effort */ });
     },
   }), []);
 
@@ -142,84 +239,6 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
       }
       log.warn("Torch solicitado pero no confirmado en settings");
       return false;
-    };
-
-    const stabilizeTrack = async (track: MediaStreamTrack) => {
-      const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
-      const constraints: AdvancedConstraint[] = [];
-
-      if (caps.frameRate) {
-        const maxFps = caps.frameRate.max ?? 30;
-        const targetFps = Math.min(30, maxFps);
-        constraints.push({ frameRate: targetFps });
-      }
-
-      if (caps.exposureMode?.includes("manual")) {
-        constraints.push({ exposureMode: "manual" });
-      } else if (caps.exposureMode?.includes("continuous")) {
-        constraints.push({ exposureMode: "continuous" });
-      }
-
-      if (caps.whiteBalanceMode?.includes("manual")) {
-        constraints.push({ whiteBalanceMode: "manual" });
-      }
-
-      if (caps.focusMode?.includes("manual")) {
-        constraints.push({ focusMode: "manual", focusDistance: 0 });
-      } else if (caps.focusMode?.includes("continuous")) {
-        constraints.push({ focusMode: "continuous" });
-      }
-
-      if (constraints.length > 0) {
-        try {
-          await track.applyConstraints({ advanced: constraints });
-        } catch (e) {
-          log.warn("No se pudieron estabilizar parámetros de cámara", e);
-        }
-      }
-    };
-
-    const applyTorchDependentParams = async (track: MediaStreamTrack, torchOn: boolean) => {
-      const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
-      const constraints: AdvancedConstraint[] = [];
-
-      if (torchOn) {
-        // Flash activo: ISO bajo y exposición negativa para evitar saturación
-        if (caps.iso) {
-          const minISO = caps.iso.min ?? 50;
-          const maxISO = caps.iso.max ?? 400;
-          const targetISO = Math.max(minISO, Math.min(maxISO, 140));
-          constraints.push({ iso: targetISO });
-        }
-        if (caps.exposureCompensation) {
-          const minExp = caps.exposureCompensation.min ?? -2;
-          const maxExp = caps.exposureCompensation.max ?? 2;
-          const targetExp = Math.max(minExp, Math.min(maxExp, -0.35));
-          constraints.push({ exposureCompensation: targetExp });
-        }
-      } else {
-        // Sin flash: ISO más alto y sin compensation negativa para no subexponer
-        if (caps.iso) {
-          const minISO = caps.iso.min ?? 50;
-          const maxISO = caps.iso.max ?? 800;
-          const targetISO = Math.max(minISO, Math.min(maxISO, 400));
-          constraints.push({ iso: targetISO });
-        }
-        if (caps.exposureCompensation) {
-          const minExp = caps.exposureCompensation.min ?? -2;
-          const maxExp = caps.exposureCompensation.max ?? 2;
-          const targetExp = Math.max(minExp, Math.min(maxExp, 0));
-          constraints.push({ exposureCompensation: targetExp });
-        }
-      }
-
-      if (constraints.length > 0) {
-        try {
-          await track.applyConstraints({ advanced: constraints });
-        } catch (e) {
-          log.warn("No se pudieron aplicar parámetros post-torch", e);
-        }
-      }
     };
 
     const waitForVideo = (video: HTMLVideoElement): Promise<void> => {

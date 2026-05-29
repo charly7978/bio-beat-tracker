@@ -7,7 +7,8 @@ import { robustBounds } from '../utils/stats';
 import { PEAK_DETECTION_DEFAULTS } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
-import { autocorrDominantLag } from './signal-processing/shared/dsp';
+import { autocorrDominantLag, quickSkewness } from './signal-processing/shared/dsp';
+import { computeRrHrv } from '../utils/physio';
 import {
   inferCameraRuntimeHints,
   type CameraRuntimeHints,
@@ -62,6 +63,8 @@ export class HeartBeatProcessor {
   /** SQI del pipeline PPG (SignalQualityIndex) — fuente primaria para el ensemble */
   private ppgSqi = 0;
   private ppgPerfusionIndex = 0;
+  /** Movimiento IMU (EMA) del pipeline — suprime emisión de latidos durante movimiento. */
+  private ppgMotionScore = 0;
 
   // NN scorers removed (all returned null)
 
@@ -102,7 +105,7 @@ export class HeartBeatProcessor {
   }
 
   /** Alinea ensemble/detectores con el SQI central del PPG (evita doble escala). */
-  setPpgQualityMetrics(sqi: number, perfusionIndex?: number): void {
+  setPpgQualityMetrics(sqi: number, perfusionIndex?: number, motionScore?: number): void {
     if (Number.isFinite(sqi) && sqi >= 0) this.ppgSqi = sqi;
     if (
       typeof perfusionIndex === 'number' &&
@@ -110,6 +113,9 @@ export class HeartBeatProcessor {
       perfusionIndex >= 0
     ) {
       this.ppgPerfusionIndex = perfusionIndex;
+    }
+    if (typeof motionScore === 'number' && Number.isFinite(motionScore) && motionScore >= 0) {
+      this.ppgMotionScore = motionScore;
     }
   }
 
@@ -218,12 +224,19 @@ export class HeartBeatProcessor {
         samplingRateHz: sampleRate,
         sqi: ensSqi,
         perfusionIndex: this.ppgPerfusionIndex,
+        // La señal ya viene del BandpassFilter streaming (PPGSignalProcessor).
+        // Evita re-filtrar offline dentro de Elgendi (transitorio duplicado).
+        preFiltered: true,
       });
       ensembleConf = ens.confidence;
 
       const minPeakConf =
         VITAL_THRESHOLDS.QUALITY.MIN_ENSEMBLE_CONF_FOR_PEAK *
         (this.cameraHints.constrained ? 0.42 : 0.52);
+
+      // Skewness SQI (Elgendi 2016): rechaza ventanas corruptas por micro-movimiento.
+      // Se evalúa siempre (con umbrales diferenciados en decidePeakEmit) para proteger contra temblores.
+      const skew = quickSkewness(sigRaw);
 
       const decision = decidePeakEmit({
         ens,
@@ -239,9 +252,18 @@ export class HeartBeatProcessor {
         recentRrMs: this.rrIntervals,
         sqi: ensSqi,
         perfusionIndex: this.ppgPerfusionIndex,
+        signalSkewness: skew,
+        elgendiAgreement: ens.agreement?.elgendi,
       });
 
-      if (decision.emit) {
+      // Gate de movimiento: durante movimiento claro (IMU) la señal está
+      // corrupta → no emitir latidos (evita latidos erráticos por micro-movimiento).
+      const motionSuppressed =
+        this.ppgMotionScore > PEAK_DETECTION_DEFAULTS.peakEmitMotionSuppress;
+
+      if (decision.emit && motionSuppressed) {
+        emitReason = 'MOTION_SUPPRESSED';
+      } else if (decision.emit) {
         isPeak = true;
         emitReason = decision.reason;
         const wScore = decision.weightedScore ?? 0;
@@ -270,6 +292,7 @@ export class HeartBeatProcessor {
         if (instantBpm > 0) {
           const acceptOutlier =
             this.smoothBPM <= 0 ||
+            this.emittedPeakCount < PEAK_DETECTION_DEFAULTS.peakEmitWarmupCount ||
             Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= 0.4;
           if (acceptOutlier) {
             if (this.smoothBPM === 0) {
@@ -285,7 +308,7 @@ export class HeartBeatProcessor {
           }
         }
 
-        if (wScore >= 0.5 && this.rrIntervals.length >= 2) {
+        if (wScore >= 0.4 && this.rrIntervals.length >= 1) {
           this.vibrate();
           this.playBeep();
         }
@@ -442,11 +465,10 @@ export class HeartBeatProcessor {
     if (derivCount > 0) meanAbsDeriv /= derivCount;
     const slopeFactor = Math.min(1, meanAbsDeriv / 0.8) * 14;
 
+    // CV-RR reutilizado desde el núcleo HRV compartido (sin duplicar cálculo).
     let rrFactor = 0;
     if (this.rrIntervals.length >= 3) {
-      const m = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
-      const v = this.rrIntervals.reduce((a, rr) => a + (rr - m) ** 2, 0) / this.rrIntervals.length;
-      const cv = Math.sqrt(v) / Math.max(1, m);
+      const cv = computeRrHrv(this.rrIntervals).cv;
       rrFactor = Math.max(0, 1 - cv * 2) * 24;
     }
 
@@ -473,9 +495,8 @@ export class HeartBeatProcessor {
       return clamp(sqiFactor * 0.22 + peakSupport * 0.22 + ens * 0.36 + peakBoost + nnBoost, 0, 0.85);
     }
 
-    const mean = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
-    const variance = this.rrIntervals.reduce((a, rr) => a + (rr - mean) ** 2, 0) / this.rrIntervals.length;
-    const cv = Math.sqrt(variance) / Math.max(1, mean);
+    // CV-RR del núcleo HRV compartido (sin recalcular media/varianza ad-hoc).
+    const cv = computeRrHrv(this.rrIntervals).cv;
     const rrStability = clamp(1 - cv * 1.5, 0, 1);
 
     return clamp(
@@ -523,6 +544,23 @@ export class HeartBeatProcessor {
     this.consecutivePeaks = 0;
   }
 
+  /**
+   * Limpia la historia de picos y suavizado de BPM pero conserva los buffers de señal.
+   * Útil para reiniciar la detección desde limpio tras el transitorio de estabilización de la cámara.
+   * Establece lastPeakTime y lastEmittedPeakTime en nowMs para ignorar picos anteriores en el buffer.
+   */
+  resetHistoryKeepBuffers(nowMs: number): void {
+    this.rrIntervals = [];
+    this.smoothBPM = 0;
+    this.lastPeakTime = nowMs;
+    this.lastEmittedPeakTime = nowMs;
+    this.consecutivePeaks = 0;
+    this.emittedPeakCount = 0;
+    this.gateRelaxUntilMs = 0;
+    this.reacquireModeUntilMs = 0;
+    this.lastDiagnostics = {};
+  }
+
   /** Limpia estado de picos/RR al quitar el dedo o al volver a colocarlo. */
   resetPeakTracking(): void {
     this.signalBuffer = [];
@@ -548,6 +586,7 @@ export class HeartBeatProcessor {
     this.fingerContactConfirmed = false;
     this.ppgSqi = 0;
     this.ppgPerfusionIndex = 0;
+    this.ppgMotionScore = 0;
   }
 
   dispose(): void {

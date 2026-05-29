@@ -335,22 +335,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     else if (this.pixelStride > 6) rejectionStatus = "LOW_FPS";
     else if (this.frameCount < 28) rejectionStatus = "WARMUP";
 
-    if (rejectionStatus && rejectionStatus !== "WARMUP" && rejectionStatus !== "MOTION_ARTIFACT") {
-      this.onSignalReady({
-        timestamp,
-        rawValue: 0, filteredValue: 0, quality: 0,
-        fingerDetected: true, contactState: this.contactState,
-        motionArtifact,
-        roi: this.signalRoiFromMetrics(roi),
-        perfusionIndex: this.cachedPI,
-        rawRed: roi.rawRed,
-        rawGreen: roi.rawGreen,
-        diagnostics: this.buildFingerDiagnostics(roi, motionArtifact, rejectionStatus, {
-          message: `RECHAZADO: ${rejectionStatus}`,
-        }),
-      });
-      // No retornamos aquí para permitir que los buffers sigan llenándose, pero la UI sabrá que no es válido
-    }
+    const isSignalInvalid =
+      rejectionStatus === "SATURATED" ||
+      rejectionStatus === "UNDEREXPOSED" ||
+      rejectionStatus === "LOW_FPS";
 
     // Tenemos contacto (UNSTABLE o STABLE)
     this.updateChannelBaselines(roi.rawRed, roi.rawGreen, roi.rawBlue, motionArtifact);
@@ -505,42 +493,56 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       },
     );
 
+    const finalRawValue = signalPathActive && !isSignalInvalid ? pulseSource.value : 0;
+    const finalFilteredValue = signalPathActive && !isSignalInvalid ? enhanced : 0;
+    const finalMorphValue = signalPathActive && !isSignalInvalid ? morphFiltered : 0;
+    const finalQuality = !isSignalInvalid ? displayQuality : 0;
+    const finalFingerUi = !isSignalInvalid && fingerUi;
+    const finalPerfusion = !isSignalInvalid ? perfusionIndex : 0;
+
     this.onSignalReady({
       timestamp,
-      rawValue: signalPathActive ? pulseSource.value : 0,
-      filteredValue: signalPathActive ? enhanced : 0,
-      morphologyValue: signalPathActive ? morphFiltered : 0,
+      rawValue: finalRawValue,
+      filteredValue: finalFilteredValue,
+      morphologyValue: finalMorphValue,
       placementMode: this.placementMode,
-      quality: displayQuality,
-      fingerDetected: fingerUi,
+      quality: finalQuality,
+      fingerDetected: finalFingerUi,
       contactState: this.contactState,
       motionArtifact,
       roi: this.signalRoiFromMetrics(roi),
-      perfusionIndex,
+      perfusionIndex: finalPerfusion,
       rawRed: roi.rawRed,
       rawGreen: roi.rawGreen,
       diagnostics: {
-        ...this.buildFingerDiagnostics(roi, motionArtifact, displayStatus, {
-          message:
-            `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
-            `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
-            `C:${(roi.coverageRatio * 100).toFixed(0)}% ${this.placementMode} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
-          placementMode: this.placementMode,
-          placementHint: placementHintText(this.placementMode),
-          hasPulsatility:
-            fingerUi &&
-            (SignalQualityIndex.isClinicallyValid(rawSqiOut, perfusionIndex) ||
-              SignalQualityIndex.isAdequateForLiveVitals(rawSqiOut, perfusionIndex)),
-          pulsatilityValue:
-            this.contactState === 'STABLE_CONTACT'
-              ? Math.max(perfusionIndex, pulseSource.strength * 0.02)
-              : 0,
-        }),
+        ...this.buildFingerDiagnostics(
+          roi,
+          motionArtifact,
+          isSignalInvalid ? rejectionStatus! : displayStatus,
+          {
+            message: isSignalInvalid
+              ? `RECHAZADO: ${rejectionStatus}`
+              : `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
+                `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
+                `C:${(roi.coverageRatio * 100).toFixed(0)}% ${this.placementMode} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
+            placementMode: this.placementMode,
+            placementHint: placementHintText(this.placementMode),
+            hasPulsatility:
+              !isSignalInvalid &&
+              fingerUi &&
+              (SignalQualityIndex.isClinicallyValid(rawSqiOut, perfusionIndex) ||
+                SignalQualityIndex.isAdequateForLiveVitals(rawSqiOut, perfusionIndex)),
+            pulsatilityValue:
+              !isSignalInvalid && this.contactState === 'STABLE_CONTACT'
+                ? Math.max(perfusionIndex, pulseSource.strength * 0.02)
+                : 0,
+          }
+        ),
         sqm: {
-          sqi: rawSqiOut,
-          perfusionIndex: perfusionIndex,
-          snr: pulseSource.strength,
-          periodicity: this.cachedPeriodicity,
+          sqi: isSignalInvalid ? 0 : rawSqiOut,
+          perfusionIndex: isSignalInvalid ? 0 : perfusionIndex,
+          snr: isSignalInvalid ? 0 : pulseSource.strength,
+          periodicity: isSignalInvalid ? 0 : this.cachedPeriodicity,
           motionScore: this.motionScore,
           saturationRatio: (roi.rawRed > 250 ? 1 : 0),
           underexposureRatio: this.underexposureEma,

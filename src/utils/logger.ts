@@ -24,7 +24,15 @@ function resolveLevel(): LogLevel {
   return 'info';
 }
 
-const currentLevel: LogLevel = resolveLevel();
+let currentLevel: LogLevel = resolveLevel();
+
+export function setLogLevel(level: LogLevel) {
+  currentLevel = level;
+}
+
+export function getLogLevel(): LogLevel {
+  return currentLevel;
+}
 
 function emit(level: LogLevel, scope: string, args: unknown[]) {
   if (ORDER[level] < ORDER[currentLevel]) return;

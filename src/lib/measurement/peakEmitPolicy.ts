@@ -1,14 +1,24 @@
 /**
- * Política única de emisión de picos PPG — ponderación + anti falsos positivos.
+ * Política única de emisión de picos PPG.
+ *
+ * Diseño arritmia-tolerante (validado: detectores PPG en tiempo real detectan
+ * latidos por umbral adaptativo + refractario, SIN asumir regularidad RR):
+ *   - Refractario FIJO (~300 ms) contra doble conteo / muesca dícrota.
+ *   - Sin gate de regularidad RR (permite arritmias y evita el bloqueo
+ *     permanente tras un latido perdido).
+ *   - La genuinidad del pico la dan Elgendi (umbral + cuadrado + rechazo de
+ *     amplitud), el refractario y la confianza del ensemble.
+ *
+ * Anti-micromovimiento (literatura 2024–2026):
+ *   - Skewness mínima de ventana (Elgendi 2016: SQI más fuerte).
+ *   - Concordancia mínima del detector durante warm-up (NeuroKit2 ho2025:
+ *     doble-detector concordance reduce falsos positivos).
+ *   - Warm-up estricto: primeros N picos exigen `weightedScore` alto.
  */
 import type { PeakDetectionResult } from '@/types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '@/config/signalProcessing';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import {
-  PEAK_SCORE_THRESHOLDS,
-  rrMedianMs,
-  scorePeakCandidate,
-} from './peakScoring';
+import { rrMedianMs, scorePeakCandidate } from './peakScoring';
 
 export interface PeakEmitDecision {
   emit: boolean;
@@ -33,6 +43,17 @@ export interface PeakEmitPolicyInput {
   recentRrMs?: number[];
   sqi?: number;
   perfusionIndex?: number;
+  /**
+   * Skewness de la ventana de señal — SQI Elgendi 2016. Si < umbral, la ventana
+   * está corrupta por movimiento (rechaza emisión). Opcional → si no se provee,
+   * el gate no actúa (retro-compatible).
+   */
+  signalSkewness?: number;
+  /**
+   * Acuerdo Elgendi (fracción de candidatos consensuados / candidatos totales).
+   * Durante warm-up se exige ≥ umbral para emitir.
+   */
+  elgendiAgreement?: number;
 }
 
 export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
@@ -50,119 +71,102 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     recentRrMs = [],
     sqi = 0,
     perfusionIndex = 0,
+    signalSkewness,
+    elgendiAgreement,
   } = input;
+
+  // ── Gates de arranque (anti-errático): rechazan emisión si la ventana es de
+  // baja calidad o el consenso del detector aún no es firme. Solo se activan
+  // durante warm-up para no recortar arritmias ya establecidas.
+  const inWarmup = emittedPeakCount < PEAK_DETECTION_DEFAULTS.peakEmitWarmupCount;
+  // ── Gates de arranque (anti-errático) y asimetría continua (anti-micromovimiento):
+  // Rechazan emisión si la ventana está distorsionada (Elgendi 2016).
+  if (
+    typeof signalSkewness === 'number' &&
+    Number.isFinite(signalSkewness)
+  ) {
+    const minSkew = inWarmup
+      ? PEAK_DETECTION_DEFAULTS.peakEmitMinSkewness // 0.18
+      : 0.05; // Más tolerante en régimen estable pero bloquea ruido simétrico/tremor
+    if (signalSkewness < minSkew) {
+      return { emit: false, peakTimeMs: 0, reason: 'LOW_SKEWNESS' };
+    }
+  }
+
+  if (inWarmup) {
+    if (
+      typeof elgendiAgreement === 'number' &&
+      Number.isFinite(elgendiAgreement) &&
+      elgendiAgreement < PEAK_DETECTION_DEFAULTS.peakEmitMinAgreementWarmup
+    ) {
+      return { emit: false, peakTimeMs: 0, reason: 'LOW_AGREEMENT' };
+    }
+  }
 
   const stallReacquire =
     reacquireMode ||
-    (fingerContactConfirmed && peakStallMs >= 1800);
-
-  const minGap =
-    VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS *
-    PEAK_DETECTION_DEFAULTS.peakEmitRefractoryFactor;
+    (fingerContactConfirmed && peakStallMs >= 1500);
 
   const elConf = (ens.diagnostics as { elgendiConfidence?: number }).elgendiConfidence ?? 0;
-  const prevRrMed = rrMedianMs(recentRrMs);
 
-  let bestT = 0;
-  let bestReason = '';
-  let bestScore = 0;
+  // Refractario FIJO (~300 ms, validado): bloquea doble conteo y muesca dícrota
+  // por tiempo SIN escalar con la mediana RR. Así no bloquea latidos prematuros
+  // (arritmias) ni se alarga hasta frenar la detección. La dícrota de baja
+  // amplitud la filtra Elgendi (cuadrado + rechazo de amplitud relativa).
+  const minGap = PEAK_DETECTION_DEFAULTS.peakEmitRefractoryMinMs;
+
+  // Guard "latido imposiblemente temprano" (anti-dícrota a HR baja / doble conteo):
+  // sólo por el lado bajo del RR → no recorta HR altas ni bloquea arritmias.
+  const prevRrMed = rrMedianMs(recentRrMs);
+  const minRrAbs =
+    prevRrMed > 0 ? prevRrMed * PEAK_DETECTION_DEFAULTS.peakEmitMinRrFrac : 0;
 
   const liveEdgeMs = stallReacquire
     ? PEAK_DETECTION_DEFAULTS.peakEmitWindowMs * 1.25
     : PEAK_DETECTION_DEFAULTS.peakEmitWindowMs;
   const liveEdgeSamples = Math.max(6, Math.round(sampleRateHz * (liveEdgeMs / 1000)));
-  const rrPlausibilityMaxDev =
-    emittedPeakCount < 4
-      ? PEAK_SCORE_THRESHOLDS.rrMedianMaxRelDev * 1.25
-      : PEAK_SCORE_THRESHOLDS.rrMedianMaxRelDev;
+
+  let bestT = 0;
+  let bestScore = 0;
 
   for (let i = 0; i < ens.peakTimes.length; i++) {
     const t = ens.peakTimes[i] ?? 0;
+    // Refractario: única restricción temporal (no asume regularidad → arritmias OK).
     if (t <= 0 || t < lastEmittedPeakMs + minGap) continue;
-
+    // Latido imposiblemente temprano vs ritmo establecido (dícrota/doble conteo).
+    // Sólo lado bajo: un RR largo (re-sync tras latido perdido) y los PVC pasan.
+    if (minRrAbs > 0 && lastEmittedPeakMs > 0 && t - lastEmittedPeakMs < minRrAbs) continue;
+    // Recencia respecto a "ahora" (borde vivo).
     if (nowMs != null && t < nowMs - liveEdgeMs) continue;
-
     const idx = ens.peaks[i] ?? -1;
     if (nowMs == null) {
       const samplesFromLive = idx >= 0 ? windowSamples - 1 - idx : 999;
       if (samplesFromLive > liveEdgeSamples) continue;
     }
-
-    const rrMs = lastEmittedPeakMs > 0 ? t - lastEmittedPeakMs : undefined;
-    if (
-      rrMs != null &&
-      prevRrMed > 0 &&
-      Math.abs(rrMs - prevRrMed) / prevRrMed > rrPlausibilityMaxDev
-    ) {
-      continue;
-    }
-
     if (!fingerContactConfirmed) continue;
-
+    // Confianza mínima del ensemble (calidad de señal) — NO regularidad RR.
     if (ens.confidence < minPeakConf) continue;
 
     const weightedScore =
       ens.peakScores?.[i] ??
-      scorePeakCandidate({
-        elConf,
-        ensConf: ens.confidence,
-        sqi,
-        perfusionIndex,
-        rrMs,
-        prevRrMedianMs: prevRrMed > 0 ? prevRrMed : undefined,
-      });
+      scorePeakCandidate({ elConf, ensConf: ens.confidence, sqi, perfusionIndex });
 
-    const minScore = PEAK_SCORE_THRESHOLDS.minScore * (stallReacquire ? 0.9 : 0.96);
-    if (weightedScore < minScore) continue;
-
-    if (
-      bestT === 0 ||
-      t > bestT ||
-      (t === bestT && weightedScore > bestScore)
-    ) {
+    // Emite el pico genuino más reciente fuera del refractario.
+    if (bestT === 0 || t > bestT || (t === bestT && weightedScore > bestScore)) {
       bestT = t;
-      bestReason = 'PEAK_DETECTED';
       bestScore = weightedScore;
     }
   }
 
   if (bestT > 0) {
-    return { emit: true, peakTimeMs: bestT, reason: bestReason, weightedScore: bestScore };
-  }
-
-  // Respaldo: mejor candidato en borde vivo por índice
-  let fbT = 0;
-  let fbScore = 0;
-  for (let i = 0; i < ens.peakTimes.length; i++) {
-    const t = ens.peakTimes[i] ?? 0;
-    if (t <= 0 || t < lastEmittedPeakMs + minGap) continue;
-    const idx = ens.peaks[i] ?? -1;
-    const nearLive =
-      nowMs == null
-        ? idx >= 0 && windowSamples - 1 - idx <= liveEdgeSamples
-        : t >= (nowMs ?? t) - liveEdgeMs;
-    if (!nearLive) continue;
-    const score =
-      ens.peakScores?.[i] ??
-      scorePeakCandidate({
-        elConf,
-        ensConf: ens.confidence,
-        sqi,
-        perfusionIndex,
-      });
-    if (score < PEAK_SCORE_THRESHOLDS.minScore * 0.94 || !fingerContactConfirmed) continue;
-    if (t > fbT || (t === fbT && score > fbScore)) {
-      fbT = t;
-      fbScore = score;
+    // Warm-up: exigir score alto sobre el mejor candidato (anti errático inicial).
+    if (
+      inWarmup &&
+      bestScore < PEAK_DETECTION_DEFAULTS.peakEmitWarmupMinScore
+    ) {
+      return { emit: false, peakTimeMs: 0, reason: 'WARMUP_LOW_SCORE' };
     }
-  }
-  if (fbT > 0) {
-    return {
-      emit: true,
-      peakTimeMs: fbT,
-      reason: 'PEAK_DETECTED_FB',
-      weightedScore: fbScore,
-    };
+    return { emit: true, peakTimeMs: bestT, reason: 'PEAK_DETECTED', weightedScore: bestScore };
   }
 
   return { emit: false, peakTimeMs: 0, reason: 'NO_NEW_PEAK' };

@@ -27,6 +27,13 @@ export interface ElgendiPeakDetectorInput {
   minBpm?: number;
   maxBpm?: number;
   minProminence?: number;
+  /**
+   * Si true: la señal ya viene filtrada en banda PPG (0.5–4.5 Hz por el
+   * BandpassFilter IIR streaming). Se omite el bandpass offline interno para
+   * evitar transitorios duplicados y aceleramiento del arranque erratico.
+   * El hampel (anti-outlier) y el zero-center robusto se mantienen.
+   */
+  preFiltered?: boolean;
 }
 
 export interface ElgendiPeakDetectorOutput {
@@ -100,7 +107,12 @@ export class ElgendiPeakDetector {
 
     const hampelWin = Math.max(5, Math.round(fs * 0.25) | 1);
     const cleaned = hampel1D(sig, hampelWin, 3);
-    let x = bandpassOffline(detrendLinear(cleaned), fs);
+    // Si la señal ya viene de un bandpass streaming (BandpassFilter), aplicar
+    // otra vez bandpass + detrend duplica el transitorio (~0.8 s a orden 4) y
+    // produce picos espurios al inicio. En ese caso solo se normaliza.
+    let x = input.preFiltered
+      ? cleaned
+      : bandpassOffline(detrendLinear(cleaned), fs);
     x = robustNormalizeZeroCenter(x);
 
     const w1 = Math.max(3, Math.round((peakMs / 1000) * fs));
@@ -159,6 +171,7 @@ export class ElgendiPeakDetector {
     const peaks = new Array<number>(maxPeaks);
     const peakTimes = new Array<number>(maxPeaks);
     const peakValues = new Array<number>(maxPeaks);
+    const peakProms = new Array<number>(maxPeaks);
     let pk = 0;
 
     for (let bi = 0; bi < blocks.length; bi++) {
@@ -190,7 +203,38 @@ export class ElgendiPeakDetector {
       peaks[pk] = best;
       peakTimes[pk] = ts[best] ?? ts[ts.length - 1];
       peakValues[pk] = sig[best] ?? 0;
+      peakProms[pk] = prom;
       pk++;
+    }
+
+    // Rechazo relativo de amplitud: la muesca dícrota y el ruido tienen menor
+    // prominencia que el pico sistólico. Se descartan los picos por debajo de
+    // una fracción de la prominencia mediana (validado para reducir falsos
+    // positivos sin perder latidos reales con modulación respiratoria).
+    if (pk >= 3) {
+      const promsSorted = peakProms.slice(0, pk).sort((a, b) => a - b);
+      const medProm = promsSorted[Math.floor(promsSorted.length / 2)] ?? 0;
+      const promFloor = medProm * PEAK_DETECTION_DEFAULTS.peakAmplitudeRejectFraction;
+      // Banda de amplitud: descarta picos demasiado bajos (dícrota/ruido) y
+      // demasiado altos (excursiones por micro-movimiento del dedo).
+      const promCeil = medProm * PEAK_DETECTION_DEFAULTS.peakAmplitudeRejectUpper;
+      if (medProm > 0) {
+        let w = 0;
+        for (let r = 0; r < pk; r++) {
+          if (peakProms[r] >= promFloor && peakProms[r] <= promCeil) {
+            peaks[w] = peaks[r];
+            peakTimes[w] = peakTimes[r];
+            peakValues[w] = peakValues[r];
+            w++;
+          } else {
+            rejectedCandidates.push({
+              index: peaks[r],
+              reason: peakProms[r] > promCeil ? 'HIGH_REL_AMPLITUDE' : 'LOW_REL_AMPLITUDE',
+            });
+          }
+        }
+        pk = w;
+      }
     }
 
     // Trim to actual count
