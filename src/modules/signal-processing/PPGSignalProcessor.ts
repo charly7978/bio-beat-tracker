@@ -187,6 +187,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private lastAcceleration = { x: 0, y: 0, z: 0 };
   private readonly MOTION_THRESHOLD = VITAL_THRESHOLDS.QUALITY.MAX_MOTION;
 
+  // Micro-movimiento del dedo DESDE LA SEÑAL (complementa al IMU; ver QUALITY.MOTION_*)
+  private signalMotionScore = 0;
+  private lastRawRedForMotion = 0;
+
   // Cache: PI se calcula una sola vez por frame y se reutiliza en SQI, contact state, etc.
   private cachedPI = 0;
   private underexposureEma = 0;
@@ -347,6 +351,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.greenBuffer.push(roi.rawGreen);
     this.blueBuffer.push(roi.rawBlue);
 
+    this.updateSignalMotion(roi.rawRed);
+
     // ACDC: más frecuente con dedo para que PI/SQI no queden en 0 varios segundos
     if (this.redBuffer.length >= 36 && this.frameCount % 2 === 0) {
       this.calculateACDCPrecise();
@@ -419,7 +425,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       perfusionIndex: this.cachedPI,
       snr: pulseSource.strength,
       periodicity: this.cachedPeriodicity,
-      motionScore: this.motionScore,
+      // Movimiento efectivo = max(IMU, micro-movimiento del dedo desde la señal).
+      motionScore: Math.max(this.motionScore, this.signalMotionScore),
       saturationRatio: roi.rawRed > 250 ? 1 : 0,
       underexposureRatio: this.underexposureEma,
       frameDropRatio: snapPerf.droppedEstimate / Math.max(1, this.frameCount),
@@ -1308,6 +1315,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     resetPulseAgc(this.pulseAgcState);
     this.roiRedPulseRing.reset();
     this.lastRoiRedCv = 0;
+    this.signalMotionScore = 0;
+    this.lastRawRedForMotion = 0;
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
   }
@@ -1350,6 +1359,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.greenDC = 0; this.greenAC = 0;
     this.blueDC = 0; this.blueAC = 0;
     this.motionScore = 0;
+    this.signalMotionScore = 0;
+    this.lastRawRedForMotion = 0;
     this.lastAcceleration = { x: 0, y: 0, z: 0 };
     this.sourceBuffers.R.reset();
     this.sourceBuffers.G.reset();
@@ -1368,6 +1379,28 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
     Object.assign(this.acquisitionState, createAcquisitionState());
+  }
+
+  /**
+   * Score de micro-movimiento del dedo derivado de la SEÑAL (no del IMU).
+   * Un escalón brusco del DC del rojo crudo entre frames = el dedo se movió/
+   * deslizó sobre el lente. El pulso es lento (<1% del DC por frame), así que un
+   * salto grande del DC delata movimiento. EMA lenta → solo el movimiento
+   * sostenido eleva el score; un único frame no alcanza el umbral de supresión.
+   */
+  private updateSignalMotion(rawRed: number): void {
+    // Primer frame con dedo: fija referencia, sin salto espurio (DC base = rawRed).
+    if (this.lastRawRedForMotion === 0) {
+      this.lastRawRedForMotion = rawRed;
+      return;
+    }
+    const Q = VITAL_THRESHOLDS.QUALITY;
+    const dcRef = this.redDC > 1 ? this.redDC : rawRed;
+    const jumpFrac = Math.abs(rawRed - this.lastRawRedForMotion) / Math.max(1, dcRef);
+    this.lastRawRedForMotion = rawRed;
+    const inst = clamp((jumpFrac - Q.MOTION_DC_JUMP_DEADZONE) / Q.MOTION_DC_JUMP_SCALE, 0, 1);
+    this.signalMotionScore =
+      this.signalMotionScore * (1 - Q.MOTION_SIGNAL_EMA_ALPHA) + inst * Q.MOTION_SIGNAL_EMA_ALPHA;
   }
 
   private handleMotionEvent = (event: DeviceMotionEvent) => {

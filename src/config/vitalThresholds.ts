@@ -122,6 +122,19 @@ export const VITAL_THRESHOLDS = {
     DIAG_EXIT_VALID_SQI: 26,
     DIAG_LOW_FRAMES_REQ: 10,
     DIAG_VALID_FRAMES_REQ: 4,
+    /**
+     * MICRO-MOVIMIENTO DEL DEDO DESDE LA SEÑAL (no IMU). El IMU solo capta que se
+     * mueva el teléfono; el micro-movimiento del dedo contra el lente —artefacto
+     * dominante en PPG por cámara (~11 BPM de error, lit. 2019–2024)— se ve como
+     * un ESCALÓN brusco del DC del rojo crudo entre frames, mucho mayor que el
+     * incremento pulsátil (el pulso es lento: <1% del DC por frame). Se mapea el
+     * salto |ΔrawRed|/DC a un score [0..1] y se fusiona (max) con el motionScore
+     * del IMU para gatear la emisión de picos. Conservador: zona muerta amplia +
+     * EMA lenta → solo el movimiento SOSTENIDO suprime, nunca un latido aislado.
+     */
+    MOTION_DC_JUMP_DEADZONE: 0.015,
+    MOTION_DC_JUMP_SCALE: 0.05,
+    MOTION_SIGNAL_EMA_ALPHA: 0.20,
   },
 
   /**
