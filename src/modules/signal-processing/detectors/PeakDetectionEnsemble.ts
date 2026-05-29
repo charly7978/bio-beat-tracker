@@ -17,18 +17,12 @@ export interface PeakDetectionEnsembleInput {
   sqi?: number;
   perfusionIndex?: number;
   legacyPeakIndices?: number[];
-  /**
-   * Señal ya filtrada en banda PPG (BandpassFilter streaming aguas arriba).
-   * Evita el doble bandpass dentro de ElgendiPeakDetector → arranque sin
-   * transitorios espurios.
-   */
-  preFiltered?: boolean;
 }
 
 export class PeakDetectionEnsemble {
   static analyze(input: PeakDetectionEnsembleInput): PeakDetectionResult {
     const log: PeakDetectionResult['rejectedPeaks'] = [];
-    const { signal, timestampsMs, samplingRateHz, sqi, perfusionIndex = 0, preFiltered } = input;
+    const { signal, timestampsMs, samplingRateHz, sqi, perfusionIndex = 0 } = input;
 
     if (signal.length < PEAK_DETECTION_DEFAULTS.minSamplesEnsemble || signal.length !== timestampsMs.length) {
       return {
@@ -78,7 +72,6 @@ export class PeakDetectionEnsemble {
       sqi,
       minProminence: calibration.elgendiMinProminence,
       offsetWeight: calibration.elgendiOffsetWeight,
-      preFiltered,
     });
 
     const elTimeAt = (j: number): number => {

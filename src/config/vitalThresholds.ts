@@ -122,19 +122,6 @@ export const VITAL_THRESHOLDS = {
     DIAG_EXIT_VALID_SQI: 26,
     DIAG_LOW_FRAMES_REQ: 10,
     DIAG_VALID_FRAMES_REQ: 4,
-    /**
-     * MICRO-MOVIMIENTO DEL DEDO DESDE LA SEÑAL (no IMU). El IMU solo capta que se
-     * mueva el teléfono; el micro-movimiento del dedo contra el lente —artefacto
-     * dominante en PPG por cámara (~11 BPM de error, lit. 2019–2024)— se ve como
-     * un ESCALÓN brusco del DC del rojo crudo entre frames, mucho mayor que el
-     * incremento pulsátil (el pulso es lento: <1% del DC por frame). Se mapea el
-     * salto |ΔrawRed|/DC a un score [0..1] y se fusiona (max) con el motionScore
-     * del IMU para gatear la emisión de picos. Conservador: zona muerta amplia +
-     * EMA lenta → solo el movimiento SOSTENIDO suprime, nunca un latido aislado.
-     */
-    MOTION_DC_JUMP_DEADZONE: 0.015,
-    MOTION_DC_JUMP_SCALE: 0.05,
-    MOTION_SIGNAL_EMA_ALPHA: 0.20,
   },
 
   /**
@@ -151,8 +138,8 @@ export const VITAL_THRESHOLDS = {
    * temporal del SQI es la práctica validada para PPG por smartphone.
    */
   ACQUISITION: {
-    /** Frames mínimos con contacto antes de poder declarar READY (≈3,0 s @30 fps). */
-    WARMUP_FRAMES: 90,
+    /** Frames mínimos con contacto antes de poder declarar READY (≈1,2 s @30 fps). */
+    WARMUP_FRAMES: 36,
     /** Frames sostenidos sobre el umbral de entrada antes de pasar a READY (debounce). */
     READY_DWELL_FRAMES: 10,
     /** Frames bajo el umbral de salida antes de abandonar READY (debounce anti-parpadeo). */
@@ -348,4 +335,10 @@ export const VITAL_THRESHOLDS = {
     SOFT_HOLD_FINGER_SCORE: 0.14,
     SOFT_HOLD_RG: 1.04,
   },
+};
+
+export const CALIBRATION_CONFIG = {
+  SPO2_REQUIRED_SAMPLES: 15,
+  BP_REQUIRED_SAMPLES: 25,
+  EXPIRATION_DAYS: 30,
 };

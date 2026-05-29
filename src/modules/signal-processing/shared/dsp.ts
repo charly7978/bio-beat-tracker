@@ -64,6 +64,31 @@ export function movingAverage(x: number[], win: number): number[] {
   return out;
 }
 
+export function derivativeCentral(x: number[], fs: number): number[] {
+  const n = x.length;
+  const out = new Array<number>(n).fill(0);
+  if (n < 3 || fs <= 0) return out;
+  for (let i = 1; i < n - 1; i++) {
+    out[i] = ((x[i + 1] - x[i - 1]) / 2) * fs;
+  }
+  return out;
+}
+
+export function movingWindowIntegration(x: number[], samples: number): number[] {
+  const n = x.length;
+  if (n === 0 || samples < 1) return [];
+  const out = new Array<number>(n).fill(0);
+  let acc = 0;
+  const q: number[] = [];
+  for (let i = 0; i < n; i++) {
+    acc += x[i];
+    q.push(x[i]);
+    if (q.length > samples) acc -= q.shift()!;
+    out[i] = acc / q.length;
+  }
+  return out;
+}
+
 export function hampel1D(y: number[], window: number, nSigma = 3): number[] {
   const n = y.length;
   const out = [...y];
@@ -175,38 +200,22 @@ export function autocorrDominantLag(
   return { lag: bestLag, score: best };
 }
 
+export function bpmFromAutocorr(signal: number[], fs: number): { bpm: number; score: number } {
+  if (signal.length < 40 || fs < 8) return { bpm: 0, score: 0 };
+  const det = detrendLinear(signal);
+  const mean = det.reduce((a, b) => a + b, 0) / det.length;
+  const centered = det.map((v) => v - mean);
+  const minLag = Math.max(3, Math.round((fs * 60) / 200));
+  const maxLag = Math.min(centered.length - 3, Math.round((fs * 60) / 38));
+  const { lag, score } = autocorrDominantLag(centered, minLag, maxLag);
+  if (lag <= 0 || score < 0.12) return { bpm: 0, score };
+  return { bpm: (60 * fs) / lag, score };
+}
+
 export function bandpassOffline(signal: number[], fs: number): number[] {
   const f = new BandpassFilter(fs);
   f.reset();
   return signal.map((s) => f.filter(s));
-}
-
-/**
- * Skewness (Fisher–Pearson) de una ventana. SQI más fuerte según Elgendi 2016
- * (F1 ≈ 86% en excelente vs aceptable/no-apto). PPG limpia tiene skew > 0
- * (sístole rápida ascendente, diástole lenta); la corrupción por micro-movimiento
- * tiende a simetría (skew ≈ 0 o negativa). O(n), sin alocación.
- */
-export function quickSkewness(values: number[], offset = 0, length?: number): number {
-  const start = offset;
-  const end = length != null ? Math.min(values.length, start + length) : values.length;
-  const n = end - start;
-  if (n < 8) return 0;
-  let sum = 0;
-  for (let i = start; i < end; i++) sum += values[i];
-  const mean = sum / n;
-  let m2 = 0;
-  let m3 = 0;
-  for (let i = start; i < end; i++) {
-    const d = values[i] - mean;
-    const d2 = d * d;
-    m2 += d2;
-    m3 += d2 * d;
-  }
-  const variance = m2 / n;
-  if (variance < 1e-9) return 0;
-  const std = Math.sqrt(variance);
-  return (m3 / n) / (std * std * std);
 }
 
 /**

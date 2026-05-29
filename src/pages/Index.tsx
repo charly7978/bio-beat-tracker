@@ -50,7 +50,6 @@ const Index = () => {
     setRuntimeHints: setHeartBeatRuntimeHints,
     reset: resetHeartBeat,
     reacquirePeaks: reacquireHeartPeaks,
-    resetHistoryKeepBuffers: resetHeartHistory,
   } = useHeartBeatProcessor();
 
   const { 
@@ -94,7 +93,6 @@ const Index = () => {
       setRuntimeHints: setHeartBeatRuntimeHints,
       reacquirePeaks: reacquireHeartPeaks,
       reset: resetHeartBeat,
-      resetHistoryKeepBuffers: resetHeartHistory,
     },
     processVitalSigns: {
       processSignal: processVitalSigns,
@@ -164,13 +162,11 @@ const Index = () => {
       exposureLockedRef.current = false;
       return;
     }
-    const d = lastSignal?.diagnostics as Record<string, unknown> | undefined;
-    const stage = d?.acquisitionStage;
-    if (!exposureLockedRef.current && stage === 'READY') {
+    if (!exposureLockedRef.current && cs === 'STABLE_CONTACT') {
       exposureLockedRef.current = true;
       cameraRef.current?.lockExposureToScene?.();
     }
-  }, [lastSignal?.contactState, (lastSignal?.diagnostics as Record<string, unknown> | undefined)?.acquisitionStage]);
+  }, [lastSignal?.contactState]);
 
   // Sincronizar resultados post-medición
   useEffect(() => {

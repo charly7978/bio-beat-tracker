@@ -187,10 +187,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private lastAcceleration = { x: 0, y: 0, z: 0 };
   private readonly MOTION_THRESHOLD = VITAL_THRESHOLDS.QUALITY.MAX_MOTION;
 
-  // Micro-movimiento del dedo DESDE LA SEÑAL (complementa al IMU; ver QUALITY.MOTION_*)
-  private signalMotionScore = 0;
-  private lastRawRedForMotion = 0;
-
   // Cache: PI se calcula una sola vez por frame y se reutiliza en SQI, contact state, etc.
   private cachedPI = 0;
   private underexposureEma = 0;
@@ -339,10 +335,22 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     else if (this.pixelStride > 6) rejectionStatus = "LOW_FPS";
     else if (this.frameCount < 28) rejectionStatus = "WARMUP";
 
-    const isSignalInvalid =
-      rejectionStatus === "SATURATED" ||
-      rejectionStatus === "UNDEREXPOSED" ||
-      rejectionStatus === "LOW_FPS";
+    if (rejectionStatus && rejectionStatus !== "WARMUP" && rejectionStatus !== "MOTION_ARTIFACT") {
+      this.onSignalReady({
+        timestamp,
+        rawValue: 0, filteredValue: 0, quality: 0,
+        fingerDetected: true, contactState: this.contactState,
+        motionArtifact,
+        roi: this.signalRoiFromMetrics(roi),
+        perfusionIndex: this.cachedPI,
+        rawRed: roi.rawRed,
+        rawGreen: roi.rawGreen,
+        diagnostics: this.buildFingerDiagnostics(roi, motionArtifact, rejectionStatus, {
+          message: `RECHAZADO: ${rejectionStatus}`,
+        }),
+      });
+      // No retornamos aquí para permitir que los buffers sigan llenándose, pero la UI sabrá que no es válido
+    }
 
     // Tenemos contacto (UNSTABLE o STABLE)
     this.updateChannelBaselines(roi.rawRed, roi.rawGreen, roi.rawBlue, motionArtifact);
@@ -350,8 +358,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.redBuffer.push(roi.rawRed);
     this.greenBuffer.push(roi.rawGreen);
     this.blueBuffer.push(roi.rawBlue);
-
-    this.updateSignalMotion(roi.rawRed);
 
     // ACDC: más frecuente con dedo para que PI/SQI no queden en 0 varios segundos
     if (this.redBuffer.length >= 36 && this.frameCount % 2 === 0) {
@@ -425,8 +431,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       perfusionIndex: this.cachedPI,
       snr: pulseSource.strength,
       periodicity: this.cachedPeriodicity,
-      // Movimiento efectivo = max(IMU, micro-movimiento del dedo desde la señal).
-      motionScore: Math.max(this.motionScore, this.signalMotionScore),
+      motionScore: this.motionScore,
       saturationRatio: roi.rawRed > 250 ? 1 : 0,
       underexposureRatio: this.underexposureEma,
       frameDropRatio: snapPerf.droppedEstimate / Math.max(1, this.frameCount),
@@ -500,56 +505,42 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       },
     );
 
-    const finalRawValue = signalPathActive && !isSignalInvalid ? pulseSource.value : 0;
-    const finalFilteredValue = signalPathActive && !isSignalInvalid ? enhanced : 0;
-    const finalMorphValue = signalPathActive && !isSignalInvalid ? morphFiltered : 0;
-    const finalQuality = !isSignalInvalid ? displayQuality : 0;
-    const finalFingerUi = !isSignalInvalid && fingerUi;
-    const finalPerfusion = !isSignalInvalid ? perfusionIndex : 0;
-
     this.onSignalReady({
       timestamp,
-      rawValue: finalRawValue,
-      filteredValue: finalFilteredValue,
-      morphologyValue: finalMorphValue,
+      rawValue: signalPathActive ? pulseSource.value : 0,
+      filteredValue: signalPathActive ? enhanced : 0,
+      morphologyValue: signalPathActive ? morphFiltered : 0,
       placementMode: this.placementMode,
-      quality: finalQuality,
-      fingerDetected: finalFingerUi,
+      quality: displayQuality,
+      fingerDetected: fingerUi,
       contactState: this.contactState,
       motionArtifact,
       roi: this.signalRoiFromMetrics(roi),
-      perfusionIndex: finalPerfusion,
+      perfusionIndex,
       rawRed: roi.rawRed,
       rawGreen: roi.rawGreen,
       diagnostics: {
-        ...this.buildFingerDiagnostics(
-          roi,
-          motionArtifact,
-          isSignalInvalid ? rejectionStatus! : displayStatus,
-          {
-            message: isSignalInvalid
-              ? `RECHAZADO: ${rejectionStatus}`
-              : `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
-                `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
-                `C:${(roi.coverageRatio * 100).toFixed(0)}% ${this.placementMode} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
-            placementMode: this.placementMode,
-            placementHint: placementHintText(this.placementMode),
-            hasPulsatility:
-              !isSignalInvalid &&
-              fingerUi &&
-              (SignalQualityIndex.isClinicallyValid(rawSqiOut, perfusionIndex) ||
-                SignalQualityIndex.isAdequateForLiveVitals(rawSqiOut, perfusionIndex)),
-            pulsatilityValue:
-              !isSignalInvalid && this.contactState === 'STABLE_CONTACT'
-                ? Math.max(perfusionIndex, pulseSource.strength * 0.02)
-                : 0,
-          }
-        ),
+        ...this.buildFingerDiagnostics(roi, motionArtifact, displayStatus, {
+          message:
+            `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
+            `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
+            `C:${(roi.coverageRatio * 100).toFixed(0)}% ${this.placementMode} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
+          placementMode: this.placementMode,
+          placementHint: placementHintText(this.placementMode),
+          hasPulsatility:
+            fingerUi &&
+            (SignalQualityIndex.isClinicallyValid(rawSqiOut, perfusionIndex) ||
+              SignalQualityIndex.isAdequateForLiveVitals(rawSqiOut, perfusionIndex)),
+          pulsatilityValue:
+            this.contactState === 'STABLE_CONTACT'
+              ? Math.max(perfusionIndex, pulseSource.strength * 0.02)
+              : 0,
+        }),
         sqm: {
-          sqi: isSignalInvalid ? 0 : rawSqiOut,
-          perfusionIndex: isSignalInvalid ? 0 : perfusionIndex,
-          snr: isSignalInvalid ? 0 : pulseSource.strength,
-          periodicity: isSignalInvalid ? 0 : this.cachedPeriodicity,
+          sqi: rawSqiOut,
+          perfusionIndex: perfusionIndex,
+          snr: pulseSource.strength,
+          periodicity: this.cachedPeriodicity,
           motionScore: this.motionScore,
           saturationRatio: (roi.rawRed > 250 ? 1 : 0),
           underexposureRatio: this.underexposureEma,
@@ -1315,8 +1306,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     resetPulseAgc(this.pulseAgcState);
     this.roiRedPulseRing.reset();
     this.lastRoiRedCv = 0;
-    this.signalMotionScore = 0;
-    this.lastRawRedForMotion = 0;
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
   }
@@ -1359,8 +1348,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.greenDC = 0; this.greenAC = 0;
     this.blueDC = 0; this.blueAC = 0;
     this.motionScore = 0;
-    this.signalMotionScore = 0;
-    this.lastRawRedForMotion = 0;
     this.lastAcceleration = { x: 0, y: 0, z: 0 };
     this.sourceBuffers.R.reset();
     this.sourceBuffers.G.reset();
@@ -1379,28 +1366,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
     Object.assign(this.acquisitionState, createAcquisitionState());
-  }
-
-  /**
-   * Score de micro-movimiento del dedo derivado de la SEÑAL (no del IMU).
-   * Un escalón brusco del DC del rojo crudo entre frames = el dedo se movió/
-   * deslizó sobre el lente. El pulso es lento (<1% del DC por frame), así que un
-   * salto grande del DC delata movimiento. EMA lenta → solo el movimiento
-   * sostenido eleva el score; un único frame no alcanza el umbral de supresión.
-   */
-  private updateSignalMotion(rawRed: number): void {
-    // Primer frame con dedo: fija referencia, sin salto espurio (DC base = rawRed).
-    if (this.lastRawRedForMotion === 0) {
-      this.lastRawRedForMotion = rawRed;
-      return;
-    }
-    const Q = VITAL_THRESHOLDS.QUALITY;
-    const dcRef = this.redDC > 1 ? this.redDC : rawRed;
-    const jumpFrac = Math.abs(rawRed - this.lastRawRedForMotion) / Math.max(1, dcRef);
-    this.lastRawRedForMotion = rawRed;
-    const inst = clamp((jumpFrac - Q.MOTION_DC_JUMP_DEADZONE) / Q.MOTION_DC_JUMP_SCALE, 0, 1);
-    this.signalMotionScore =
-      this.signalMotionScore * (1 - Q.MOTION_SIGNAL_EMA_ALPHA) + inst * Q.MOTION_SIGNAL_EMA_ALPHA;
   }
 
   private handleMotionEvent = (event: DeviceMotionEvent) => {

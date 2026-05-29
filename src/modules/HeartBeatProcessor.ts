@@ -7,8 +7,7 @@ import { robustBounds } from '../utils/stats';
 import { PEAK_DETECTION_DEFAULTS } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
-import { autocorrDominantLag, quickSkewness } from './signal-processing/shared/dsp';
-import { computeRrHrv } from '../utils/physio';
+import { autocorrDominantLag } from './signal-processing/shared/dsp';
 import {
   inferCameraRuntimeHints,
   type CameraRuntimeHints,
@@ -224,19 +223,12 @@ export class HeartBeatProcessor {
         samplingRateHz: sampleRate,
         sqi: ensSqi,
         perfusionIndex: this.ppgPerfusionIndex,
-        // La señal ya viene del BandpassFilter streaming (PPGSignalProcessor).
-        // Evita re-filtrar offline dentro de Elgendi (transitorio duplicado).
-        preFiltered: true,
       });
       ensembleConf = ens.confidence;
 
       const minPeakConf =
         VITAL_THRESHOLDS.QUALITY.MIN_ENSEMBLE_CONF_FOR_PEAK *
         (this.cameraHints.constrained ? 0.42 : 0.52);
-
-      // Skewness SQI (Elgendi 2016): rechaza ventanas corruptas por micro-movimiento.
-      // Se evalúa siempre (con umbrales diferenciados en decidePeakEmit) para proteger contra temblores.
-      const skew = quickSkewness(sigRaw);
 
       const decision = decidePeakEmit({
         ens,
@@ -252,8 +244,6 @@ export class HeartBeatProcessor {
         recentRrMs: this.rrIntervals,
         sqi: ensSqi,
         perfusionIndex: this.ppgPerfusionIndex,
-        signalSkewness: skew,
-        elgendiAgreement: ens.agreement?.elgendi,
       });
 
       // Gate de movimiento: durante movimiento claro (IMU) la señal está
@@ -292,7 +282,6 @@ export class HeartBeatProcessor {
         if (instantBpm > 0) {
           const acceptOutlier =
             this.smoothBPM <= 0 ||
-            this.emittedPeakCount < PEAK_DETECTION_DEFAULTS.peakEmitWarmupCount ||
             Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= 0.4;
           if (acceptOutlier) {
             if (this.smoothBPM === 0) {
@@ -465,10 +454,11 @@ export class HeartBeatProcessor {
     if (derivCount > 0) meanAbsDeriv /= derivCount;
     const slopeFactor = Math.min(1, meanAbsDeriv / 0.8) * 14;
 
-    // CV-RR reutilizado desde el núcleo HRV compartido (sin duplicar cálculo).
     let rrFactor = 0;
     if (this.rrIntervals.length >= 3) {
-      const cv = computeRrHrv(this.rrIntervals).cv;
+      const m = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
+      const v = this.rrIntervals.reduce((a, rr) => a + (rr - m) ** 2, 0) / this.rrIntervals.length;
+      const cv = Math.sqrt(v) / Math.max(1, m);
       rrFactor = Math.max(0, 1 - cv * 2) * 24;
     }
 
@@ -495,8 +485,9 @@ export class HeartBeatProcessor {
       return clamp(sqiFactor * 0.22 + peakSupport * 0.22 + ens * 0.36 + peakBoost + nnBoost, 0, 0.85);
     }
 
-    // CV-RR del núcleo HRV compartido (sin recalcular media/varianza ad-hoc).
-    const cv = computeRrHrv(this.rrIntervals).cv;
+    const mean = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
+    const variance = this.rrIntervals.reduce((a, rr) => a + (rr - mean) ** 2, 0) / this.rrIntervals.length;
+    const cv = Math.sqrt(variance) / Math.max(1, mean);
     const rrStability = clamp(1 - cv * 1.5, 0, 1);
 
     return clamp(
@@ -542,23 +533,6 @@ export class HeartBeatProcessor {
     this.gateRelaxUntilMs = t + 6500;
     this.reacquireModeUntilMs = t + 6500;
     this.consecutivePeaks = 0;
-  }
-
-  /**
-   * Limpia la historia de picos y suavizado de BPM pero conserva los buffers de señal.
-   * Útil para reiniciar la detección desde limpio tras el transitorio de estabilización de la cámara.
-   * Establece lastPeakTime y lastEmittedPeakTime en nowMs para ignorar picos anteriores en el buffer.
-   */
-  resetHistoryKeepBuffers(nowMs: number): void {
-    this.rrIntervals = [];
-    this.smoothBPM = 0;
-    this.lastPeakTime = nowMs;
-    this.lastEmittedPeakTime = nowMs;
-    this.consecutivePeaks = 0;
-    this.emittedPeakCount = 0;
-    this.gateRelaxUntilMs = 0;
-    this.reacquireModeUntilMs = 0;
-    this.lastDiagnostics = {};
   }
 
   /** Limpia estado de picos/RR al quitar el dedo o al volver a colocarlo. */

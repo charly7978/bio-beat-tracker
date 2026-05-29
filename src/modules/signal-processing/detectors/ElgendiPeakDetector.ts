@@ -27,13 +27,6 @@ export interface ElgendiPeakDetectorInput {
   minBpm?: number;
   maxBpm?: number;
   minProminence?: number;
-  /**
-   * Si true: la señal ya viene filtrada en banda PPG (0.5–4.5 Hz por el
-   * BandpassFilter IIR streaming). Se omite el bandpass offline interno para
-   * evitar transitorios duplicados y aceleramiento del arranque erratico.
-   * El hampel (anti-outlier) y el zero-center robusto se mantienen.
-   */
-  preFiltered?: boolean;
 }
 
 export interface ElgendiPeakDetectorOutput {
@@ -107,12 +100,7 @@ export class ElgendiPeakDetector {
 
     const hampelWin = Math.max(5, Math.round(fs * 0.25) | 1);
     const cleaned = hampel1D(sig, hampelWin, 3);
-    // Si la señal ya viene de un bandpass streaming (BandpassFilter), aplicar
-    // otra vez bandpass + detrend duplica el transitorio (~0.8 s a orden 4) y
-    // produce picos espurios al inicio. En ese caso solo se normaliza.
-    let x = input.preFiltered
-      ? cleaned
-      : bandpassOffline(detrendLinear(cleaned), fs);
+    let x = bandpassOffline(detrendLinear(cleaned), fs);
     x = robustNormalizeZeroCenter(x);
 
     const w1 = Math.max(3, Math.round((peakMs / 1000) * fs));

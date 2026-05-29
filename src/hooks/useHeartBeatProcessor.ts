@@ -162,10 +162,6 @@ export const useHeartBeatProcessor = () => {
     processorRef.current?.softReacquirePeaks(timestamp);
   }, []);
 
-  const resetHistoryKeepBuffers = useCallback((nowMs: number) => {
-    processorRef.current?.resetHistoryKeepBuffers(nowMs);
-  }, []);
-
   const reset = useCallback(() => {
     if (processingStateRef.current === 'RESETTING') return;
     processingStateRef.current = 'RESETTING';
@@ -189,7 +185,6 @@ export const useHeartBeatProcessor = () => {
     setRuntimeHints,
     reacquirePeaks,
     reset,
-    resetHistoryKeepBuffers,
     debugInfo: {
       sessionId: sessionIdRef.current,
       processingState: processingStateRef.current,

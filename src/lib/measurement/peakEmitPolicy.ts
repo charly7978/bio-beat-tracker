@@ -8,12 +8,6 @@
  *     permanente tras un latido perdido).
  *   - La genuinidad del pico la dan Elgendi (umbral + cuadrado + rechazo de
  *     amplitud), el refractario y la confianza del ensemble.
- *
- * Anti-micromovimiento (literatura 2024–2026):
- *   - Skewness mínima de ventana (Elgendi 2016: SQI más fuerte).
- *   - Concordancia mínima del detector durante warm-up (NeuroKit2 ho2025:
- *     doble-detector concordance reduce falsos positivos).
- *   - Warm-up estricto: primeros N picos exigen `weightedScore` alto.
  */
 import type { PeakDetectionResult } from '@/types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '@/config/signalProcessing';
@@ -43,17 +37,6 @@ export interface PeakEmitPolicyInput {
   recentRrMs?: number[];
   sqi?: number;
   perfusionIndex?: number;
-  /**
-   * Skewness de la ventana de señal — SQI Elgendi 2016. Si < umbral, la ventana
-   * está corrupta por movimiento (rechaza emisión). Opcional → si no se provee,
-   * el gate no actúa (retro-compatible).
-   */
-  signalSkewness?: number;
-  /**
-   * Acuerdo Elgendi (fracción de candidatos consensuados / candidatos totales).
-   * Durante warm-up se exige ≥ umbral para emitir.
-   */
-  elgendiAgreement?: number;
 }
 
 export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
@@ -65,43 +48,12 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     windowSamples,
     fingerContactConfirmed = true,
     nowMs,
-    emittedPeakCount = 0,
     peakStallMs = 0,
     reacquireMode = false,
     recentRrMs = [],
     sqi = 0,
     perfusionIndex = 0,
-    signalSkewness,
-    elgendiAgreement,
   } = input;
-
-  // ── Gates de arranque (anti-errático): rechazan emisión si la ventana es de
-  // baja calidad o el consenso del detector aún no es firme. Solo se activan
-  // durante warm-up para no recortar arritmias ya establecidas.
-  const inWarmup = emittedPeakCount < PEAK_DETECTION_DEFAULTS.peakEmitWarmupCount;
-  // ── Gates de arranque (anti-errático) y asimetría continua (anti-micromovimiento):
-  // Rechazan emisión si la ventana está distorsionada (Elgendi 2016).
-  if (
-    typeof signalSkewness === 'number' &&
-    Number.isFinite(signalSkewness)
-  ) {
-    const minSkew = inWarmup
-      ? PEAK_DETECTION_DEFAULTS.peakEmitMinSkewness // 0.18
-      : 0.05; // Más tolerante en régimen estable pero bloquea ruido simétrico/tremor
-    if (signalSkewness < minSkew) {
-      return { emit: false, peakTimeMs: 0, reason: 'LOW_SKEWNESS' };
-    }
-  }
-
-  if (inWarmup) {
-    if (
-      typeof elgendiAgreement === 'number' &&
-      Number.isFinite(elgendiAgreement) &&
-      elgendiAgreement < PEAK_DETECTION_DEFAULTS.peakEmitMinAgreementWarmup
-    ) {
-      return { emit: false, peakTimeMs: 0, reason: 'LOW_AGREEMENT' };
-    }
-  }
 
   const stallReacquire =
     reacquireMode ||
@@ -159,13 +111,6 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
   }
 
   if (bestT > 0) {
-    // Warm-up: exigir score alto sobre el mejor candidato (anti errático inicial).
-    if (
-      inWarmup &&
-      bestScore < PEAK_DETECTION_DEFAULTS.peakEmitWarmupMinScore
-    ) {
-      return { emit: false, peakTimeMs: 0, reason: 'WARMUP_LOW_SCORE' };
-    }
     return { emit: true, peakTimeMs: bestT, reason: 'PEAK_DETECTED', weightedScore: bestScore };
   }
 

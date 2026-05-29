@@ -47,38 +47,6 @@ export const PEAK_DETECTION_DEFAULTS = {
    */
   peakEmitMotionSuppress: 0.6,
   /**
-   * Skewness mínima de la ventana de señal para emitir pico (Elgendi 2016).
-   * El SQI por skewness es el más fuerte para distinguir PPG limpia (skew > 0)
-   * de PPG corrupta por movimiento (skew ≈ 0 o negativa, simétrica). 0.18 es
-   * conservador para no rechazar latidos reales con variabilidad respiratoria.
-   * Ref: M. Elgendi, "Optimal Signal Quality Index for Photoplethysmogram
-   * Signals", Bioengineering, 2016.
-   */
-  peakEmitMinSkewness: 0.18,
-  /**
-   * Acuerdo Elgendi mínimo (fracción de candidatos consensuados / candidatos
-   * totales) requerido DURANTE el warm-up para emitir picos. Equivalente al
-   * principio de doble-detector concordance de NeuroKit2 ho2025: un latido es
-   * fiable si dos detectores lo encuentran en la misma posición ± tolerancia.
-   */
-  peakEmitMinAgreementWarmup: 0.55,
-  /**
-   * Nº de primeros picos emitidos considerados "warm-up": durante esta fase
-   * inicial se exige mayor calidad (skewness, agreement, weightedScore) para
-   * evitar picos espurios mientras el AGC/AE/filtros aún se asientan. 6 (~6 s a
-   * 60 bpm) cubre mejor el transitorio inicial errático que reportó el usuario
-   * sin frenar la detección establecida (el resto del arranque lo domina el
-   * acondicionamiento de señal + el gate de micro-movimiento).
-   */
-  peakEmitWarmupCount: 6,
-  /**
-   * weightedScore mínimo durante warm-up (más estricto que en régimen estable).
-   * Reduce el arranque errático: solo se publican picos de alta evidencia hasta
-   * que el ritmo está bien establecido. Knob primario para ajustar el balance
-   * "arranque firme" vs "primer latido rápido" según prueba en dispositivo.
-   */
-  peakEmitWarmupMinScore: 0.46,
-  /**
    * Rechazo relativo de amplitud en Elgendi: se descartan picos cuya prominencia
    * sea menor que esta fracción de la prominencia mediana (muesca dícrota/ruido
    * son de menor amplitud que el pico sistólico). Conservador para no perder

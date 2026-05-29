@@ -50,7 +50,6 @@ interface HeartBeatProcessorAPI {
   setRuntimeHints: (hints: CameraRuntimeHints) => void;
   reacquirePeaks: (timestamp?: number) => void;
   reset: () => void;
-  resetHistoryKeepBuffers: (nowMs: number) => void;
 }
 
 interface VitalSignsProcessorAPI {
@@ -117,7 +116,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   // mientras la cámara/AE y el contacto se asientan). Una vez estabilizado, se
   // mantiene durante toda la sesión de contacto.
   const acqReadyLatchRef = useRef(false);
-  const hasStabilizedThisSessionRef = useRef(false);
 
   // Throttle timers
   const lastHrPushRef = useRef(0);
@@ -195,7 +193,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastRrSnapshotRef.current = null;
     unstableFrameCounter.current = 0;
     acqReadyLatchRef.current = false;
-    hasStabilizedThisSessionRef.current = false;
     setRRIntervals([]);
     setBeatMarker(0);
     if (beatMarkerTimerRef.current) {
@@ -388,17 +385,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         : undefined;
     if (acqStage === 'READY') acqReadyLatchRef.current = true;
     const acqStabilized = acqReadyLatchRef.current;
-
-    // Al estabilizar la adquisición por primera vez en la sesión, reseteamos el historial
-    // para desechar picos erráticos detectados durante la autoexposición inicial y el transitorio IIR.
-    if (acqStabilized && !hasStabilizedThisSessionRef.current) {
-      hasStabilizedThisSessionRef.current = true;
-      processHeartBeat.resetHistoryKeepBuffers(performance.now());
-      bpmSanityRef.current.reset();
-      sanityErrorRef.current = null;
-      setSanityError(null);
-    }
-
     const bpmDisplay = acqStabilized ? bpmOut : 0;
 
     const piMin = Q.MIN_PI * Math.max(0.04, hints.minPiScale * 0.18);
