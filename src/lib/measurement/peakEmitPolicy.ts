@@ -56,18 +56,12 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     reacquireMode ||
     (fingerContactConfirmed && peakStallMs >= 1800);
 
+  const minGap =
+    VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS *
+    PEAK_DETECTION_DEFAULTS.peakEmitRefractoryFactor;
+
   const elConf = (ens.diagnostics as { elgendiConfidence?: number }).elgendiConfidence ?? 0;
   const prevRrMed = rrMedianMs(recentRrMs);
-
-  // Refractario adaptativo: bloquea muesca dícrota y doble conteo a HR bajas,
-  // sin frenar latidos reales a HR altas (RR > 300 ms hasta ~200 bpm).
-  const minGap =
-    prevRrMed > 0
-      ? Math.max(
-          PEAK_DETECTION_DEFAULTS.peakEmitRefractoryMinMs,
-          prevRrMed * PEAK_DETECTION_DEFAULTS.peakEmitRefractoryFraction,
-        )
-      : PEAK_DETECTION_DEFAULTS.peakEmitRefractoryMinMs;
 
   let bestT = 0;
   let bestReason = '';
@@ -148,16 +142,6 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
         ? idx >= 0 && windowSamples - 1 - idx <= liveEdgeSamples
         : t >= (nowMs ?? t) - liveEdgeMs;
     if (!nearLive) continue;
-    // El respaldo relaja el score, pero NO la plausibilidad de RR: así no
-    // re-admite picos con intervalo implausible que el bucle principal rechazó.
-    const fbRrMs = lastEmittedPeakMs > 0 ? t - lastEmittedPeakMs : undefined;
-    if (
-      fbRrMs != null &&
-      prevRrMed > 0 &&
-      Math.abs(fbRrMs - prevRrMed) / prevRrMed > rrPlausibilityMaxDev
-    ) {
-      continue;
-    }
     const score =
       ens.peakScores?.[i] ??
       scorePeakCandidate({

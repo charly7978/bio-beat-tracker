@@ -159,7 +159,6 @@ export class ElgendiPeakDetector {
     const peaks = new Array<number>(maxPeaks);
     const peakTimes = new Array<number>(maxPeaks);
     const peakValues = new Array<number>(maxPeaks);
-    const peakProms = new Array<number>(maxPeaks);
     let pk = 0;
 
     for (let bi = 0; bi < blocks.length; bi++) {
@@ -191,32 +190,7 @@ export class ElgendiPeakDetector {
       peaks[pk] = best;
       peakTimes[pk] = ts[best] ?? ts[ts.length - 1];
       peakValues[pk] = sig[best] ?? 0;
-      peakProms[pk] = prom;
       pk++;
-    }
-
-    // Rechazo relativo de amplitud: la muesca dícrota y el ruido tienen menor
-    // prominencia que el pico sistólico. Se descartan los picos por debajo de
-    // una fracción de la prominencia mediana (validado para reducir falsos
-    // positivos sin perder latidos reales con modulación respiratoria).
-    if (pk >= 3) {
-      const promsSorted = peakProms.slice(0, pk).sort((a, b) => a - b);
-      const medProm = promsSorted[Math.floor(promsSorted.length / 2)] ?? 0;
-      const promFloor = medProm * PEAK_DETECTION_DEFAULTS.peakAmplitudeRejectFraction;
-      if (medProm > 0) {
-        let w = 0;
-        for (let r = 0; r < pk; r++) {
-          if (peakProms[r] >= promFloor) {
-            peaks[w] = peaks[r];
-            peakTimes[w] = peakTimes[r];
-            peakValues[w] = peakValues[r];
-            w++;
-          } else {
-            rejectedCandidates.push({ index: peaks[r], reason: 'LOW_REL_AMPLITUDE' });
-          }
-        }
-        pk = w;
-      }
     }
 
     // Trim to actual count
