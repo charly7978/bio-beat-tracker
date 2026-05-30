@@ -9,10 +9,31 @@ interface UseFrameLoopInput {
   processFrame: (imageData: ImageData, timestamp?: number) => void;
 }
 
+/**
+ * Firma barata del contenido del frame = suma del canal verde sobre una grilla
+ * dispersa (~1 de cada 16 px). Dos frames con píxeles idénticos dan idéntica
+ * suma; cualquier cambio real del PPG (pulsación) altera la suma. Permite
+ * descartar FRAMES DUPLICADOS, que aparecen cuando el dispositivo NO soporta
+ * requestVideoFrameCallback y cae al fallback requestAnimationFrame (~60 fps):
+ * la cámara entrega ~30 fps reales pero rAF dispara ~60, así que la mitad de los
+ * frames son idénticos → valor repetido → onda escalonada ("legos") + sample-rate
+ * mal estimado. Saltarlos universaliza el funcionamiento y ahorra CPU.
+ */
+function frameSignature(img: ImageData): number {
+  const d = img.data;
+  const n = d.length;
+  let sum = 0;
+  for (let i = 1; i < n; i += 64) sum += d[i]; // i=1 → canal verde; step 64 B = cada 16 px
+  return sum;
+}
+
 export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: UseFrameLoopInput) {
   const frameLoopRef = useRef<number | null>(null);
   const videoFrameLoopRef = useRef<number | null>(null);
   const isProcessingRef = useRef(false);
+  const lastFrameSigRef = useRef<number>(-1);
+  const duplicateStreakRef = useRef<number>(0);
+  const lastRafTsRef = useRef<number>(0);
 
   const startFrameLoop = useCallback(() => {
     if (isProcessingRef.current) return;
@@ -20,6 +41,9 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
     const ctx = ctxRef.current;
     if (!canvas || !ctx) return;
     isProcessingRef.current = true;
+    lastFrameSigRef.current = -1;
+    duplicateStreakRef.current = 0;
+    lastRafTsRef.current = 0;
 
     const captureOneFrame = (frameTimestampMs?: number) => {
       if (!isProcessingRef.current) return;
@@ -31,7 +55,17 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
       try {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        processFrame(imageData, frameTimestampMs);
+        // Descarta frames DUPLICADOS (idénticos al anterior) — fallback rAF en
+        // devices sin requestVideoFrameCallback. Guarda anti-lockup: si se acumulan
+        // ~90 duplicados seguidos (cámara congelada / firma estática), procesa igual.
+        const sig = frameSignature(imageData);
+        if (sig === lastFrameSigRef.current && duplicateStreakRef.current < 90) {
+          duplicateStreakRef.current++;
+        } else {
+          duplicateStreakRef.current = 0;
+          lastFrameSigRef.current = sig;
+          processFrame(imageData, frameTimestampMs);
+        }
       } catch {
         /* drawImage / getImageData can throw if the video tears down mid-frame */
       }
@@ -53,8 +87,22 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
           captureOneFrame(ts);
         });
       } else {
-        ppgPerf.markFrame();
-        frameLoopRef.current = requestAnimationFrame((ts) => captureOneFrame(ts));
+        // Fallback rAF (device sin requestVideoFrameCallback): rAF dispara a la
+        // tasa de refresco (~60 fps) pero la cámara entrega ≤30 fps → se limita a
+        // ~33 fps para no gastar CPU en drawImage/getImageData de más (clave en
+        // devices lentos) ni sobre-muestrear. El dup-skip cubre los duplicados
+        // residuales por desfase de fase.
+        const tick = (ts: number) => {
+          if (!isProcessingRef.current) return;
+          if (ts - lastRafTsRef.current < 28) {
+            frameLoopRef.current = requestAnimationFrame(tick);
+            return;
+          }
+          lastRafTsRef.current = ts;
+          ppgPerf.markFrame();
+          captureOneFrame(ts);
+        };
+        frameLoopRef.current = requestAnimationFrame(tick);
       }
     };
 
