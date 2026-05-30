@@ -12,6 +12,10 @@ import {
 import { evaluateMeasurementReadiness } from '@/lib/measurement/measurementReadiness';
 import { bpmFromEmittedRr } from '@/lib/measurement/peakEmitPolicy';
 import {
+  createStabilizationState,
+  updateStabilization,
+} from '@/lib/measurement/signalStabilization';
+import {
   DISPLAY_SMOOTH_ALPHAS,
   smoothDisplayPair,
   smoothDisplayValue,
@@ -116,6 +120,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   // mientras la cámara/AE y el contacto se asientan). Una vez estabilizado, se
   // mantiene durante toda la sesión de contacto.
   const acqReadyLatchRef = useRef(false);
+  const stabilizationRef = useRef(createStabilizationState());
 
   // Throttle timers
   const lastHrPushRef = useRef(0);
@@ -193,6 +198,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastRrSnapshotRef.current = null;
     unstableFrameCounter.current = 0;
     acqReadyLatchRef.current = false;
+    stabilizationRef.current = createStabilizationState();
     setRRIntervals([]);
     setBeatMarker(0);
     if (beatMarkerTimerRef.current) {
@@ -325,10 +331,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       diag && typeof diag === 'object'
         ? { ...diag, peakDetection: heartBeatResult.ensembleDiagnostics }
         : { peakDetection: heartBeatResult.ensembleDiagnostics };
-    if (nowT - lastDiagPushRef.current >= DIAG_PUSH_THROTTLE_MS) {
-      lastDiagPushRef.current = nowT;
-      setCurrentDiagnostics(mergedDiag);
-    }
+    // El push del diag se hace MÁS ABAJO, tras sobreescribir el stage/progress de
+    // estabilización con el criterio REAL por convergencia (necesita bpmLive).
 
     const bpmForLatch =
       heartBeatResult.bpm > 0
@@ -375,17 +379,34 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const bpmOut =
       hasUsableContact && fingerConfirmed && bpmLive > 0 ? bpmLive : 0;
 
-    // Latch de estabilización: solo se publica el número de HR tras alcanzar
-    // acquisitionStage READY (señal asentada) — evita mostrar BPM errático
-    // mientras la cámara/AE y el contacto se estabilizan. El pipeline interno
-    // (latch de sesión, vitales, RR) sigue usando bpmOut sin cambios.
-    const acqStage =
-      diag && typeof diag === 'object' && typeof (diag as Record<string, unknown>).acquisitionStage === 'string'
-        ? ((diag as Record<string, unknown>).acquisitionStage as string)
-        : undefined;
-    if (acqStage === 'READY') acqReadyLatchRef.current = true;
+    // ESTABILIZACIÓN POR CONVERGENCIA (criterio REAL, reemplaza el warm-up fijo).
+    // La señal está estable cuando la LECTURA DE HR convergió (dejó de moverse) y
+    // la calidad se sostiene — el tiempo lo dicta la señal, no un reloj. Robusto a
+    // arritmia: usa el BPM suavizado (la frecuencia media se asienta). Solo aquí se
+    // revela la onda y el número.
+    const stab = updateStabilization(stabilizationRef.current, {
+      hasContact: hasUsableContact,
+      bpm: bpmLive,
+      sqi: rawSqi,
+      perfusionIndex: lastSignal.perfusionIndex ?? 0,
+      periodicity: typeof sqm.periodicity === 'number' ? sqm.periodicity : 0,
+      motionScore: typeof sqm.motionScore === 'number' ? sqm.motionScore : 0,
+      nowMs: nowT,
+    });
+    if (stab.stabilized) acqReadyLatchRef.current = true;
     const acqStabilized = acqReadyLatchRef.current;
     const bpmDisplay = acqStabilized ? bpmOut : 0;
+
+    // Sobreescribe el stage/progress del diag con el criterio REAL de convergencia
+    // (la UI revela la onda con ESTO, no con el warm-up por tiempo del procesador).
+    const md = mergedDiag as Record<string, unknown>;
+    md.acquisitionStage = hasUsableContact ? stab.stage : 'SEARCHING';
+    md.acquisitionProgress = stab.progress;
+    md.stabilizationReason = stab.reason;
+    if (nowT - lastDiagPushRef.current >= DIAG_PUSH_THROTTLE_MS) {
+      lastDiagPushRef.current = nowT;
+      setCurrentDiagnostics(mergedDiag);
+    }
 
     const piMin = Q.MIN_PI * Math.max(0.04, hints.minPiScale * 0.18);
     const readiness = evaluateMeasurementReadiness({

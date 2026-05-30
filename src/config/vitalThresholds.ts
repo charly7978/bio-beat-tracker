@@ -196,6 +196,42 @@ export const VITAL_THRESHOLDS = {
   },
 
   /**
+   * ESTABILIZACIÓN POR CONVERGENCIA (criterio REAL, no timer).
+   *
+   * La señal NO está estable "por tiempo": está estable cuando la LECTURA DE HR
+   * dejó de moverse (convergió) Y la calidad se sostiene. No revela la onda hasta
+   * que la medición es confiable; el tiempo que tarda lo dicta la SEÑAL, no un reloj
+   * (señal limpia → converge en pocos segundos; señal pobre → nunca converge →
+   * no revela basura). Esto reemplaza el warm-up fijo (que se sentía simulado).
+   *
+   * READY = el BPM (suavizado, robusto a arritmia) se mantuvo dentro de un margen
+   * estrecho durante una ventana mínima, con SQI/PI/periodicidad sostenidos y poco
+   * movimiento. El progreso refleja el PEOR de los criterios (eslabón débil) → es
+   * honesto: si la convergencia o la calidad no avanzan, el progreso se estanca.
+   */
+  STABILIZATION: {
+    /** Ventana deslizante de BPM para medir convergencia (ms). */
+    WINDOW_MS: 4500,
+    /** Span temporal MÍNIMO de BPM válido y convergido antes de READY (ms). El
+     *  mínimo físico para confirmar que un ritmo se asentó — NO un warm-up ciego. */
+    MIN_WINDOW_MS: 3000,
+    /** Muestras mínimas de BPM válido en la ventana. */
+    MIN_SAMPLES: 40,
+    /** Margen máx (max−min) del BPM en la ventana para considerarlo CONVERGIDO (bpm). */
+    BPM_SPREAD_MAX: 6,
+    /** Frames de calidad sostenida (SQI/PI/periodicidad/movimiento) requeridos. */
+    QUALITY_DWELL_FRAMES: 30,
+    /** Umbrales de calidad instantánea (sostenidos durante el dwell). */
+    MIN_SQI: 32,
+    MIN_PI: 0.0010,
+    MIN_PERIODICITY: 0.30,
+    MAX_MOTION: 0.6,
+    /** Suavizado del progreso (subida/bajada por frame). */
+    PROGRESS_RISE: 0.05,
+    PROGRESS_FALL: 0.03,
+  },
+
+  /**
    * Arrhythmia / AF detection via weighted scoring over a multi-feature set.
    *
    * Sub-scores: clamp01((value - LO) / (HI - LO)) → [0,1].
