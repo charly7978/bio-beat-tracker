@@ -47,6 +47,11 @@ import {
   type AcquisitionState,
 } from '../../lib/acquisition/AcquisitionStabilizer';
 import { tilePulsatility, pulsatilityBoost } from '../../lib/signal/tileFusion';
+import {
+  createActiveStabilizer,
+  stabilizeSample,
+  resetActiveStabilizer,
+} from '../../lib/signal/activeStabilizer';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -201,6 +206,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   // Micro-movimiento del dedo DESDE LA SEÑAL (complementa al IMU; ver QUALITY.MOTION_*)
   private signalMotionScore = 0;
   private lastRawRedForMotion = 0;
+
+  // Acondicionador ACTIVO de señal (denoise edge-preserving + estabilización baseline).
+  private readonly activeStabilizer = createActiveStabilizer();
 
   // Cache: PI se calcula una sola vez por frame y se reutiliza en SQI, contact state, etc.
   private cachedPI = 0;
@@ -417,7 +425,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.rawBuffer.push(pulseSource.value);
 
     const endFilt = ppgPerf.start('bandpass');
-    const filtered = this.bandpassFilter.filter(pulseSource.value);
+    // ACONDICIONAMIENTO ACTIVO en vivo: estabiliza la línea base (quita deriva) y
+    // hace denoise que PRESERVA los picos sistólicos, ANTES del bandpass → la señal
+    // que se mide y se muestra es genuinamente más limpia y firme (no recorta el pulso).
+    const stabilizedInput = stabilizeSample(this.activeStabilizer, pulseSource.value);
+    const filtered = this.bandpassFilter.filter(stabilizedInput);
     const morphFiltered = this.morphBandpassFilter.filter(morphSource);
     const enhanced = applyPulseAgc(
       this.pulseAgcState,
@@ -1378,6 +1390,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.tilePulsatilityCache.fill(0);
     this.tileMaxPulsatility = 0;
     this.tilePulseThrottle = 0;
+    resetActiveStabilizer(this.activeStabilizer);
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
   }
@@ -1393,6 +1406,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.tilePulsatilityCache.fill(0);
     this.tileMaxPulsatility = 0;
     this.tilePulseThrottle = 0;
+    resetActiveStabilizer(this.activeStabilizer);
     this.frameIntervalBuffer.reset();
     this.frameCount = 0;
     this.lastLogTime = 0;

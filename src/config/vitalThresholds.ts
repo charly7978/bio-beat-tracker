@@ -241,6 +241,20 @@ export const VITAL_THRESHOLDS = {
   },
 
   /**
+   * ACONDICIONADOR ACTIVO DE SEÑAL (DSP en vivo): estabiliza la línea base y hace
+   * denoise que PRESERVA los picos (edge-preserving). Trabaja la señal frame a frame.
+   * Unidades en la escala de `pulseSource` (~±95). Ver activeStabilizer.ts.
+   */
+  ACTIVE_STAB: {
+    /** EMA de la línea base (lenta: no se come el pulso, sí quita la deriva). */
+    BASELINE_ALPHA: 0.012,
+    /** Umbral de "flanco/pico": |Δ| por encima → se sigue (no se suaviza). */
+    EDGE_THRESHOLD: 6,
+    /** Suavizado mínimo en zona plana (peso a la muestra nueva con ruido chico). */
+    ALPHA_MIN: 0.30,
+  },
+
+  /**
    * FUSIÓN ADAPTATIVA MULTI-CELDA POR PULSATILIDAD (Tiling & Aggregation, estado
    * del arte para PPG por cámara). Cada celda de la grilla ROI mantiene su señal
    * temporal; se puntúa por PULSATILIDAD real (AC/DC en banda cardíaca) y la señal
