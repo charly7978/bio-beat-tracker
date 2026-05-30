@@ -46,6 +46,7 @@ import {
   updateAcquisition,
   type AcquisitionState,
 } from '../../lib/acquisition/AcquisitionStabilizer';
+import { tilePulsatility, pulsatilityBoost } from '../../lib/signal/tileFusion';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -123,6 +124,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private readonly greenBuffer = new RingF32(this.BUFFER_SIZE);
   private readonly blueBuffer = new RingF32(this.BUFFER_SIZE);
   private tileConfidence: number[] = new Array(25).fill(0);
+  // Fusión multi-celda por pulsatilidad: señal de verde por celda + cache de
+  // pulsatilidad (AC/DC) recalculada con throttle, y su máximo para normalizar.
+  private readonly tileGreenBuffers: RingF32[] = Array.from(
+    { length: this.TILE_COLUMNS * this.TILE_ROWS },
+    () => new RingF32(VITAL_THRESHOLDS.TILE_FUSION.BUFFER_SIZE),
+  );
+  private readonly tilePulsatilityCache = new Float32Array(this.TILE_COLUMNS * this.TILE_ROWS);
+  private tileMaxPulsatility = 0;
+  private tilePulseThrottle = 0;
   private readonly frameIntervalBuffer = new RingF32(30);
 
   // Scratch buffers reusables para stats (ACDC, SQI, source-score) — evita
@@ -955,6 +965,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const red = t.red / t.count;
       const green = t.green / t.count;
       const blue = t.blue / t.count;
+      // Señal temporal de verde por celda → pulsatilidad (fusión multi-celda).
+      this.tileGreenBuffers[i]!.push(green);
       const total = red + green + blue;
       const redDominance = red - (green + blue) / 2;
       const rednessRatio = red / Math.max(1, green);
@@ -997,6 +1009,26 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       }
     }
 
+    // Recálculo throttled de la PULSATILIDAD por celda (AC/DC en banda cardíaca) y
+    // su máximo, para ponderar la fusión hacia las celdas con pulso más fuerte
+    // (Tiling & Aggregation, estado del arte). Entre recálculos se usa la cache.
+    const TF = VITAL_THRESHOLDS.TILE_FUSION;
+    this.tilePulseThrottle++;
+    if (this.tilePulseThrottle >= TF.THROTTLE_FRAMES) {
+      this.tilePulseThrottle = 0;
+      let maxP = 0;
+      for (let i = 0; i < N; i++) {
+        const buf = this.tileGreenBuffers[i]!;
+        let p = 0;
+        if (metrics[i]!.valid && buf.length >= TF.MIN_SAMPLES) {
+          p = tilePulsatility(buf.tail(buf.length));
+        }
+        this.tilePulsatilityCache[i] = p;
+        if (p > maxP) maxP = p;
+      }
+      this.tileMaxPulsatility = maxP;
+    }
+
     if (validCount === 0) {
       return {
         rawRed: 0,
@@ -1015,15 +1047,25 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const useFingerOnly = fingerCount >= F.MIN_FINGER_TILES_FOR_WEIGHTING;
     let rWs = 0, gWs = 0, bWs = 0, tw = 0;
     
-    // MEJORA: Ponderación adaptativa por SNR individual de celda
+    // Ponderación por PRESENCIA de dedo (rojez/dominancia/centro) × REALCE por
+    // PULSATILIDAD real de la celda (Tiling & Aggregation). Las celdas con pulso
+    // fuerte dominan la señal compuesta → robusto a colocación imperfecta y mejor
+    // SNR. Fallback seguro: sin info de pulsatilidad el realce es 1 (= antes).
     for (let i = 0; i < N; i++) {
       const m = metrics[i];
       if (!m.valid) continue;
       if (useFingerOnly && !m.isFinger) continue;
-      
-      // La confianza combinada incluye centerBias y estabilidad temporal
-      const snrWeight = 0.2 + m.combinedScore * 2.5 + m.centerBias * 0.5;
-      
+
+      // Presencia de dedo (confianza combinada incluye centerBias y estabilidad).
+      const presence = 0.2 + m.combinedScore * 2.5 + m.centerBias * 0.5;
+      // Realce por pulsatilidad relativa a la mejor celda (la del mejor pulso pesa más).
+      const boost = pulsatilityBoost(
+        this.tilePulsatilityCache[i] ?? 0,
+        this.tileMaxPulsatility,
+        TF.BOOST_GAIN,
+      );
+      const snrWeight = presence * boost;
+
       rWs += m.red * snrWeight;
       gWs += m.green * snrWeight;
       bWs += m.blue * snrWeight;
@@ -1332,6 +1374,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.lastRoiRedCv = 0;
     this.signalMotionScore = 0;
     this.lastRawRedForMotion = 0;
+    for (const b of this.tileGreenBuffers) b.reset();
+    this.tilePulsatilityCache.fill(0);
+    this.tileMaxPulsatility = 0;
+    this.tilePulseThrottle = 0;
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
   }
@@ -1343,6 +1389,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.greenBuffer.reset();
     this.blueBuffer.reset();
     this.tileConfidence = new Array(25).fill(0);
+    for (const b of this.tileGreenBuffers) b.reset();
+    this.tilePulsatilityCache.fill(0);
+    this.tileMaxPulsatility = 0;
+    this.tilePulseThrottle = 0;
     this.frameIntervalBuffer.reset();
     this.frameCount = 0;
     this.lastLogTime = 0;

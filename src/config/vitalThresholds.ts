@@ -232,6 +232,25 @@ export const VITAL_THRESHOLDS = {
   },
 
   /**
+   * FUSIÓN ADAPTATIVA MULTI-CELDA POR PULSATILIDAD (Tiling & Aggregation, estado
+   * del arte para PPG por cámara). Cada celda de la grilla ROI mantiene su señal
+   * temporal; se puntúa por PULSATILIDAD real (AC/DC en banda cardíaca) y la señal
+   * compuesta pondera más las celdas con pulso fuerte → robusto a colocación
+   * imperfecta del dedo, optimiza la SNR inicial. Fallback seguro: sin info de
+   * pulsatilidad (arranque) el realce es neutro = comportamiento por presencia actual.
+   */
+  TILE_FUSION: {
+    /** Tamaño del ring de verde por celda (≈2 s @30 fps). */
+    BUFFER_SIZE: 64,
+    /** Muestras mínimas por celda antes de confiar en su pulsatilidad. */
+    MIN_SAMPLES: 24,
+    /** Cada cuántos frames se recalcula la pulsatilidad por celda (throttle). */
+    THROTTLE_FRAMES: 8,
+    /** Ganancia del realce: la mejor celda pesa (1+GAIN)× respecto a la de peor pulso. */
+    BOOST_GAIN: 3.5,
+  },
+
+  /**
    * Arrhythmia / AF detection via weighted scoring over a multi-feature set.
    *
    * Sub-scores: clamp01((value - LO) / (HI - LO)) → [0,1].
