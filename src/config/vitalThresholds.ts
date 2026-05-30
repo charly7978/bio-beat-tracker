@@ -148,6 +148,15 @@ export const VITAL_THRESHOLDS = {
     SKEWNESS_SQI_LOW: -0.3,
     SKEWNESS_SQI_HIGH: 0.2,
     SKEWNESS_SQI_FLOOR: 0.55,
+    /**
+     * HONESTIDAD DE LA ONDA: la altura mostrada se multiplica por la fuerza
+     * pulsátil real = f(perfusión) × f(periodicidad). Por debajo del piso de
+     * perfusión (ruido de objeto inerte) o sin periodicidad cardíaca → onda PLANA;
+     * con perfusión + periodicidad reales (dedo) → onda completa. Ver waveHonesty.ts.
+     */
+    WAVE_PI_FLOOR: 0.0008,
+    WAVE_PI_REF: 0.004,
+    WAVE_PERIODICITY_REF: 0.35,
   },
 
   /**

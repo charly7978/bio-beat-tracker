@@ -21,6 +21,7 @@ import {
   drawTrendStrip,
   drawFooter,
 } from '@/lib/ui/ppgCanvasRenderer';
+import { realSignalStrength } from '@/lib/ui/waveHonesty';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
 
@@ -343,18 +344,24 @@ const PPGSignalMeter = ({
         lerpDisplayValue(displayDiaRef.current, targetDia, DISPLAY_SMOOTH_ALPHAS.bp),
       );
 
-      // Latch de revelado de la onda: solo se muestra el trazo cuando la
-      // adquisición alcanza READY (señal estabilizada). Al revelar por primera vez
-      // se LIMPIA el buffer → la onda aparece limpia desde cero, sin el ruido inicial.
-      // Se resetea al perder el dedo.
-      const acqStage = (p.diagnostics as { acquisitionStage?: string } | undefined)?.acquisitionStage;
+      // La onda se muestra SIEMPRE, con altura honesta (signalStrength). El latch
+      // solo controla el indicador fino de progreso (barra), que desaparece al
+      // estabilizar (READY). No se oculta ni se limpia el trazo → onda continua.
+      const diagRec = p.diagnostics as
+        | { acquisitionStage?: string; sqm?: { periodicity?: number } }
+        | undefined;
+      const acqStage = diagRec?.acquisitionStage;
       if (!fingerOn && !preserve) {
         traceRevealedRef.current = false;
       } else if (!traceRevealedRef.current && acqStage === 'READY') {
         traceRevealedRef.current = true;
-        dataBufferRef.current?.clear();
-        beatHistoryRef.current = [];
       }
+      // Fuerza pulsátil real → comprime la altura de la onda (inerte → plana).
+      const periodicityNow =
+        typeof diagRec?.sqm?.periodicity === 'number' ? diagRec.sqm.periodicity : 0;
+      const signalStrengthNow = fingerOn
+        ? realSignalStrength(p.perfusionIndex ?? 0, periodicityNow)
+        : 0;
 
       const renderState: PpgRenderState = {
         layout: layoutRef.current,
@@ -387,6 +394,7 @@ const PPGSignalMeter = ({
         lastPeakProcessedTime: lastPeakProcessedRef.current,
         arrActiveUntil: arrActiveUntilRef.current,
         traceRevealed: traceRevealedRef.current,
+        signalStrength: signalStrengthNow,
       };
 
       drawBackground(ctx, layoutRef.current.width, layoutRef.current.height);

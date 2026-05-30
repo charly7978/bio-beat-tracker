@@ -151,6 +151,8 @@ export interface PpgRenderState {
   arrActiveUntil: number;
   /** Latch: la onda solo se revela cuando la señal se ESTABILIZÓ (adquisición READY). */
   traceRevealed: boolean;
+  /** Fuerza pulsátil real [0..1]: comprime la altura de la onda (objeto inerte → plana). */
+  signalStrength: number;
 }
 
 export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: number): void {
@@ -561,11 +563,9 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
   if (p.preserveResults && !p.isFingerDetected) return;
 
-  // GATE PREMIUM: no se dibuja la onda (ni se procesan picos) hasta que la señal
-  // esté ESTABILIZADA (adquisición READY, latcheado). El buffer se limpia al revelar
-  // (en PPGSignalMeter) → el trazo aparece LIMPIO desde cero, no con el ruido inicial.
-  if (p.isFingerDetected && !state.traceRevealed) return;
-
+  // La onda se muestra SIEMPRE (no se oculta), pero su altura se comprime por la
+  // FUERZA PULSÁTIL REAL (state.signalStrength, abajo): objeto inerte → línea PLANA
+  // honesta; dedo real → onda proporcional. Es la verdad de la señal, no un disfraz.
   const scaledValue = p.value * state.waveGain;
   if (p.isPeak) state.sweepPulse = 1;
 
@@ -632,6 +632,12 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   const waveH = Math.max(40, plot.h - wavePadTop - wavePadBot);
   const waveBaseY = plot.y + wavePadTop + waveH;
 
+  // HONESTIDAD: comprime el desplazamiento respecto a la línea media por la fuerza
+  // pulsátil real. signalStrength≈0 (inerte/ruido) → la onda colapsa a una línea
+  // plana; ≈1 (dedo real) → amplitud completa. Mínimo pequeño para que el dedo
+  // débil real siga viéndose (no se anula del todo).
+  const strength = state.signalStrength < 0 ? 0 : state.signalStrength > 1 ? 1 : state.signalStrength;
+  const midValue = (stats.max + stats.min) / 2;
   const coords: { x: number; y: number; isArr: boolean }[] = [];
   for (let i = 0; i < points.length; i++) {
     const pt = points[i];
@@ -639,7 +645,8 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     if (age > WINDOW_MS) continue;
     const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
     if (x < plot.x || x > plot.x + plot.w) continue;
-    const y = plot.y + wavePadTop + ((stats.max - pt.value) / safeRange) * waveH;
+    const honestValue = midValue + (pt.value - midValue) * strength;
+    const y = plot.y + wavePadTop + ((stats.max - honestValue) / safeRange) * waveH;
     coords.push({ x, y, isArr: pt.isArrhythmia });
   }
 
@@ -975,67 +982,32 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 }
 
 /**
- * PANTALLA PREMIUM DE ESTABILIZACIÓN. Mientras la señal NO está estabilizada
- * (adquisición no READY) se OCULTA el trazo crudo (drawSignal no dibuja) y se
- * muestra un anillo de progreso centrado ligado a la confianza REAL de adquisición
- * (se estanca si la señal es pobre → el progreso "se siente real"), con la guía de
- * colocación. Al revelar (READY) esta pantalla desaparece y aparece la onda limpia.
+ * Indicador FINO de estabilización (barra superior). NO oculta la onda: ahora la
+ * onda se muestra siempre, honesta (plana para objeto inerte, real para dedo), así
+ * que solo se dibuja una barra delgada de progreso ligada a la confianza real de
+ * adquisición. Desaparece al estabilizar (READY).
  */
 export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const p = state.props;
   const diag = p.diagnostics;
   if (!p.isFingerDetected || p.preserveResults) return;
-  if (state.traceRevealed) return; // ya revelado → onda visible, sin overlay
+  if (state.traceRevealed) return;
 
   const { plot } = state.layout;
   const progress = Math.max(0, Math.min(1, diag?.acquisitionProgress ?? 0));
-  const cx = plot.x + plot.w / 2;
-  const cy = plot.y + plot.h / 2;
-  const radius = Math.max(18, Math.min(plot.w, plot.h) * 0.18);
-  const lineW = Math.max(3, radius * 0.16);
+  const barX = plot.x + 12;
+  const barW = plot.w - 24;
+  const barH = 4;
+  const barY = plot.y + 4;
 
   ctx.save();
-  // Backdrop sutil sobre el área de señal (oculta la grilla cruda).
-  ctx.fillStyle = 'rgba(6, 12, 22, 0.55)';
-  ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
-
-  // Anillo: pista tenue + progreso (gradiente verde→cian), desde las 12 en punto.
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(148, 163, 184, 0.20)';
-  ctx.lineWidth = lineW;
-  ctx.stroke();
-
-  const start = -Math.PI / 2;
-  const grad = ctx.createLinearGradient(cx - radius, cy, cx + radius, cy);
-  grad.addColorStop(0, 'rgba(34, 197, 94, 0.95)');
+  ctx.fillStyle = 'rgba(148, 163, 184, 0.16)';
+  ctx.fillRect(barX, barY, barW, barH);
+  const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+  grad.addColorStop(0, 'rgba(34, 197, 94, 0.9)');
   grad.addColorStop(1, 'rgba(103, 232, 249, 0.95)');
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius, start, start + Math.PI * 2 * progress);
-  ctx.strokeStyle = grad;
-  ctx.lineWidth = lineW;
-  ctx.lineCap = 'round';
-  ctx.stroke();
-
-  // % en el centro del anillo.
-  ctx.fillStyle = '#e2e8f0';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = `bold ${Math.round(radius * 0.72)}px ${FONT_MONO}`;
-  ctx.fillText(`${Math.round(progress * 100)}%`, cx, cy);
-
-  // Título + guía de colocación debajo del anillo.
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = COLORS.TEXT_INFO;
-  ctx.font = `bold 11px ${FONT_MONO}`;
-  ctx.fillText('ESTABILIZANDO SEÑAL', cx, cy + radius + 22);
-  const hint =
-    typeof diag?.placementHint === 'string' && diag.placementHint
-      ? diag.placementHint
-      : 'Mantenga el dedo firme y quieto';
-  ctx.fillStyle = 'rgba(148, 163, 184, 0.92)';
-  ctx.font = `9px ${FONT_MONO}`;
-  ctx.fillText(hint, cx, cy + radius + 38);
+  ctx.fillStyle = grad;
+  ctx.fillRect(barX, barY, Math.max(barH, barW * progress), barH);
   ctx.restore();
 }
 
