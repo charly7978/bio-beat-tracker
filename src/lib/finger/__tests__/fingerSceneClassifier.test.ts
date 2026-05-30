@@ -5,6 +5,7 @@ import {
   isFingerOnLensScene,
   passesLiveFingerContact,
   passesFingerAcquire,
+  passesPulsatileAcquire,
 } from '../fingerSceneClassifier';
 
 const flashOpen = {
@@ -68,5 +69,26 @@ describe('fingerSceneClassifier', () => {
     expect(passesFingerAcquire(fingerRaw, fingerSmooth, spatialFinger)).toBe(true);
     const weakRb = { ...fingerRaw, blue: 120 };
     expect(passesFingerAcquire(weakRb, fingerSmooth, spatialFinger)).toBe(false);
+  });
+
+  describe('passesPulsatileAcquire (adquisición universal por pulso)', () => {
+    // Dedo de COLOR DÉBIL (rb≈1.11 < estricto 1.15/1.2) en otra cámara: la firma
+    // de color lo RECHAZA, pero pulsa → la vía pulsátil lo ACEPTA (universalidad).
+    const weakRaw = { red: 120, green: 110, blue: 108, coverage: 0.16, fingerScore: 0.22 };
+    const weakSmooth = { red: 118, green: 108, blue: 106, coverage: 0.15, fingerScore: 0.2 };
+
+    it('dedo de color débil PERO con pulso → acepta (donde el color falla)', () => {
+      expect(passesLiveFingerContact(weakRaw, weakSmooth, spatialFinger)).toBe(false); // color falla
+      expect(passesPulsatileAcquire(weakRaw, weakSmooth, spatialFinger, 0.05)).toBe(true); // pulso lo salva
+    });
+
+    it('sin pulsación (CV bajo) → rechaza aunque el color sea bueno', () => {
+      expect(passesPulsatileAcquire(fingerRaw, fingerSmooth, spatialFinger, 0.01)).toBe(false);
+    });
+
+    it('flicker de AE whitish (CV alto, poco rojo) → rechaza', () => {
+      const whitish = { red: 160, green: 150, blue: 156, coverage: 0.2, fingerScore: 0.3 };
+      expect(passesPulsatileAcquire(whitish, whitish, spatialFinger, 0.06)).toBe(false);
+    });
   });
 });

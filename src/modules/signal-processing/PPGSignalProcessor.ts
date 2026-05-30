@@ -23,6 +23,7 @@ import {
   passesFingerAcquire,
   passesFingerMaintain,
   passesLiveFingerContact,
+  passesPulsatileAcquire,
 } from '../../lib/finger/fingerSceneClassifier';
 import {
   classifyFingerPlacement,
@@ -800,21 +801,35 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       roiRedCv: this.lastRoiRedCv,
       perfusionIndex: this.cachedPI,
     });
+    // Vía UNIVERSAL por pulsatilidad: un pulso real del rojo confirma dedo aunque
+    // la firma de color estricta falle (cámara con otro balance de blancos/flash).
+    const pulsatileContact = passesPulsatileAcquire(
+      raw, smoothed, spatial, this.lastRoiRedCv,
+    );
+
     if (
       !this.fingerDetected &&
       !this.cameraHints.constrained &&
       placementInstant !== 'pad' &&
-      isExposureFlickerNotFingerPulse(this.lastRoiRedCv, smoothed, F.ACQUIRE_RB_STRICT)
+      // El guard de flicker usa el umbral R/B LAXO de la vía pulsátil (no el estricto):
+      // así no descarta un dedo que pulsa pero con rojo moderado en otra cámara.
+      isExposureFlickerNotFingerPulse(this.lastRoiRedCv, smoothed, F.PULSATILE_ACQUIRE_RB) &&
+      !pulsatileContact
     ) {
       return false;
     }
 
-    if (!passesLiveFingerContact(raw, smoothed, spatial)) return false;
+    // Contacto por COLOR (firma de hemoglobina) O por PULSATILIDAD (universal).
+    if (!passesLiveFingerContact(raw, smoothed, spatial)) {
+      return pulsatileContact;
+    }
     if (this.fingerDetected) return true;
-    return passesFingerAcquire(raw, smoothed, spatial, {
-      roiRedCv: this.lastRoiRedCv,
-      perfusionIndex: this.cachedPI,
-    });
+    return (
+      passesFingerAcquire(raw, smoothed, spatial, {
+        roiRedCv: this.lastRoiRedCv,
+        perfusionIndex: this.cachedPI,
+      }) || pulsatileContact
+    );
   }
 
   private computeRoiRect(width: number, height: number) {

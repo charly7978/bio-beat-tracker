@@ -115,6 +115,47 @@ export function passesFingerAcquire(
 }
 
 /**
+ * Adquisición UNIVERSAL por PULSATILIDAD (independiente del color de la cámara).
+ *
+ * Un dedo SIEMPRE produce pulsación del canal rojo (cambio de volumen sanguíneo
+ * con cada latido); una escena o el flash al aire NO pulsan a frecuencia cardíaca.
+ * Por eso la pulsatilidad es la señal MÁS ROBUSTA para confirmar dedo: no depende
+ * del balance de blancos / flash / sensor (que varían por dispositivo y hacían que
+ * la firma de color estricta fallara en cámaras distintas → "posición imposible").
+ *
+ * Requiere: pulso REAL del rojo (CV ≥ ROI_RED_CV_MIN) que NO sea flicker de AE,
+ * un tinte rojo MÍNIMO (umbrales PULSATILE_* mucho más laxos que la firma estricta),
+ * cobertura, y que NO sea flash al aire. Es una vía ADICIONAL: solo facilita la
+ * adquisición, nunca la bloquea.
+ */
+export function passesPulsatileAcquire(
+  raw: FingerRgbSnapshot,
+  smoothed: FingerRgbSnapshot,
+  spatial: FingerRoiSpatial,
+  roiRedCv: number,
+): boolean {
+  const F = VITAL_THRESHOLDS.FINGER;
+  // Pulsación REAL del rojo: el flash al aire ESTÁTICO no pulsa (CV bajo → fuera),
+  // así que la pulsatilidad por sí sola descarta el "flash sin dedo" — NO se filtra
+  // por isOpenFlashWithoutContact (eso rechazaría un dedo brillante de color débil
+  // en otra cámara, que es justo el caso a soportar).
+  if (roiRedCv < F.ROI_RED_CV_MIN) return false;
+  // CV alto con poco rojo (whitish) = flicker de exposición (AE), no pulso de dedo.
+  if (isExposureFlickerNotFingerPulse(roiRedCv, smoothed, F.PULSATILE_ACQUIRE_RB)) return false;
+  const r = Math.max(raw.red, smoothed.red);
+  const g = Math.max(1, raw.green, smoothed.green);
+  const b = Math.max(1, raw.blue, smoothed.blue);
+  const dom = r - (g + b) / 2;
+  return (
+    r >= F.PULSATILE_ACQUIRE_MIN_RED &&
+    r / g >= F.PULSATILE_ACQUIRE_RG &&
+    r / b >= F.PULSATILE_ACQUIRE_RB &&
+    dom >= F.PULSATILE_ACQUIRE_MIN_DOMINANCE &&
+    spatial.coverageRatio >= F.PULSATILE_ACQUIRE_COVERAGE
+  );
+}
+
+/**
  * Variación temporal alta con poca firma hemoglobina → AE del sensor, no pulso en dedo.
  */
 export function isExposureFlickerNotFingerPulse(
