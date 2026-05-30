@@ -136,6 +136,18 @@ export const VITAL_THRESHOLDS = {
     MOTION_DC_JUMP_DEADZONE: 0.015,
     MOTION_DC_JUMP_SCALE: 0.05,
     MOTION_SIGNAL_EMA_ALPHA: 0.20,
+    /**
+     * SQI POR SKEWNESS (Elgendi 2016, "Optimal SQI for PPG"): el índice de calidad
+     * más fuerte. PPG limpio = skewness POSITIVA (subida sistólica abrupta → cola a
+     * la derecha); ruido simétrico / corrupción por movimiento = skewness ≈0 o
+     * negativa. Se usa como PENALIZACIÓN SUAVE (factor [FLOOR..1]) de la confianza
+     * del ensemble, NO como bloqueo duro: una ventana ruidosa baja su confianza
+     * (menos FP) pero un latido real (skew>HIGH) nunca se penaliza ni se pierde.
+     * factor = FLOOR + (1−FLOOR)·clamp((skew−LOW)/(HIGH−LOW),0,1).
+     */
+    SKEWNESS_SQI_LOW: -0.3,
+    SKEWNESS_SQI_HIGH: 0.2,
+    SKEWNESS_SQI_FLOOR: 0.55,
   },
 
   /**

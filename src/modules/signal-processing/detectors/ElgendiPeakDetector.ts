@@ -7,6 +7,7 @@
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../../../config/vitalThresholds';
 import { clamp } from '../../../utils/math';
+import { skewness } from '../../../utils/stats';
 import {
   bandpassOffline,
   detrendLinear,
@@ -102,6 +103,11 @@ export class ElgendiPeakDetector {
     const cleaned = hampel1D(sig, hampelWin, 3);
     let x = bandpassOffline(detrendLinear(cleaned), fs);
     x = robustNormalizeZeroCenter(x);
+
+    // SQI por skewness (Elgendi 2016) sobre la señal filtrada — PPG limpio tiene
+    // skewness positiva; ruido/movimiento, ≈0 o negativa. Se reporta para que el
+    // ensemble lo use como penalización suave de confianza (anti falsos positivos).
+    const signalSkewness = skewness(x);
 
     const w1 = Math.max(3, Math.round((peakMs / 1000) * fs));
     const w2 = Math.max(w1 + 2, Math.round((beatMs / 1000) * fs));
@@ -276,6 +282,7 @@ export class ElgendiPeakDetector {
         rrCount,
         meanEnergy,
         thrOffset,
+        signalSkewness,
       },
       reason: pk > 0 ? 'OK' : 'NO_PEAKS',
       parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, beta, minProm, fs, w1, w2 },
