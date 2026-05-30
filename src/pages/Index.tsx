@@ -156,6 +156,10 @@ const Index = () => {
   // escena real del dedo iluminado. Frena la deriva del auto-exposure (causa del
   // arranque errático de ~25-30 s). Se re-arma al perder el contacto.
   const exposureLockedRef = useRef(false);
+  // Ref con el último rojo medido: el effect de abajo lo lee en la transición a
+  // STABLE_CONTACT sin depender de él (no re-ejecuta por frame ni queda obsoleto).
+  const lastRawRedRef = useRef(0);
+  if (typeof lastSignal?.rawRed === 'number') lastRawRedRef.current = lastSignal.rawRed;
   useEffect(() => {
     const cs = lastSignal?.contactState;
     if (cs === 'NO_CONTACT' || cs == null) {
@@ -164,7 +168,9 @@ const Index = () => {
     }
     if (!exposureLockedRef.current && cs === 'STABLE_CONTACT') {
       exposureLockedRef.current = true;
-      cameraRef.current?.lockExposureToScene?.();
+      // Acción concreta sobre el hardware: foco cercano + WB bloqueado + exposición
+      // auto-optimizada según el nivel REAL del rojo del dedo (no un valor fijo).
+      cameraRef.current?.optimizeForFinger?.(lastRawRedRef.current);
     }
   }, [lastSignal?.contactState]);
 

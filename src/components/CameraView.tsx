@@ -1,13 +1,19 @@
 import React, { useRef, useEffect, forwardRef, useImperativeHandle } from "react";
 import { createLogger } from "@/utils/logger";
+import { clamp } from "@/utils/math";
 
 const log = createLogger("CameraView");
 
 export interface CameraViewHandle {
   getVideoElement: () => HTMLVideoElement | null;
   getDiagnostics: () => Record<string, unknown>;
-  /** Re-fija la exposición a la escena actual (dedo iluminado) para frenar la deriva del AE. */
-  lockExposureToScene: () => void;
+  /**
+   * Optimiza ACTIVAMENTE el hardware para el dedo ya colocado: bloquea foco cercano
+   * y balance de blancos (anti-deriva), y AJUSTA la exposición/ISO según el nivel
+   * REAL del rojo medido (`redLevel` 0–255) hacia la ventana óptima (sin saturar ni
+   * quedar oscuro). Una sola vez en STABLE_CONTACT (timing seguro vs deriva del AE).
+   */
+  optimizeForFinger: (redLevel: number) => void;
 }
 
 interface CameraViewProps {
@@ -28,18 +34,22 @@ type AdvancedConstraint = MediaTrackConstraintSet & {
   torch?: boolean;
   exposureMode?: string;
   exposureCompensation?: number;
+  exposureTime?: number;
   whiteBalanceMode?: string;
   iso?: number;
   focusMode?: string;
+  focusDistance?: number;
   frameRate?: number;
 };
 type ExtendedCapabilities = MediaTrackCapabilities & {
   torch?: boolean;
   exposureMode?: string[];
   exposureCompensation?: { min?: number; max?: number };
+  exposureTime?: { min?: number; max?: number };
   whiteBalanceMode?: string[];
   iso?: { min?: number; max?: number };
   focusMode?: string[];
+  focusDistance?: { min?: number; max?: number };
   frameRate?: { min?: number; max?: number };
 };
 type ExtendedSettings = MediaTrackSettings & {
@@ -47,6 +57,9 @@ type ExtendedSettings = MediaTrackSettings & {
   exposureMode?: string;
   whiteBalanceMode?: string;
   focusMode?: string;
+  iso?: number;
+  exposureCompensation?: number;
+  exposureTime?: number;
 };
 
 /**
@@ -181,15 +194,62 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(({
         return { active: true, error: "caps_unavailable" };
       }
     },
-    lockExposureToScene: () => {
+    optimizeForFinger: (redLevel: number) => {
       const track = streamRef.current?.getVideoTracks?.()[0];
       if (!track) return;
-      const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
-      const torchOn = settings.torch === true;
-      // Bloquea exposición/WB/foco a la escena ya iluminada y re-aplica ISO/EV.
-      void stabilizeTrack(track)
-        .then(() => applyTorchDependentParams(track, torchOn))
-        .catch(() => { /* best-effort */ });
+      void (async () => {
+        try {
+          const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
+          const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
+          const constraints: AdvancedConstraint[] = [];
+
+          // 1) FOCO cercano fijo (el dedo está sobre el lente): frena el autoenfoque
+          //    que "busca" y cambia el brillo. Manual + distancia mínima (más cercana).
+          if (caps.focusMode?.includes("manual")) {
+            const near = typeof caps.focusDistance?.min === "number" ? caps.focusDistance.min : 0;
+            constraints.push({ focusMode: "manual", focusDistance: near });
+          }
+          // 2) BALANCE DE BLANCOS bloqueado: frena la deriva de color (rompía la
+          //    universalidad de la detección de dedo).
+          if (caps.whiteBalanceMode?.includes("manual")) {
+            constraints.push({ whiteBalanceMode: "manual" });
+          }
+          // 3) EXPOSICIÓN auto-optimizada por el nivel REAL del rojo del dedo:
+          //    lleva el rojo a la ventana óptima (sin saturar → revela el AC del pulso;
+          //    sin oscurecer → señal fuerte). Una corrección medida, no un valor fijo.
+          if (caps.exposureMode?.includes("manual") && redLevel > 0) {
+            constraints.push({ exposureMode: "manual" });
+            const TARGET = 180;
+            // ratio<1 si está saturado/brillante (baja exposición → aparece el pulso);
+            // ratio>1 si está oscuro (sube). Acotado para no irse de mambo.
+            const ratio = clamp(TARGET / redLevel, 0.45, 2.2);
+            if (caps.iso && typeof caps.iso.max === "number") {
+              const isoMin = caps.iso.min ?? 25;
+              const isoMax = caps.iso.max ?? 800;
+              const curIso = settings.iso ?? (isoMin + isoMax) / 2;
+              constraints.push({ iso: clamp(Math.round(curIso * ratio), isoMin, isoMax) });
+            } else if (caps.exposureCompensation) {
+              const evMin = caps.exposureCompensation.min ?? -2;
+              const evMax = caps.exposureCompensation.max ?? 2;
+              const curEv = settings.exposureCompensation ?? 0;
+              constraints.push({
+                exposureCompensation: clamp(curEv + clamp(Math.log2(ratio), -1, 1), evMin, evMax),
+              });
+            } else if (caps.exposureTime && typeof settings.exposureTime === "number") {
+              const etMin = caps.exposureTime.min ?? settings.exposureTime;
+              const etMax = caps.exposureTime.max ?? settings.exposureTime;
+              constraints.push({ exposureTime: clamp(settings.exposureTime * ratio, etMin, etMax) });
+            }
+          }
+
+          if (constraints.length > 0) {
+            await track.applyConstraints({ advanced: constraints });
+            log.info(`Cámara optimizada al dedo (red=${redLevel.toFixed(0)}, ${constraints.length} ajustes)`);
+          }
+        } catch (e) {
+          log.warn("optimizeForFinger falló (best-effort)", e);
+        }
+      })();
     },
   }), []);
 
