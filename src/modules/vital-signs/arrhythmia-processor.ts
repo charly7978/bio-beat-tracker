@@ -60,6 +60,7 @@ export interface ArrhythmiaResult {
 export class ArrhythmiaProcessor {
   private readonly A = VITAL_THRESHOLDS.ARRHYTHMIA;
   private readonly RR_WINDOW_SIZE = this.A.RR_WINDOW_SIZE;
+  private readonly QUIET_PERIOD_MS = this.A.QUIET_PERIOD_MS;
   private readonly LEARNING_PERIOD_MS = this.A.LEARNING_PERIOD_MS;
   private readonly MIN_EVENT_INTERVAL_MS = this.A.MIN_EVENT_INTERVAL_MS;
   private readonly MIN_VALID_RR_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS;
@@ -73,6 +74,11 @@ export class ArrhythmiaProcessor {
   private arrhythmiaCount = 0;
   private lastArrhythmiaTime = 0;
   private measurementStartTime = getMonotonicNow();
+  /** Warm-up (8–18 s): spreads |RR−mediana| del usuario para aprender el deadband. */
+  private warmupSpread: number[] = [];
+  /** Deadband anti-jitter personalizado (ms), fijado al terminar el warm-up. */
+  private learnedDeadbandMs = this.A.RR_JITTER_FLOOR_MS;
+  private baselineLearned = false;
 
   // Current metrics & cached score (updated atomically after each detection)
   private metrics: ArrhythmiaMetrics = this.emptyMetrics();
@@ -97,11 +103,12 @@ export class ArrhythmiaProcessor {
       ? rrData.timestampNow
       : getMonotonicNow();
 
-    // End learning phase BEFORE processing data, so the first batch after the
-    // calibration window is evaluated immediately rather than being skipped.
-    if (now - this.measurementStartTime > this.LEARNING_PERIOD_MS) {
-      this.isLearningPhase = false;
-    }
+    // ── FASES DE ARRANQUE ──
+    // elapsed desde el inicio de la medición → fase QUIET / WARMUP / DETECT.
+    const sinceStart = now - this.measurementStartTime;
+    const inQuiet = sinceStart < this.QUIET_PERIOD_MS;            // 0–8 s: nada
+    const inWarmup = !inQuiet && sinceStart < this.LEARNING_PERIOD_MS; // 8–18 s: aprende
+    this.isLearningPhase = sinceStart < this.LEARNING_PERIOD_MS;
 
     if (rrData?.intervals && rrData.intervals.length > 0) {
       this.rrIntervals = rrData.intervals
@@ -112,21 +119,33 @@ export class ArrhythmiaProcessor {
       const elapsed = this.lastPeakTime ? now - this.lastPeakTime : Number.MAX_SAFE_INTEGER;
       const hasFreshRhythm = elapsed <= 2500;
 
-      if (!this.isLearningPhase && hasFreshRhythm && this.rrIntervals.length >= this.RR_WINDOW_SIZE) {
-        this.detectArrhythmia(now);
-      } else if (!hasFreshRhythm) {
-        this.arrhythmiaDetected = false;
-        this.confirmAccumMs = 0;
+      if (inQuiet) {
+        // Fase QUIET (0–8 s): NO se hace nada con las arritmias (arranque inestable).
+      } else if (inWarmup) {
+        // Fase WARM-UP (8–18 s): el sistema ya está estable → se aprende el patrón
+        // rítmico normal del usuario (spread de RR) SIN detectar.
+        if (hasFreshRhythm) this.collectWarmupSpread();
+      } else {
+        // Fase DETECT (≥18 s): al entrar, se fija el deadband personalizado.
+        if (!this.baselineLearned) this.learnRhythmBaseline();
+        if (hasFreshRhythm && this.rrIntervals.length >= this.RR_WINDOW_SIZE) {
+          this.detectArrhythmia(now);
+        } else if (!hasFreshRhythm) {
+          this.arrhythmiaDetected = false;
+          this.confirmAccumMs = 0;
+        }
       }
     } else {
       this.lastPeakTime = null;
     }
 
-    const status = this.isLearningPhase
+    const status = inQuiet
       ? 'CALIBRANDO...'
-      : this.arrhythmiaDetected
-        ? `ARRITMIA DETECTADA${this.lastDetectionKind ? ' · ' + this.lastDetectionKind : ''}`
-        : 'RITMO NORMAL';
+      : inWarmup
+        ? 'APRENDIENDO RITMO...'
+        : this.arrhythmiaDetected
+          ? `ARRITMIA DETECTADA${this.lastDetectionKind ? ' · ' + this.lastDetectionKind : ''}`
+          : 'RITMO NORMAL';
 
     return {
       arrhythmiaStatus: status,
@@ -153,13 +172,13 @@ export class ArrhythmiaProcessor {
     }
 
     const recent = this.rrIntervals.slice(-this.RR_WINDOW_SIZE);
-    const valid = recent.filter(r => r >= this.MIN_VALID_RR_MS && r <= this.MAX_VALID_RR_MS);
-    if (valid.length < this.A.MIN_INTERVALS) {
+    const validRaw = recent.filter(r => r >= this.MIN_VALID_RR_MS && r <= this.MAX_VALID_RR_MS);
+    if (validRaw.length < this.A.MIN_INTERVALS) {
       this.arrhythmiaDetected = false;
       return;
     }
 
-    const sorted = [...valid].sort((a, b) => a - b);
+    const sorted = [...validRaw].sort((a, b) => a - b);
     const n2 = sorted.length;
     const median = n2 % 2 === 0
       ? (sorted[n2 / 2 - 1] + sorted[n2 / 2]) / 2
@@ -171,10 +190,17 @@ export class ArrhythmiaProcessor {
 
     // --- Reject noise / micro-movement patterns before computing features ---
     // Noise produces intervals too short and too erratic for real cardiac activity.
-    if (this.rejectNoisePattern(valid, median)) {
+    if (this.rejectNoisePattern(validRaw, median)) {
       this.arrhythmiaDetected = false;
       return;
     }
+
+    // --- DEADBAND anti-jitter personalizado (aprendido en el warm-up) ---
+    // Colapsa a la mediana todo RR cuya desviación sea menor que el piso → el
+    // jitter normal de cámara (que satura pNN31/pNN325 → causa raíz de FP)
+    // desaparece; las desviaciones grandes (arritmia real >100 ms) sobreviven.
+    // Las features se computan sobre esta señal "limpia".
+    const valid = this.applyDeadband(validRaw, median);
 
     const n = valid.length;
 
@@ -439,6 +465,63 @@ export class ArrhythmiaProcessor {
   }
 
   // ──────────────────────────────────────────────
+  // Warm-up: aprendizaje del patrón rítmico + deadband personalizado
+  // ──────────────────────────────────────────────
+
+  /**
+   * Durante el warm-up (8–18 s) acumula el spread |RR−mediana| de la ventana
+   * actual para aprender la variabilidad NORMAL del usuario (jitter de cámara +
+   * arritmia sinusal respiratoria fisiológica). Acotado para no crecer sin límite.
+   */
+  private collectWarmupSpread(): void {
+    const valid = this.rrIntervals.filter(
+      r => r >= this.MIN_VALID_RR_MS && r <= this.MAX_VALID_RR_MS,
+    );
+    if (valid.length < 4) return;
+    const sorted = [...valid].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
+    if (median <= 0) return;
+    for (const r of valid) this.warmupSpread.push(Math.abs(r - median));
+    if (this.warmupSpread.length > 400) {
+      this.warmupSpread = this.warmupSpread.slice(-400);
+    }
+  }
+
+  /**
+   * Al terminar el warm-up fija el piso del deadband PERSONALIZADO: p90 del spread
+   * aprendido × factor, acotado a [RR_JITTER_FLOOR_MS, LEARNED_FLOOR_MAX_MS]. Si no
+   * se juntó suficiente evidencia, usa el piso fijo. Resuelve el caso en que el
+   * jitter normal del usuario supera el piso fijo de 70 ms.
+   */
+  private learnRhythmBaseline(): void {
+    this.baselineLearned = true;
+    const A = this.A;
+    if (this.warmupSpread.length >= 12) {
+      const sorted = [...this.warmupSpread].sort((a, b) => a - b);
+      const p90 = sorted[Math.floor(sorted.length * 0.9)] ?? A.RR_JITTER_FLOOR_MS;
+      this.learnedDeadbandMs = clamp(
+        Math.max(A.RR_JITTER_FLOOR_MS, p90 * A.LEARNED_FLOOR_FACTOR),
+        A.RR_JITTER_FLOOR_MS,
+        A.LEARNED_FLOOR_MAX_MS,
+      );
+    } else {
+      this.learnedDeadbandMs = A.RR_JITTER_FLOOR_MS;
+    }
+    log.info(`Deadband aprendido = ${this.learnedDeadbandMs.toFixed(0)} ms (spread n=${this.warmupSpread.length})`);
+  }
+
+  /**
+   * Colapsa a la mediana todo RR cuya desviación sea menor que el deadband
+   * aprendido (jitter normal → 0); las desviaciones grandes (arritmia real)
+   * pasan intactas. Devuelve un array nuevo (no muta el original).
+   */
+  private applyDeadband(intervals: number[], median: number): number[] {
+    const db = this.learnedDeadbandMs;
+    if (db <= 0 || median <= 0) return intervals;
+    return intervals.map(r => (Math.abs(r - median) < db ? median : r));
+  }
+
+  // ──────────────────────────────────────────────
   // Noise / motion-artifact rejection
   // ──────────────────────────────────────────────
 
@@ -497,6 +580,9 @@ export class ArrhythmiaProcessor {
     this.arrhythmiaCount = 0;
     this.lastArrhythmiaTime = 0;
     this.measurementStartTime = getMonotonicNow();
+    this.warmupSpread = [];
+    this.learnedDeadbandMs = this.A.RR_JITTER_FLOOR_MS;
+    this.baselineLearned = false;
     this.metrics = this.emptyMetrics();
     this.lastScore = 0;
     this.lastDetectionKind = '';

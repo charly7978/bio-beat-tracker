@@ -207,7 +207,30 @@ export const VITAL_THRESHOLDS = {
     RR_WINDOW_SIZE: 10,
     MIN_INTERVALS: 9,
     MIN_SQI: 62,
-    LEARNING_PERIOD_MS: 12_000,
+    /**
+     * FASES DE ARRANQUE (anti falsos positivos):
+     *   0 – QUIET_PERIOD_MS (8 s): NADA. El sistema aún se asienta (AE/baseline/
+     *     AGC); cualquier "irregularidad" aquí es transitorio de arranque, no
+     *     arritmia. Estado UI: "CALIBRANDO...".
+     *   QUIET – LEARNING_PERIOD_MS (8–18 s, warm-up de 10 s): el sistema YA está
+     *     estable → se APRENDE el patrón rítmico normal del usuario (spread de RR)
+     *     sin detectar. Estado UI: "APRENDIENDO RITMO...".
+     *   ≥ LEARNING_PERIOD_MS (18 s): recién aquí se detectan arritmias REALES,
+     *     usando el deadband personalizado aprendido en el warm-up.
+     */
+    QUIET_PERIOD_MS: 8_000,
+    LEARNING_PERIOD_MS: 18_000,
+    /**
+     * DEADBAND ANTI-JITTER personalizado (causa raíz de FP en cámara: el jitter de
+     * localización de pico ±1–2 muestras ≈ 33–66 ms satura pNN31/pNN325). Tras el
+     * warm-up se aprende el spread normal del usuario (p90 de |RR−mediana|) y se fija
+     * el piso = clamp(max(RR_JITTER_FLOOR_MS, p90·FACTOR), FLOOR, MAX). En detección,
+     * todo RR a < piso de la mediana se colapsa a la mediana → el jitter normal
+     * desaparece, las desviaciones grandes (arritmia real >100 ms) sobreviven.
+     */
+    RR_JITTER_FLOOR_MS: 70,
+    LEARNED_FLOOR_FACTOR: 1.4,
+    LEARNED_FLOOR_MAX_MS: 150,
     MIN_EVENT_INTERVAL_MS: 6000,
     OUTLIER_RATIO: 0.16,
     ABRUPT_RR_FRAC: 0.16,

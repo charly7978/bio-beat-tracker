@@ -112,9 +112,14 @@ export function buildRhythmPanel(
   hrv?: { sdnn: number; rmssd: number },
 ): RhythmPanelInfo {
   const irr = computeRrIrregularityPct(rrIntervals);
-  const calibrating = arrhythmiaStatus?.includes('CALIBRANDO');
-  const detected =
-    !calibrating && (arrhythmiaStatus?.includes('ARRITMIA') || (irr !== null && irr >= 20));
+  // Calibrando o aprendiendo el ritmo (warm-up): el panel no alerta.
+  const calibrating =
+    arrhythmiaStatus?.includes('CALIBRANDO') || arrhythmiaStatus?.includes('APRENDIENDO');
+  // VEREDICTO ÚNICO = ArrhythmiaProcessor. El panel SOLO refleja su frase exacta
+  // 'ARRITMIA DETECTADA' (que pasa por warm-up, deadband y confirmación temporal).
+  // NO se detecta por CV-RR aquí (eso saltaba TODO el pipeline → falsos positivos).
+  // El CV-RR (irr) queda solo como referencia informativa.
+  const detected = !calibrating && !!arrhythmiaStatus?.includes('ARRITMIA DETECTADA');
 
   const hrvLine =
     hrv && hrv.sdnn > 0

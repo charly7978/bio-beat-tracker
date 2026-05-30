@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ArrhythmiaProcessor } from '../arrhythmia-processor';
 
+/** Avanza más allá del warm-up completo (QUIET 8 s + WARMUP 10 s = 18 s) → fase DETECT. */
 function calibratedProc(): ArrhythmiaProcessor {
   const p = new ArrhythmiaProcessor();
-  vi.advanceTimersByTime(13_000);
+  vi.advanceTimersByTime(19_000);
   return p;
 }
 
@@ -44,14 +45,28 @@ describe('ArrhythmiaProcessor', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  describe('learning phase', () => {
-    it('permanece en CALIBRANDO durante ventana inicial', () => {
+  describe('fases de arranque (8 s quiet → 10 s warm-up → detect)', () => {
+    it('primeros 8 s (QUIET): CALIBRANDO, sin hacer nada', () => {
       const r = new ArrhythmiaProcessor().processRRData({
         intervals: [800, 810, 795, 805],
         lastPeakTime: performance.now(),
       });
       expect(r.arrhythmiaStatus).toBe('CALIBRANDO...');
       expect(r.arrhythmiaConfidence).toBe('none');
+    });
+
+    it('8–18 s (WARM-UP): APRENDIENDO RITMO, sin detectar aún', () => {
+      const p = new ArrhythmiaProcessor();
+      vi.advanceTimersByTime(10_000); // dentro del warm-up (8–18 s)
+      const r = feed(p, [490, 810, 380, 920, 410, 780, 340, 960, 450, 850]);
+      expect(r.arrhythmiaStatus).toBe('APRENDIENDO RITMO...');
+      expect(r.arrhythmiaStatus).not.toContain('ARRITMIA DETECTADA');
+    });
+
+    it('≥18 s (DETECT): ya evalúa arritmias', () => {
+      const p = calibratedProc();
+      const r = feed(p, [812, 818, 815, 821, 809, 816, 814, 820, 813, 817]);
+      expect(r.arrhythmiaStatus).toBe('RITMO NORMAL');
     });
   });
 
