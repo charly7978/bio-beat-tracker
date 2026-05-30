@@ -112,6 +112,8 @@ const PPGSignalMeter = ({
   const lastPeakTimeRef = useRef(0);
   const lastPeakProcessedRef = useRef(0);
   const arrActiveUntilRef = useRef(0);
+  /** Latch: la onda se revela solo cuando la adquisición llega a READY (señal estable). */
+  const traceRevealedRef = useRef(false);
   const [showPulse, setShowPulse] = useState(false);
 
   const lastArrhythmiaCountRef = useRef(0);
@@ -341,6 +343,19 @@ const PPGSignalMeter = ({
         lerpDisplayValue(displayDiaRef.current, targetDia, DISPLAY_SMOOTH_ALPHAS.bp),
       );
 
+      // Latch de revelado de la onda: solo se muestra el trazo cuando la
+      // adquisición alcanza READY (señal estabilizada). Al revelar por primera vez
+      // se LIMPIA el buffer → la onda aparece limpia desde cero, sin el ruido inicial.
+      // Se resetea al perder el dedo.
+      const acqStage = (p.diagnostics as { acquisitionStage?: string } | undefined)?.acquisitionStage;
+      if (!fingerOn && !preserve) {
+        traceRevealedRef.current = false;
+      } else if (!traceRevealedRef.current && acqStage === 'READY') {
+        traceRevealedRef.current = true;
+        dataBufferRef.current?.clear();
+        beatHistoryRef.current = [];
+      }
+
       const renderState: PpgRenderState = {
         layout: layoutRef.current,
         props: {
@@ -371,6 +386,7 @@ const PPGSignalMeter = ({
         pendingTrendArr: pendingTrendArrRef.current,
         lastPeakProcessedTime: lastPeakProcessedRef.current,
         arrActiveUntil: arrActiveUntilRef.current,
+        traceRevealed: traceRevealedRef.current,
       };
 
       drawBackground(ctx, layoutRef.current.width, layoutRef.current.height);
