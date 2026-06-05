@@ -601,10 +601,16 @@ export class VitalSignsProcessor {
     
     // === BP ===
     if (validRR.length >= 2) {
+      // morphologyHistory se alimenta a la cadencia de vitales (1 muestra cada
+      // VITALS_PROCESS_EVERY_N_FRAMES frames ≈ 10 Hz), NO a la tasa de frames de
+      // cámara. Pasar 30 aquí desescalaba ~3× todas las features temporales del
+      // PWA (SUT/PW50/fase diastólica) y hacía que la validación de ciclo
+      // (350–1800 ms) rechazara latidos de frecuencia normal. Usar la misma
+      // tasa efectiva que la respiración (única fuente: VITAL_SIGNAL_ESTIMATE_HZ).
       const bpEstimate = this.bloodPressureProcessor.estimate(
         this.morphologyHistory.tail(this.HISTORY_SIZE),
         validRR,
-        30,
+        this.VITAL_SIGNAL_ESTIMATE_HZ,
         this.lastBPM > 0 ? this.lastBPM : undefined,
       );
 
