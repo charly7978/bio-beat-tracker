@@ -13,6 +13,7 @@ import { useSignalRouter } from "@/hooks/useSignalRouter";
 import { useMeasurementSession } from "@/hooks/useMeasurementSession";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
 import { PoincarePlot } from "@/components/PoincarePlot";
+import { WebrtcCallWidget } from "@/components/WebrtcCallWidget";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
 import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
 import { isNative } from "@/lib/device/platform";
@@ -211,6 +212,10 @@ const Index = () => {
   // UI states
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [webgpuAvail, setWebgpuAvail] = useState<'checking' | 'yes' | 'no'>('checking');
+  const [healthAvail, setHealthAvail] = useState<'checking' | 'yes' | 'no'>('checking');
+  const [encryptionReady, setEncryptionReady] = useState(false);
+  const [riskResult, setRiskResult] = useState<string | null>(null);
   const [age, setAge] = useState<string>("35");
   const [height, setHeight] = useState<string>("172");
   const [weight, setWeight] = useState<string>("70");
@@ -232,7 +237,7 @@ const Index = () => {
     setDisclaimerAccepted(true);
   }, []);
 
-  const [activeTab, setActiveTab] = useState<'profile' | 'history' | 'account'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'history' | 'account' | 'advanced'>('profile');
   const [history, setHistory] = useState<HistoricalMeasurement[]>([]);
   const [currentUser, setCurrentUser] = useState<ActiveUser | null>(null);
   const [email, setEmail] = useState("");
@@ -242,9 +247,10 @@ const Index = () => {
 
   const fetchHistory = useCallback(async () => {
     try {
-      const localStr = localStorage.getItem("local_measurements");
-      const localData = localStr ? JSON.parse(localStr) : [];
-      const formattedLocal = localData.map((m: HistoricalMeasurement) => ({
+      const { decryptLocalMeasurements } = await import('@/hooks/useSaveMeasurement');
+      const localData = await decryptLocalMeasurements();
+      const typedLocal = localData as HistoricalMeasurement[];
+      const formattedLocal = typedLocal.map((m: HistoricalMeasurement) => ({
         ...m,
         isCloud: false,
       }));
@@ -277,6 +283,7 @@ const Index = () => {
   const handleClearHistory = useCallback(() => {
     if (window.confirm("¿Estás seguro de que quieres borrar el historial local de este dispositivo?")) {
       localStorage.removeItem("local_measurements");
+      localStorage.removeItem("bb-crypto-key");
       fetchHistory();
     }
   }, [fetchHistory]);
@@ -372,6 +379,42 @@ const Index = () => {
       fetchHistory();
     }
   }, [showSettings, fetchHistory]);
+
+  // Check WebGPU availability
+  useEffect(() => {
+    if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
+      navigator.gpu.requestAdapter().then(adapter => {
+        setWebgpuAvail(adapter ? 'yes' : 'no');
+      }).catch(() => setWebgpuAvail('no'));
+    } else {
+      setWebgpuAvail('no');
+    }
+  }, []);
+
+  // Check Health Connect availability
+  useEffect(() => {
+    import('@/lib/capacitor/healthBridge').then(({ healthBridge }) => {
+      healthBridge.checkAvailability().then(avail => {
+        setHealthAvail(avail ? 'yes' : 'no');
+      }).catch(() => setHealthAvail('no'));
+    }).catch(() => setHealthAvail('no'));
+  }, []);
+
+  // Check if encryption key exists (means crypto was initialized)
+  useEffect(() => {
+    setEncryptionReady(localStorage.getItem('bb-crypto-key') !== null);
+  }, []);
+
+  // Run risk analysis on current vitals
+  useEffect(() => {
+    const vs = lastValidResults;
+    if (vs && (vs.heartRate.value || vs.spo2.value)) {
+      import('@/lib/ml/riskAnalyzer').then(({ healthRiskAnalyzer }) => {
+        const risk = healthRiskAnalyzer.analyze(vs);
+        setRiskResult(risk.timeline);
+      }).catch(() => {});
+    }
+  }, [lastValidResults?.heartRate.value, lastValidResults?.spo2.value]);
 
   // Cargar datos antropométricos desde CalibrationManager al montar
   useEffect(() => {
@@ -1379,15 +1422,28 @@ const Index = () => {
                       <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3">
                         <div className="flex items-center gap-1.5 text-purple-400 text-[10px] font-bold uppercase tracking-wider">
                           <Brain className="w-3.5 h-3.5" />
-                          <span>AI / ML — Análisis en Dispositivo</span>
+                          <span>AI / ML — Risk Analyzer</span>
                         </div>
                         <p className="text-zinc-500 text-[9px] leading-relaxed">
-                          Clasificador PPG on-device (Transformers.js + WebGPU) sin enviar datos al servidor.
+                          Análisis de riesgo cardiovascular en dispositivo. Sin datos enviados al servidor.
                         </p>
-                        <button onClick={() => alert('AI/ML Engine activo: Clasificador PPG + Risk Analyzer + Detección de arritmias on-device')}
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="text-zinc-500">Timeline de riesgo:</span>
+                          <span className={`font-bold ${riskResult === 'IMMEDIATE' ? 'text-red-400' : riskResult === 'SOON' ? 'text-orange-400' : riskResult === 'MONITOR' ? 'text-yellow-400' : 'text-emerald-400'}`}>
+                            {riskResult ?? '—'}
+                          </span>
+                        </div>
+                        <button onClick={() => {
+                          const riskEl = document.getElementById('risk-detail');
+                          if (riskEl) riskEl.classList.toggle('hidden');
+                        }}
                           className="w-full py-1.5 rounded-lg bg-purple-600/20 border border-purple-900/40 text-purple-400 hover:bg-purple-600/30 font-bold text-[10px] transition-all">
-                          VER ESTADO DEL MOTOR AI
+                          VER ANÁLISIS DE RIESGO
                         </button>
+                        <div id="risk-detail" className="hidden text-[9px] text-zinc-500 space-y-1">
+                          <p>Basado en: pulso, SpO₂, presión arterial y arritmias.</p>
+                          <p>Recomendaciones: consulte la sección de resultados post-medición.</p>
+                        </div>
                       </div>
 
                       {/* WebRTC Telemedicina */}
@@ -1397,12 +1453,9 @@ const Index = () => {
                           <span>Telemedicina — WebRTC P2P</span>
                         </div>
                         <p className="text-zinc-500 text-[9px] leading-relaxed">
-                          Video llamada P2P cifrada con canal de datos para compartir signos vitales en tiempo real.
+                          Conexión P2P con STUN. Copie su SDP local y compártalo manualmente con el remoto.
                         </p>
-                        <button onClick={() => alert('WebRTC Telemedicina: RTCPeerConnection + DataChannel + STUN/TURN configurado. Use startCall() para iniciar.')}
-                          className="w-full py-1.5 rounded-lg bg-emerald-600/20 border border-emerald-900/40 text-emerald-400 hover:bg-emerald-600/30 font-bold text-[10px] transition-all">
-                          INICIAR CONSULTA REMOTA
-                        </button>
+                        <WebrtcCallWidget />
                       </div>
 
                       {/* WebGPU Acceleration */}
@@ -1411,43 +1464,54 @@ const Index = () => {
                           <Sliders className="w-3.5 h-3.5" />
                           <span>WebGPU — Aceleración por Hardware</span>
                         </div>
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="text-zinc-500">Disponible:</span>
+                          <span className={`font-bold ${webgpuAvail === 'yes' ? 'text-emerald-400' : webgpuAvail === 'no' ? 'text-red-400' : 'text-yellow-400'}`}>
+                            {webgpuAvail === 'checking' ? 'Verificando...' : webgpuAvail === 'yes' ? 'SÍ' : 'NO (fallback CPU)'}
+                          </span>
+                        </div>
                         <p className="text-zinc-500 text-[9px] leading-relaxed">
-                          FFT, filtro paso banda, autocorrelación y multiplicación de matrices en compute shaders WGSL.
+                          {webgpuAvail === 'yes'
+                            ? 'GPU disponible para aceleración de cómputo MLP en estimación de BP.'
+                            : 'WebGPU no disponible. El pipeline MLP usa CPU (dot product JS).'}
                         </p>
-                        <button onClick={() => alert('WebGPU: GPUFFTProcessor lista. FFT acelerada por GPU, bandpass filter, autocorrelación y matrixMul en WGSL.')}
-                          className="w-full py-1.5 rounded-lg bg-cyan-600/20 border border-cyan-900/40 text-cyan-400 hover:bg-cyan-600/30 font-bold text-[10px] transition-all">
-                          VER ACELERACIÓN GPU
-                        </button>
                       </div>
 
                       {/* Zero Trust Security */}
                       <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3">
                         <div className="flex items-center gap-1.5 text-amber-400 text-[10px] font-bold uppercase tracking-wider">
                           <Shield className="w-3.5 h-3.5" />
-                          <span>Zero Trust — Cifrado Extremo a Extremo</span>
+                          <span>Cifrado — Almacenamiento Local</span>
+                        </div>
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="text-zinc-500">Cifrado AES-256-GCM:</span>
+                          <span className={`font-bold ${encryptionReady ? 'text-emerald-400' : 'text-zinc-500'}`}>
+                            {encryptionReady ? 'ACTIVO' : 'Se activa al guardar'}
+                          </span>
                         </div>
                         <p className="text-zinc-500 text-[9px] leading-relaxed">
-                          AES-256-GCM + PBKDF2 210K iteraciones. Almacenamiento local cifrado. Cadena de auditoría inmutable.
+                          Las mediciones locales se cifran con AES-256-GCM antes de escribirse en localStorage.
+                          Clave derivada del dispositivo (SHA-256).
                         </p>
-                        <button onClick={() => alert('Zero Trust: ZeroKnowledgeCrypto (AES-256-GCM + PBKDF2), SecureStorage con integridad HMAC, AuditLog encadenado con hashes SHA-256.')}
-                          className="w-full py-1.5 rounded-lg bg-amber-600/20 border border-amber-900/40 text-amber-400 hover:bg-amber-600/30 font-bold text-[10px] transition-all">
-                          VERIFICAR SEGURIDAD
-                        </button>
                       </div>
 
                       {/* Capacitor Plugins Avanzados */}
                       <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3">
                         <div className="flex items-center gap-1.5 text-blue-400 text-[10px] font-bold uppercase tracking-wider">
                           <Activity className="w-3.5 h-3.5" />
-                          <span>Plugins Nativos — Health Connect + Background</span>
+                          <span>Health Connect — Auto-guardado</span>
+                        </div>
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="text-zinc-500">Disponible:</span>
+                          <span className={`font-bold ${healthAvail === 'yes' ? 'text-emerald-400' : healthAvail === 'no' ? 'text-zinc-500' : 'text-yellow-400'}`}>
+                            {healthAvail === 'checking' ? 'Verificando...' : healthAvail === 'yes' ? 'SÍ' : 'No disponible'}
+                          </span>
                         </div>
                         <p className="text-zinc-500 text-[9px] leading-relaxed">
-                          Health Connect (Android) / HealthKit (iOS). Servicio en primer plano. Filesystem, Preferences, Network.
+                          {healthAvail === 'yes'
+                            ? 'Health Connect detectado. Las mediciones se guardan automáticamente al finalizar.'
+                            : 'Solo disponible en Android 26+ con Health Connect instalado. En web/escritorio no aplica.'}
                         </p>
-                        <button onClick={() => alert('Capacitor: @capgo/capacitor-health, @capacitor/filesystem, @capacitor/preferences, @capacitor/network, @capacitor/app + background foreground service.')}
-                          className="w-full py-1.5 rounded-lg bg-blue-600/20 border border-blue-900/40 text-blue-400 hover:bg-blue-600/30 font-bold text-[10px] transition-all">
-                          VER PLUGINS INSTALADOS
-                        </button>
                       </div>
                     </div>
                   )}

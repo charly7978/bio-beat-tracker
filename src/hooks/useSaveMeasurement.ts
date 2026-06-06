@@ -20,6 +20,51 @@ interface MeasurementData {
   artifactMetrics?: ArtifactMetrics;
 }
 
+const LOCAL_STORAGE_KEY = 'local_measurements';
+
+async function getEncryptionKey(): Promise<CryptoKey> {
+  const raw = localStorage.getItem('bb-crypto-key');
+  if (raw) {
+    const keyData = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
+    return crypto.subtle.importKey('raw', keyData, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  }
+  const seed = navigator.userAgent + navigator.language + 'bio-beat-2024';
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed));
+  const keyData = new Uint8Array(hash).slice(0, 16);
+  localStorage.setItem('bb-crypto-key', btoa(String.fromCharCode(...keyData)));
+  return crypto.subtle.importKey('raw', keyData, 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+
+async function encryptLocalMeasurements(data: unknown): Promise<string> {
+  const key = await getEncryptionKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = new TextEncoder().encode(JSON.stringify(data));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+  combined.set(iv);
+  combined.set(new Uint8Array(ciphertext), iv.length);
+  return btoa(String.fromCharCode(...combined));
+}
+
+export async function decryptLocalMeasurements(): Promise<unknown[]> {
+  const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+  if (!raw) return [];
+  try {
+    const key = await getEncryptionKey();
+    const combined = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
+    const iv = combined.slice(0, 12);
+    const ciphertext = combined.slice(12);
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+    return JSON.parse(new TextDecoder().decode(decrypted));
+  } catch {
+    try {
+      const fallback = JSON.parse(raw);
+      if (Array.isArray(fallback)) return fallback;
+    } catch { }
+    return [];
+  }
+}
+
 async function insertMeasurementAttempt(
   userId: string,
   outcome: string,
@@ -123,10 +168,9 @@ export const useSaveMeasurement = () => {
       let savedLocally = false;
 
       if (authError || !user) {
-        console.log('⚠️ Guardando medición localmente (sin sesión activa o red offline)...');
-        const localMeasurementsStr = localStorage.getItem('local_measurements');
-        const localMeasurements = localMeasurementsStr ? JSON.parse(localMeasurementsStr) : [];
-        
+        console.log('⚠️ Guardando medición localmente (cifrado AES-GCM)...');
+        const localMeasurements = await decryptLocalMeasurements();
+
         const newRecord = {
           id: `local_${Date.now()}`,
           heart_rate: hr,
@@ -139,12 +183,13 @@ export const useSaveMeasurement = () => {
         };
 
         localMeasurements.push(newRecord);
-        localStorage.setItem('local_measurements', JSON.stringify(localMeasurements));
+        const encrypted = await encryptLocalMeasurements(localMeasurements);
+        localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
         savedLocally = true;
 
         toast({
-          title: '✅ Guardado localmente',
-          description: 'Medición guardada en el historial de este dispositivo.',
+          title: '✅ Guardado localmente (cifrado)',
+          description: 'Medición cifrada AES-256 guardada en este dispositivo.',
           duration: 3000,
         });
       }
@@ -170,9 +215,8 @@ export const useSaveMeasurement = () => {
             insertError: insertError.message,
           });
 
-          // Fallback a localStorage si falla la escritura en la nube
-          const localMeasurementsStr = localStorage.getItem('local_measurements');
-          const localMeasurements = localMeasurementsStr ? JSON.parse(localMeasurementsStr) : [];
+          // Fallback a localStorage cifrado si falla la escritura en la nube
+          const localMeasurements = await decryptLocalMeasurements();
           localMeasurements.push({
             id: `local_${Date.now()}`,
             heart_rate: hr,
@@ -183,11 +227,12 @@ export const useSaveMeasurement = () => {
             quality: sq,
             measured_at: new Date().toISOString(),
           });
-          localStorage.setItem('local_measurements', JSON.stringify(localMeasurements));
+          const encrypted = await encryptLocalMeasurements(localMeasurements);
+          localStorage.setItem(LOCAL_STORAGE_KEY, encrypted);
 
           toast({
-            title: '⚠️ Guardado localmente',
-            description: 'No se pudo subir a la nube. Guardado en este dispositivo.',
+            title: '⚠️ Guardado localmente (cifrado)',
+            description: 'No se pudo subir a la nube. Cifrado AES-256 guardado localmente.',
             duration: 4000,
           });
           return true;

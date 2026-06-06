@@ -11,6 +11,7 @@ import {
 } from '@/lib/sanity/sanityAuditLog';
 import type { CameraViewHandle } from '@/components/CameraView';
 import type { ValidationFrame } from '@/lib/acquisition/MeasurementWindowValidator';
+import { healthBridge } from '@/lib/capacitor/healthBridge';
 
 interface UseMeasurementSessionInput {
   cameraRef: React.RefObject<CameraViewHandle>;
@@ -287,6 +288,9 @@ export function useMeasurementSession({
         signalQuality: sqForSave,
         artifactMetrics,
       });
+      healthBridge.checkAvailability().then(avail => {
+        if (avail) healthBridge.saveVitals(dataToSave);
+      }).catch(() => {});
     }
 
     setIsCameraOn(false);
