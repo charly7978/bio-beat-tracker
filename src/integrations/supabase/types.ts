@@ -157,33 +157,6 @@ export type Database = {
           },
         ]
       }
-      measurement_attempts: {
-        Row: {
-          created_at: string
-          diagnostics: Json
-          id: string
-          outcome: string
-          signal_quality: number
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          diagnostics?: Json
-          id?: string
-          outcome: string
-          signal_quality?: number
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          diagnostics?: Json
-          id?: string
-          outcome?: string
-          signal_quality?: number
-          user_id?: string
-        }
-        Relationships: []
-      }
       perf_snapshots: {
         Row: {
           app_version: string | null
