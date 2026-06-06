@@ -100,16 +100,23 @@ async function stabilizeTrack(track: MediaStreamTrack): Promise<void> {
     constraints.push({ frameRate: targetFps });
   }
 
-  if (caps.exposureMode?.includes("manual")) {
-    constraints.push({ exposureMode: "manual" });
-  } else if (caps.exposureMode?.includes("continuous")) {
+  // Exposición y WB en CONTINUO durante la COLOCACIÓN del dedo: el AE/AWB deben
+  // ADAPTARSE al dedo que baja, no congelarse sobre la escena vacía (flash sin
+  // dedo). El bloqueo anti-deriva se DIFIERE a optimizeForFinger(), que congela
+  // exposición/WB ya sobre la escena REAL del dedo en STABLE_CONTACT (ver doc de
+  // optimizeForFinger). Congelar acá la escena vacía retrasaba la convergencia
+  // (~25-30 s) porque el frame del dedo quedaba mal expuesto hasta STABLE_CONTACT.
+  if (caps.exposureMode?.includes("continuous")) {
     constraints.push({ exposureMode: "continuous" });
   }
 
-  if (caps.whiteBalanceMode?.includes("manual")) {
-    constraints.push({ whiteBalanceMode: "manual" });
+  if (caps.whiteBalanceMode?.includes("continuous")) {
+    constraints.push({ whiteBalanceMode: "continuous" });
   }
 
+  // Foco cercano fijo desde el inicio: el dedo siempre está pegado al lente, así
+  // que el foco manual a mínima distancia es estable y correcto (no introduce
+  // deriva ni "hunting"). Es lo único que conviene fijar antes del dedo.
   if (caps.focusMode?.includes("manual")) {
     constraints.push({ focusMode: "manual", focusDistance: 0 });
   } else if (caps.focusMode?.includes("continuous")) {
