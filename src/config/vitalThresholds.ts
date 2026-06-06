@@ -57,13 +57,13 @@ export const VITAL_THRESHOLDS = {
     DIA_SYS_RATIO_MAX: 0.90,
     /** Fracción de PP atribuible a reflexión de onda (índice 0–1) */
     REFLECTION_PP_FRAC: 0.22,
-    MIN_CYCLES: 3,
+    MIN_CYCLES: 2,
     MIN_CYCLE_QUALITY: 0.28,
-    MIN_BUFFER_SAMPLES: 120,
-    STABILITY_FRAMES_HIGH: 30,
-    STABILITY_FRAMES_MEDIUM: 20,
+    MIN_BUFFER_SAMPLES: 90,
+    STABILITY_FRAMES_HIGH: 20,
+    STABILITY_FRAMES_MEDIUM: 12,
     FEATURE_QUALITY_HIGH: 72,
-    FEATURE_QUALITY_MEDIUM: 48,
+    FEATURE_QUALITY_MEDIUM: 36,
     MIN_RR_CONFIDENCE: 0.08,
     /** Límites de forma de pulso (adimensional / ms) — no mmHg */
     FEATURE_NORM: {

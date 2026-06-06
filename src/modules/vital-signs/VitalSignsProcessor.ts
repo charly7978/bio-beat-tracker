@@ -618,7 +618,7 @@ export class VitalSignsProcessor {
     } else if (confidence === 'MEDIUM') {
       this.stableFramesCount = Math.min(this.stableFramesCount + 1, 600);
     } else if (confidence === 'LOW') {
-      // LOW: no avanza ni retrocede — mantiene estado
+      this.stableFramesCount = Math.min(this.stableFramesCount + 0.5, 600);
     } else {
       this.stableFramesCount = Math.max(0, this.stableFramesCount - 2);
     }

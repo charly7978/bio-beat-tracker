@@ -206,7 +206,7 @@ const Index = () => {
       router.setVitalSigns(lastValidResults);
       session.setLocalShowResults(true);
     }
-  }, [lastValidResults, session.isMonitoring, router, session]);
+  }, [lastValidResults, session.isMonitoring]);
 
   // UI states
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
@@ -802,7 +802,10 @@ const Index = () => {
                         </div>
                       </div>
                       <button 
-                        onClick={() => session.setLocalMeasurementSummary(null)}
+                        onClick={() => {
+                          session.setLocalMeasurementSummary(null);
+                          session.setLocalShowResults(false);
+                        }}
                         className="p-1.5 rounded-full bg-zinc-900 hover:bg-slate-700 transition-colors"
                       >
                         <X className="w-4 h-4 text-zinc-400" />
