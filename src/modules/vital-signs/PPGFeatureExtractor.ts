@@ -72,6 +72,9 @@ export interface CycleFeatures {
   // Advanced 2024 Features
   kValue: number;       // Ratio of area under pulse to peak height * duration
   vMax: number;         // Maximum ascending slope
+
+  // 2025 Features
+  harmonicDistortion: number;  // HD = sqrt(harmonic_energy / total_energy) — correlato de rigidez arterial (Nature 2025)
 }
 
 // ═══════════════════════════════════════════
@@ -227,6 +230,12 @@ export class PPGFeatureExtractor {
     const cycleSegment = buffer.slice(onset, nextOnset + 1);
     const apg = this.extractAPGFromSegment(cycleSegment);
 
+    // ── Harmonic Distortion (Nature 2025) ──
+    // Cuantifica el contenido armónico del pulso: arterias rígidas producen
+    // ondas más puntiagudas (armónicos ricos). Se computa como la fracción
+    // de energía no explicada por el seno fundamental del ciclo cardíaco.
+    const hd = this.computeHarmonicDistortion(buffer, onset, nextOnset, sampleRate);
+
     // ── Quality assessment ──
     const quality = this.assessCycleQuality(
       amplitude, sutMs, diastolicTimeMs, pw50Ms, dicroticNotch >= 0
@@ -240,7 +249,8 @@ export class PPGFeatureExtractor {
       systolicArea, diastolicArea, areaRatio, ipaRatio,
       stiffnessIndex, augmentationIndex, pwvProxy,
       apg, quality,
-      kValue, vMax
+      kValue, vMax,
+      harmonicDistortion: hd,
     };
   }
 
@@ -445,6 +455,39 @@ export class PPGFeatureExtractor {
     const agi = Math.abs(a) > 1e-10 ? (b - c - d - e) / a : 0;
 
     return { a, b, c, d, e, bDivA, cDivA, dDivA, eDivA, agi };
+  }
+
+  /**
+   * Harmonic Distortion via sine-fit residual (Nature Scientific Reports 2025).
+   * Ajusta un seno a la frecuencia fundamental del ciclo y mide la energía
+   * armónica residual como fracción de la energía total. HD → 0 ≈ seno puro
+   * (arteria complaciente); HD → 1 ≈ pulso rico en armónicos (arteria rígida).
+   */
+  private static computeHarmonicDistortion(
+    buffer: number[], onset: number, nextOnset: number, sampleRate: number,
+  ): number {
+    const n = nextOnset - onset;
+    if (n < 8) return 0;
+    const f0 = sampleRate / n;
+    let sinSum = 0, cosSum = 0, sin2Sum = 0, cos2Sum = 0, sincosSum = 0, totalVar = 0;
+    const mean = buffer.slice(onset, nextOnset + 1).reduce((a, b) => a + b, 0) / (n + 1);
+    for (let i = 0; i <= n; i++) {
+      const t = i / sampleRate;
+      const s = Math.sin(2 * Math.PI * f0 * t);
+      const c = Math.cos(2 * Math.PI * f0 * t);
+      const y = buffer[onset + i] - mean;
+      sinSum += y * s; cosSum += y * c;
+      sin2Sum += s * s; cos2Sum += c * c; sincosSum += s * c;
+      totalVar += y * y;
+    }
+    if (totalVar < 1e-10) return 0;
+    const det = sin2Sum * cos2Sum - sincosSum * sincosSum;
+    if (Math.abs(det) < 1e-10) return 0;
+    const A = (cos2Sum * sinSum - sincosSum * cosSum) / det;
+    const B = (sin2Sum * cosSum - sincosSum * sinSum) / det;
+    const fundEnergy = (A * A + B * B) * (n + 1) / 2;
+    const harmEnergy = Math.max(0, totalVar - fundEnergy);
+    return Math.sqrt(harmEnergy / totalVar);
   }
 
   /**

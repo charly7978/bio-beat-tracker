@@ -261,6 +261,7 @@ export class BloodPressureProcessor {
       pw50Ms: median(take.map((c) => c.pw50Ms)),
       kValue: median(take.map((c) => c.kValue)),
       vMax: median(take.map((c) => c.vMax)),
+      harmonicDistortion: median(take.map((c) => c.harmonicDistortion)),
     };
   }
 
@@ -273,6 +274,7 @@ export class BloodPressureProcessor {
     if (f.augmentationIndex > 2 && f.augmentationIndex < 45) score += 10;
     if (f.dicroticDepth > 0 && f.dicroticDepth < 0.8) score += 8;
     if (f.pw50Ms > 60 && f.pw50Ms < 600) score += 7;
+    if (f.harmonicDistortion > 0.05 && f.harmonicDistortion < 1) score += 5;
     return Math.min(100, score);
   }
 

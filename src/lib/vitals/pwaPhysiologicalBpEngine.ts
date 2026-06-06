@@ -20,6 +20,7 @@ export interface PwaMedianFeatures {
   pw50Ms: number;
   kValue: number;
   vMax: number;
+  harmonicDistortion: number;
 }
 
 export interface PwaBpContext {
@@ -138,8 +139,10 @@ export function computePhysiologicalIndices(
   const siNorm = norm01(stiffnessIndex, N.STIFFNESS_INDEX[0], N.STIFFNESS_INDEX[1]);
   const aixNorm = norm01(f.augmentationIndex, N.AUGMENTATION_INDEX[0], N.AUGMENTATION_INDEX[1]);
   const vNorm = norm01(f.vMax, N.V_MAX[0], N.V_MAX[1]);
+  const hdNorm = norm01(f.harmonicDistortion, N.HARMONIC_DISTORTION[0], N.HARMONIC_DISTORTION[1]);
   
   // Compliancia arterial: reducida por la edad (pérdida de elasticidad exponencial)
+  // y por distorsión armónica (Nature 2025): más armónicos → pared más rígida.
   const complianceAgeFactor = Math.exp(-0.012 * (p.ageYears - 25));
   const wC = VITAL_THRESHOLDS.BP.WEIGHTS.COMPLIANCE;
   let complianceIndex = 
@@ -148,7 +151,8 @@ export function computePhysiologicalIndices(
       wC.si * siNorm +
       wC.aix * aixNorm +
       wC.vMax * vNorm +
-      wC.sutRatio * norm01(sutRatio, N.SUT_CYCLE_RATIO[0], N.SUT_CYCLE_RATIO[1]));
+      wC.sutRatio * norm01(sutRatio, N.SUT_CYCLE_RATIO[0], N.SUT_CYCLE_RATIO[1]) +
+      hdNorm * 0.15);
   complianceIndex = clamp(complianceIndex * complianceAgeFactor, 0.05, 1);
 
   const wRef = VITAL_THRESHOLDS.BP.WEIGHTS.REFLECTION;

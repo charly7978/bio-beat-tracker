@@ -746,63 +746,11 @@ export class VitalSignsProcessor {
    * - Filtrado de mediana sobre ventana de R para estabilidad
    * - Gating por PI mínimo (perfusión) antes de calcular
    * - Validación del rango físico de R (0.2-2.5 para tejido humano)
+   *
+   * NOTA: La implementación concreta se delegó a SpO2Calculator (importado arriba).
+   * Este comentario y el método huérfano calculateSpO2Raw se eliminaron en la
+   * optimización 2026 para evitar duplicación de lógica.
    */
-  // Buffer para valores R (Ratio-of-Ratios) para filtrado de mediana
-  private rValueHistory: number[] = [];
-  private calculateSpO2Raw(): number {
-    const spoCfg = VITAL_THRESHOLDS.SPO2;
-    const { redAC, redDC, greenAC, greenDC } = this.rgbData;
-
-    if (redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC) return 0;
-    
-    const piRed = (redAC / redDC) * 100;   // como %
-    const piGreen = (greenAC / greenDC) * 100;
-
-    // Log de depuración (~cada 0.3s)
-    if (this.frameCount % 10 === 0) {
-      log.info(`[SpO2 Debug] ACr:${redAC.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${greenAC.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}%`);
-    }
-    
-    if (piRed < spoCfg.MIN_PI_PERCENT || piGreen < spoCfg.MIN_PI_PERCENT) return 0;
-    
-    const ratioRed = redAC / redDC;
-    const ratioGreen = greenAC / greenDC;
-    if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) return 0;
-    
-    const currentR = ratioRed / ratioGreen;
-    
-    // Rango físico de R para tejido humano con cámara+flash:
-    // Con dedo en flash blanco, rojo está cerca de saturación → R puede ser bajo (0.1+)
-    if (currentR < spoCfg.R_VALUE_MIN || currentR > spoCfg.R_VALUE_MAX) {
-      if (this.frameCount % 15 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
-      return 0;
-    }
-
-    // Acumular R para filtrado de mediana
-    this.rValueHistory.push(currentR);
-    if (this.rValueHistory.length > spoCfg.R_HISTORY_SAMPLES) {
-      this.rValueHistory.shift();
-    }
-
-    if (this.rValueHistory.length < 3) return 0;
-
-    const sortedR = [...this.rValueHistory].sort((a, b) => a - b);
-    const medianR = sortedR[Math.floor(sortedR.length / 2)] ?? 0;
-
-    const spo2 = Math.min(
-      spoCfg.DISPLAY_CAP,
-      Math.max(
-        spoCfg.MIN_VALID,
-        spoCfg.R_MODEL_INTERCEPT - spoCfg.R_MODEL_SLOPE * medianR,
-      ),
-    );
-    
-    if (this.frameCount % 30 === 0) {
-      log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}% (n=${this.rValueHistory.length})`);
-    }
-
-    return Number.isFinite(spo2) ? spo2 : 0;
-  }
 
   /**
    * Segundo pase EMA sobre un valor ya suavizado por {@link DisplaySmoothing}.

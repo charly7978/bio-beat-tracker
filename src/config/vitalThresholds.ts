@@ -81,6 +81,8 @@ export const VITAL_THRESHOLDS = {
       PW50_CYCLE_RATIO: [0.1, 0.58] as const,
       DICROTIC_DEPTH: [0.05, 0.55] as const,
       RMSSD: [8, 120] as const,
+      /** Harmonic Distortion: 0 = seno puro, 1 = impulso. Típico PPG saludable 0.15–0.60. */
+      HARMONIC_DISTORTION: [0, 1] as const,
     },
     WEIGHTS: {
       RESISTANCE: { k: 0.15, ipa: 0.40, decay: 0.45 },
