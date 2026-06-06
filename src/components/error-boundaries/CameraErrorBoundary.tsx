@@ -84,7 +84,9 @@ export class CameraErrorBoundary extends Component<Props, State> {
     console.error('[CameraErrorBoundary] Camera error:', errorContext);
 
     // Enviar a servicio de monitoreo
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (typeof window !== 'undefined' && (window as any).Sentry) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).Sentry.captureException(error, {
         tags: { boundary: 'Camera', errorType },
         extra: errorContext,

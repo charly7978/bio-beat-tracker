@@ -16,15 +16,19 @@ export const VITAL_THRESHOLDS = {
   
   // BLOOD OXYGEN (SpO2) — modelo ratio-of-ratios cámara+flash (verde como proxy IR)
   SPO2: {
-    MIN_VALID: 88,
-    MAX_VALID: 98,
+    MIN_VALID: 75,
+    MAX_VALID: 100,
     CRITICAL_LOW: 90,
     R_VALUE_MIN: 0.1,
     R_VALUE_MAX: 2.5,
     /** SpO2 = intercept − slope × R_mediana (calibración smartphone) */
     R_MODEL_INTERCEPT: 103,
     R_MODEL_SLOPE: 11,
-    DISPLAY_CAP: 99,
+    /** Coeficientes del modelo cuadrático mejorado */
+    R_MODEL_A: -3.5,
+    R_MODEL_B: -7.5,
+    R_MODEL_C: 104,
+    DISPLAY_CAP: 100,
     R_HISTORY_SAMPLES: 15,
     MIN_PI_PERCENT: 0.02,
     MIN_RED_DC: 10,

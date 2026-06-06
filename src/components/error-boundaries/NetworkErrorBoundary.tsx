@@ -125,7 +125,9 @@ export class NetworkErrorBoundary extends Component<Props, State> {
     console.error('[NetworkErrorBoundary] Network error:', errorContext);
 
     // Enviar a servicio de monitoreo
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (typeof window !== 'undefined' && (window as any).Sentry) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).Sentry.captureException(error, {
         tags: { boundary: 'Network', isOffline: !navigator.onLine },
         extra: errorContext,

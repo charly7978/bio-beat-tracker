@@ -384,9 +384,16 @@ const Index = () => {
   // Check WebGPU availability
   useEffect(() => {
     if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
-      navigator.gpu.requestAdapter().then(adapter => {
-        setWebgpuAvail(adapter ? 'yes' : 'no');
-      }).catch(() => setWebgpuAvail('no'));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const gpu = (navigator as any).gpu;
+      if (gpu) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        gpu.requestAdapter().then((adapter: any) => {
+          setWebgpuAvail(adapter ? 'yes' : 'no');
+        }).catch(() => setWebgpuAvail('no'));
+      } else {
+        setWebgpuAvail('no');
+      }
     } else {
       setWebgpuAvail('no');
     }

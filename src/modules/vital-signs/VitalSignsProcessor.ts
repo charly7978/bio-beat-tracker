@@ -23,7 +23,7 @@ export interface VitalSignsDetailedResult {
   spo2: VitalMeasurement<number>;
   bloodPressure: VitalMeasurement<{ systolic: number; diastolic: number }>;
   respiration: VitalMeasurement<number>;
-  arrhythmia: VitalMeasurement<{ count: number; status: string }>;
+  arrhythmia: VitalMeasurement<{ count: number; status: string; score?: number }>;
   signalQuality: number;
   isCalibrating: boolean;
   calibrationProgress: number;
@@ -73,6 +73,7 @@ export class VitalSignsProcessor {
     diastolicPressure: 0,
     arrhythmiaCount: 0,
     arrhythmiaStatus: "SIN ARRITMIAS|0",
+    arrhythmiaScore: 0,
     lastArrhythmiaData: null as { timestamp: number; rmssd: number; rrVariation: number; } | null,
     signalQuality: 0
   };
@@ -161,6 +162,7 @@ export class VitalSignsProcessor {
       diastolicPressure: 0,
       arrhythmiaCount: 0,
       arrhythmiaStatus: "CALIBRANDO...",
+      arrhythmiaScore: 0,
       lastArrhythmiaData: null,
       signalQuality: 0
     };
@@ -575,7 +577,11 @@ export class VitalSignsProcessor {
       },
       arrhythmia: {
         name: "Pulse Regularity",
-        value: { count: this.measurements.arrhythmiaCount, status: this.measurements.arrhythmiaStatus },
+        value: {
+          count: this.measurements.arrhythmiaCount,
+          status: this.measurements.arrhythmiaStatus,
+          score: this.measurements.arrhythmiaScore,
+        },
         unit: "events",
         timestamp: now,
         confidence: vitalUiGate ? 0.85 : 0.2,
@@ -730,6 +736,7 @@ export class VitalSignsProcessor {
     this.measurements.arrhythmiaStatus = arrhythmiaResult.arrhythmiaStatus;
     this.measurements.lastArrhythmiaData = arrhythmiaResult.lastArrhythmiaData;
     this.measurements.arrhythmiaCount = arrhythmiaResult.arrhythmiaCount;
+    this.measurements.arrhythmiaScore = arrhythmiaResult.arrhythmiaScore;
   }
 
   /**
@@ -829,6 +836,7 @@ export class VitalSignsProcessor {
       diastolicPressure: 0,
       arrhythmiaCount: 0,
       arrhythmiaStatus: "SIN ARRITMIAS|0",
+      arrhythmiaScore: 0,
       lastArrhythmiaData: null,
       signalQuality: 0
     };

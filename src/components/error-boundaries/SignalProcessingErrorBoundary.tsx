@@ -76,7 +76,9 @@ export class SignalProcessingErrorBoundary extends Component<Props, State> {
     console.error('[SignalProcessingErrorBoundary] Error caught:', errorContext);
     
     // Enviar a servicio de monitoreo (ej: Sentry)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (typeof window !== 'undefined' && (window as any).Sentry) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).Sentry.captureException(error, {
         tags: { boundary: 'SignalProcessing' },
         extra: errorContext,

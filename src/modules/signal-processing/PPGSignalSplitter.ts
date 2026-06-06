@@ -139,6 +139,50 @@ class RunningMean {
   get length(): number { return this.count; }
 }
 
+// ─── Double Exponential Moving Average (DEMA) Tracker con compensación de deriva ───
+
+export class DoubleEmaTracker {
+  private ema1 = 0;
+  private ema2 = 0;
+  private initialized = false;
+  private readonly alpha: number;
+
+  constructor(alpha = 0.015) {
+    this.alpha = alpha;
+  }
+
+  push(x: number): number {
+    if (!isFinite(x)) return this.initialized ? 2 * this.ema1 - this.ema2 : 0;
+    if (!this.initialized) {
+      this.ema1 = x;
+      this.ema2 = x;
+      this.initialized = true;
+      return x;
+    }
+
+    // Compensación de deriva adaptativa: ante cambios bruscos (>15%),
+    // aceleramos la convergencia aumentando temporalmente el alpha.
+    let currentAlpha = this.alpha;
+    if (this.ema1 > 0) {
+      const diffFrac = Math.abs(x - this.ema1) / this.ema1;
+      if (diffFrac > 0.15) {
+        currentAlpha = Math.min(0.5, this.alpha * 10);
+      }
+    }
+
+    this.ema1 = (1 - currentAlpha) * this.ema1 + currentAlpha * x;
+    this.ema2 = (1 - currentAlpha) * this.ema2 + currentAlpha * this.ema1;
+    const dc = 2 * this.ema1 - this.ema2;
+    return isFinite(dc) ? dc : x;
+  }
+
+  reset(): void {
+    this.ema1 = 0;
+    this.ema2 = 0;
+    this.initialized = false;
+  }
+}
+
 // ─── HPF de primer orden simple (DC blocker) ─────────────────────────────────
 
 class SimpleHPF {
@@ -234,9 +278,9 @@ export class PPGSignalSplitter {
   private readonly spo2BpRed: BandpassFilter;    // BP 0.5–3.5 Hz canal rojo
   private readonly spo2BpGreen: BandpassFilter;  // BP 0.5–3.5 Hz canal verde
   private readonly spo2BpBlue: BandpassFilter;   // BP 0.5–3.5 Hz canal azul
-  private readonly spo2DcRed: RunningMean;       // MA 200 samples (~6.7s)
-  private readonly spo2DcGreen: RunningMean;     // MA 200 samples
-  private readonly spo2DcBlue: RunningMean;      // MA 200 samples
+  private readonly spo2DcRed: DoubleEmaTracker;  // DEMA con compensación de deriva
+  private readonly spo2DcGreen: DoubleEmaTracker;
+  private readonly spo2DcBlue: DoubleEmaTracker;
   private readonly spo2HampelRed: HampelOnlineState;   // Ventana 5, σ=2.5
   private readonly spo2HampelGreen: HampelOnlineState; // Ventana 5, σ=2.5
   private readonly lmsRed: LmsAdaptiveFilter;    // LMS filter for Red channel SpO2
@@ -277,9 +321,9 @@ export class PPGSignalSplitter {
     this.spo2BpRed = new BandpassFilter(sampleRate, spo2HighCut);
     this.spo2BpGreen = new BandpassFilter(sampleRate, spo2HighCut);
     this.spo2BpBlue = new BandpassFilter(sampleRate, spo2HighCut);
-    this.spo2DcRed = new RunningMean(200);
-    this.spo2DcGreen = new RunningMean(200);
-    this.spo2DcBlue = new RunningMean(200);
+    this.spo2DcRed = new DoubleEmaTracker(0.015);
+    this.spo2DcGreen = new DoubleEmaTracker(0.015);
+    this.spo2DcBlue = new DoubleEmaTracker(0.015);
     this.spo2HampelRed = createHampelState(5);
     this.spo2HampelGreen = createHampelState(5);
     this.lmsRed = new LmsAdaptiveFilter(8, 0.05);

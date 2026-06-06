@@ -73,7 +73,7 @@ export class HealthRiskAnalyzer {
 
   private scoreCardiovascular(
     hr: number, sys: number, dia: number,
-    profile?: Partial<RiskWeights>, age?: number,
+    profile?: Partial<RiskWeights>, _age?: number,
   ): number {
     let score = 0;
     score += Math.min(1, Math.abs(hr - 72) / 120) * 0.3;
