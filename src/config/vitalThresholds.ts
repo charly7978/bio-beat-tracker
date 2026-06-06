@@ -110,6 +110,12 @@ export const VITAL_THRESHOLDS = {
     MIN_PI: 0.0009,
     MAX_MOTION: 0.75,
     MAX_JITTER_MS: 55,
+    /** Alpha del primer EMA para signos vitales estables (SpO₂, PA). */
+    VITAL_EMA_PRIMARY_STABLE: 0.15,
+    /** Alpha del primer EMA para signos vitales dinámicos. */
+    VITAL_EMA_PRIMARY_DYNAMIC: 0.25,
+    /** Alpha del segundo EMA (doble suavizado) — menor = más filtro, menos latencia neta. */
+    VITAL_EMA_SECONDARY: 0.08,
     /** Frames con dedo candidato antes de STABLE (≈0,53 s @ 30 fps) */
     STABLE_FRAMES_REQ: 16,
     /** EMA del SQI mostrado en UI (0–1 por frame) */

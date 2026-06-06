@@ -5,7 +5,7 @@
 import { clamp } from '../utils/math';
 import { triggerHeartbeatHaptic } from '../utils/haptics';
 import { robustBounds } from '../utils/stats';
-import { PEAK_DETECTION_DEFAULTS } from '../config/signalProcessing';
+import { PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
 import { autocorrDominantLag } from './signal-processing/shared/dsp';
@@ -30,11 +30,9 @@ export class HeartBeatProcessor {
 
   private signalBuffer: number[] = [];
   private timestampBuffer: number[] = [];
-  private readonly BUFFER_SIZE = 300;
 
   private lastPeakTime = 0;
   private rrIntervals: number[] = [];
-  private readonly MAX_RR_INTERVALS = 30;
   private smoothBPM = 0;
 
   private audioContext: AudioContext | null = null;
@@ -50,7 +48,7 @@ export class HeartBeatProcessor {
 
   private frameTick = 0;
   private cachedGateRange = 0;
-  private cachedSampleRate = 30;
+  private cachedSampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
   private cachedPeriodicity: { bpm: number; score: number } = { bpm: 0, score: 0 };
 
   private lastDiagnostics: HeartBeatProcessDiagnostics = {};
@@ -61,11 +59,13 @@ export class HeartBeatProcessor {
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
   private placementMode: FingerPlacementMode = 'hybrid';
   private fingerContactConfirmed = false;
-  /** SQI del pipeline PPG (SignalQualityIndex) — fuente primaria para el ensemble */
+  /** SQI del pipeline PPG (SignalQualityIndex canónico) — ruta externa */
   private ppgSqi = 0;
   private ppgPerfusionIndex = 0;
   /** Movimiento IMU (EMA) del pipeline — suprime emisión de latidos durante movimiento. */
   private ppgMotionScore = 0;
+  /** SQI auto-calculado por {@link calculateSQI} (ruta interna) */
+  private internalSqi = 0;
 
   // NN scorers removed (all returned null)
 
@@ -97,8 +97,8 @@ export class HeartBeatProcessor {
     document.addEventListener('click', this.unlockHandler, { passive: true });
   }
 
-  getDiagnostics(): HeartBeatProcessDiagnostics {
-    return { ...this.lastDiagnostics };
+  getDiagnostics(): HeartBeatProcessDiagnostics & { internalSqi: number; externalSqi: number } {
+    return { ...this.lastDiagnostics, internalSqi: this.internalSqi, externalSqi: this.ppgSqi };
   }
 
   setRuntimeHints(hints: CameraRuntimeHints): void {
@@ -128,9 +128,15 @@ export class HeartBeatProcessor {
     }
   }
 
+  /** Fusiona SQI interno (auto-calculado) con SQI externo (canónico del pipeline PPG).
+   *  {@link internalSqi} refleja la consistencia local del pico.
+   *  {@link ppgSqi} refleja la calidad global del PPG (PI, SNR, periodicidad).
+   *  La fusión da mayor peso al canónico cuando es fiable, pero no anula al interno. */
   private ensembleInputSqi(localSqi: number): number {
+    this.internalSqi = localSqi;
     if (this.ppgSqi < 3) return localSqi;
-    return clamp(Math.max(localSqi, this.ppgSqi * 0.65 + localSqi * 0.35), 0, 100);
+    const blended = this.ppgSqi * 0.65 + localSqi * 0.35;
+    return clamp(Math.max(localSqi, blended), 0, 100);
   }
 
   /**
@@ -175,6 +181,8 @@ export class HeartBeatProcessor {
     isPeak: boolean;
     filteredValue: number;
     sqi: number;
+    internalSqi: number;
+    externalSqi: number;
     consensusReason?: string;
     rrData?: {
       intervals: number[];
@@ -187,14 +195,14 @@ export class HeartBeatProcessor {
     if (Math.abs(filteredValue) > 1e-6) {
       this.signalBuffer.push(filteredValue);
       this.timestampBuffer.push(now);
-      if (this.signalBuffer.length > this.BUFFER_SIZE) {
+      if (this.signalBuffer.length > DSP_CONSTANTS.BUFFER_SIZE) {
         this.signalBuffer.shift();
         this.timestampBuffer.shift();
       }
     } else if (
       this.fingerContactConfirmed &&
       this.signalBuffer.length > 0 &&
-      this.signalBuffer.length < this.BUFFER_SIZE
+      this.signalBuffer.length < DSP_CONSTANTS.BUFFER_SIZE
     ) {
       const hold = this.signalBuffer[this.signalBuffer.length - 1]! * 0.999;
       this.signalBuffer.push(hold);
@@ -202,7 +210,7 @@ export class HeartBeatProcessor {
     }
 
     if (this.signalBuffer.length < 20) {
-      return { bpm: 0, confidence: 0, isPeak: false, filteredValue: 0, sqi: 0, ensembleDiagnostics: {} };
+      return { bpm: 0, confidence: 0, isPeak: false, filteredValue: 0, sqi: 0, internalSqi: 0, externalSqi: 0, ensembleDiagnostics: {} };
     }
 
     this.frameTick++;
@@ -221,7 +229,8 @@ export class HeartBeatProcessor {
     if (this.frameTick % 6 === 0) {
       this.cachedPeriodicity = this.estimatePeriodicity();
     }
-    this.signalQualityIndex = this.calculateSQI(range, this.cachedPeriodicity.score);
+    this.internalSqi = this.calculateSQI(range, this.cachedPeriodicity.score);
+    this.signalQualityIndex = this.internalSqi;
 
     // NN SQI refiner removed (always returned null)
 
@@ -247,7 +256,7 @@ export class HeartBeatProcessor {
       (gateOk || this.fingerContactConfirmed);
 
     if (runEnsemble) {
-      const win = Math.min(this.BUFFER_SIZE, this.signalBuffer.length);
+      const win = Math.min(DSP_CONSTANTS.BUFFER_SIZE, this.signalBuffer.length);
       const sigRaw = this.signalBuffer.slice(-win);
       const ts = this.timestampBuffer.slice(-win);
       const sig = this.normalizeWindow(sigRaw, Math.min(150, sigRaw.length));
@@ -304,8 +313,8 @@ export class HeartBeatProcessor {
           const rrMs = decision.peakTimeMs - prevEmitted;
           if (rrMs >= this.MIN_PEAK_INTERVAL_MS && rrMs <= this.MAX_PEAK_INTERVAL_MS) {
             this.rrIntervals.push(rrMs);
-            if (this.rrIntervals.length > this.MAX_RR_INTERVALS) {
-              this.rrIntervals = this.rrIntervals.slice(-this.MAX_RR_INTERVALS);
+            if (this.rrIntervals.length > DSP_CONSTANTS.MAX_RR_INTERVALS) {
+              this.rrIntervals = this.rrIntervals.slice(-DSP_CONSTANTS.MAX_RR_INTERVALS);
             }
           }
         }
@@ -392,6 +401,8 @@ export class HeartBeatProcessor {
       isPeak,
       filteredValue: normalizedValue,
       sqi: this.signalQualityIndex,
+      internalSqi: this.internalSqi,
+      externalSqi: this.ppgSqi,
       consensusReason: emitReason,
       rrData: {
         intervals: [...this.rrIntervals],
@@ -430,7 +441,7 @@ export class HeartBeatProcessor {
   }
 
   private estimateSampleRate(): number {
-    if (this.timestampBuffer.length < 10) return this.cachedSampleRate || 30;
+    if (this.timestampBuffer.length < 10) return this.cachedSampleRate || DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
     if (this.frameTick % 30 !== 0 && this.cachedSampleRate > 0) {
       return this.cachedSampleRate;
     }
@@ -440,7 +451,7 @@ export class HeartBeatProcessor {
       const d = recent[i] - recent[i - 1];
       if (d >= 10 && d <= 100) intervals.push(d);
     }
-    if (intervals.length < 6) return this.cachedSampleRate || 30;
+    if (intervals.length < 6) return this.cachedSampleRate || DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
     const sorted = [...intervals].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)] ?? 33;
     this.cachedSampleRate = clamp(1000 / median, 20, 40);
@@ -585,7 +596,8 @@ export class HeartBeatProcessor {
   reset(): void {
     this.resetPeakTracking();
     this.signalQualityIndex = 0;
-    this.cachedSampleRate = 30;
+    this.internalSqi = 0;
+    this.cachedSampleRate = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
     this.cachedPeriodicity = { bpm: 0, score: 0 };
     this.fingerContactConfirmed = false;
     this.ppgSqi = 0;

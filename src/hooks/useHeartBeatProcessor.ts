@@ -10,6 +10,8 @@ interface HeartBeatResult {
   isPeak: boolean;
   filteredValue: number;
   signalQuality: number;
+  internalSqi?: number;
+  externalSqi?: number;
   ensembleDiagnostics?: Record<string, unknown>;
   rrData?: {
     intervals: number[];
@@ -147,6 +149,8 @@ export const useHeartBeatProcessor = () => {
       isPeak: result.isPeak,
       filteredValue: result.filteredValue,
       signalQuality: roundedSQI,
+      internalSqi: result.internalSqi,
+      externalSqi: result.externalSqi,
       ensembleDiagnostics: result.ensembleDiagnostics,
       rrData: { intervals: rrIntervals, lastPeakTime: lastPeakTime || null, timestampNow: currentTime },
     };

@@ -109,6 +109,21 @@ export const PEAK_DETECTION_DEFAULTS = {
   },
 } as const;
 
+/**
+ * Constantes DSP centralizadas — única fuente de verdad.
+ * Evita valores duplicados ({@link HeartBeatProcessor}, {@link PPGSignalProcessor}, etc.).
+ */
+export const DSP_CONSTANTS = {
+  /** Tamaño de búfer para señal PPG cruda y filtrada (≈10 s @ 30 fps). */
+  BUFFER_SIZE: 300,
+  /** Frecuencia de muestreo nominal por defecto (fps). */
+  DEFAULT_SAMPLE_RATE: 30,
+  /** Número máximo de intervalos RR almacenados para análisis de variabilidad. */
+  MAX_RR_INTERVALS: 30,
+  /** Tamaño de búfer por fuente para ranking competitivo de canales. */
+  SOURCE_BUFFER_SIZE: 120,
+} as const;
+
 export const RESPIRATION_DEFAULTS = {
   /** Banda respiratoria típica 8–30 rpm → 0.13–0.5 Hz */
   minRpm: 6,

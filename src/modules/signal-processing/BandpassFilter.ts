@@ -14,6 +14,8 @@
  * - Proakis & Manolakis, "Digital Signal Processing" (4th ed.)
  * - https://tomroelandts.com/articles/biquad-cookbook
  */
+import { DSP_CONSTANTS } from '../../config/signalProcessing';
+
 export class BandpassFilter {
   // Coeficientes del filtro pasa-altos 0.5Hz (elimina DC)
   private hpfB: number[][];
@@ -31,7 +33,7 @@ export class BandpassFilter {
   private highCutFreq: number;
   private initialized = false;
 
-  constructor(sampleRate = 30, highCutFreq = 4.5) {
+  constructor(sampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE, highCutFreq: number = 4.5) {
     this.sampleRate = sampleRate;
     this.highCutFreq = highCutFreq;
 

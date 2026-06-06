@@ -99,6 +99,17 @@ export class VitalSignsProcessor {
   /** Frames seguidos con SpO2 fuera de banda de coherencia → adapta cambios reales sostenidos. */
   private spo2IncoherentStreak = 0;
 
+  // Suavizado adaptativo para estabilidad SIN perder respuesta
+  // Alpha más bajo = más suavizado = lecturas más estables
+  private readonly EMA_ALPHA_STABLE = VITAL_THRESHOLDS.QUALITY.VITAL_EMA_PRIMARY_STABLE;
+  private readonly EMA_ALPHA_DYNAMIC = VITAL_THRESHOLDS.QUALITY.VITAL_EMA_PRIMARY_DYNAMIC;
+  /** Segundo EMA (doble suavizado) — reduce ruido residual con menos latencia que un único EMA fuerte. */
+  private readonly EMA_ALPHA_SECONDARY = VITAL_THRESHOLDS.QUALITY.VITAL_EMA_SECONDARY;
+  // Estados del segundo EMA por signo vital
+  private ema2Spo2 = 0;
+  private ema2Sys = 0;
+  private ema2Dia = 0;
+
   // Contador de pulsos válidos
   private validPulseCount: number = 0;
   private readonly MIN_PULSES_REQUIRED = 2;
@@ -636,7 +647,8 @@ export class VitalSignsProcessor {
         this.lastCoherentSpO2 = spo2;
         const pi = this.currentPerfusionIndex();
         const wSpo2 = clamp(signalQuality / 80, 0.1, 1.0) * clamp(pi / 0.005, 0.1, 1.0);
-          this.measurements.spo2 = this.displaySmoothing.smoothWeightedValue(this.measurements.spo2, spo2, wSpo2, 'stable');
+        const firstPass = this.displaySmoothing.smoothWeightedValue(this.measurements.spo2, spo2, wSpo2, 'stable');
+        this.measurements.spo2 = this.applyEma2('ema2Spo2', firstPass);
       }
     }
 
@@ -679,18 +691,20 @@ export class VitalSignsProcessor {
           const cw = this.confidenceToWeight(bpEstimate.confidence)
             * clamp(bpEstimate.featureQuality / 60, 0.1, 1.0);
 
-          this.measurements.systolicPressure = this.displaySmoothing.smoothWeightedValue(
+          const bpFirstSys = this.displaySmoothing.smoothWeightedValue(
             this.measurements.systolicPressure,
             finalSys,
             cw,
             'stable',
           );
-          this.measurements.diastolicPressure = this.displaySmoothing.smoothWeightedValue(
+          this.measurements.systolicPressure = this.applyEma2('ema2Sys', bpFirstSys);
+          const bpFirstDia = this.displaySmoothing.smoothWeightedValue(
             this.measurements.diastolicPressure,
             finalDia,
             cw,
             'stable',
           );
+          this.measurements.diastolicPressure = this.applyEma2('ema2Dia', bpFirstDia);
 
           this.bpSysWeightedSum += finalSys * cw;
           this.bpDiaWeightedSum += finalDia * cw;
@@ -716,6 +730,102 @@ export class VitalSignsProcessor {
     this.measurements.arrhythmiaStatus = arrhythmiaResult.arrhythmiaStatus;
     this.measurements.lastArrhythmiaData = arrhythmiaResult.lastArrhythmiaData;
     this.measurements.arrhythmiaCount = arrhythmiaResult.arrhythmiaCount;
+  }
+
+  /**
+   * SpO2 - FÓRMULA RATIO-OF-RATIOS
+   * 
+   * Basado en Beer-Lambert / TI SLAA655, calibrado para cámara smartphone:
+   * R = (AC_red/DC_red) / (AC_green/DC_green)
+   * SpO2 = 112 - 28 * R   (coeficientes empíricos para green como proxy IR)
+   * 
+   * Verde se usa como proxy de IR porque ofrece mejor SNR en la yema del dedo
+   * con LED flash blanco que el canal azul.
+   * 
+   * Mejoras implementadas:
+   * - Filtrado de mediana sobre ventana de R para estabilidad
+   * - Gating por PI mínimo (perfusión) antes de calcular
+   * - Validación del rango físico de R (0.2-2.5 para tejido humano)
+   */
+  // Buffer para valores R (Ratio-of-Ratios) para filtrado de mediana
+  private rValueHistory: number[] = [];
+  private calculateSpO2Raw(): number {
+    const spoCfg = VITAL_THRESHOLDS.SPO2;
+    const { redAC, redDC, greenAC, greenDC } = this.rgbData;
+
+    if (redDC < spoCfg.MIN_RED_DC || greenDC < spoCfg.MIN_GREEN_DC) return 0;
+    
+    const piRed = (redAC / redDC) * 100;   // como %
+    const piGreen = (greenAC / greenDC) * 100;
+
+    // Log de depuración (~cada 0.3s)
+    if (this.frameCount % 10 === 0) {
+      log.info(`[SpO2 Debug] ACr:${redAC.toFixed(3)} DCr:${redDC.toFixed(0)} PIr:${piRed.toFixed(3)}% | ACg:${greenAC.toFixed(3)} DCg:${greenDC.toFixed(0)} PIg:${piGreen.toFixed(3)}%`);
+    }
+    
+    if (piRed < spoCfg.MIN_PI_PERCENT || piGreen < spoCfg.MIN_PI_PERCENT) return 0;
+    
+    const ratioRed = redAC / redDC;
+    const ratioGreen = greenAC / greenDC;
+    if (!isFinite(ratioRed) || !isFinite(ratioGreen) || ratioRed <= 0 || ratioGreen <= 0) return 0;
+    
+    const currentR = ratioRed / ratioGreen;
+    
+    // Rango físico de R para tejido humano con cámara+flash:
+    // Con dedo en flash blanco, rojo está cerca de saturación → R puede ser bajo (0.1+)
+    if (currentR < spoCfg.R_VALUE_MIN || currentR > spoCfg.R_VALUE_MAX) {
+      if (this.frameCount % 15 === 0) log.warn(`[SpO2] R fuera de rango: ${currentR.toFixed(3)}`);
+      return 0;
+    }
+
+    // Acumular R para filtrado de mediana
+    this.rValueHistory.push(currentR);
+    if (this.rValueHistory.length > spoCfg.R_HISTORY_SAMPLES) {
+      this.rValueHistory.shift();
+    }
+
+    if (this.rValueHistory.length < 3) return 0;
+
+    const sortedR = [...this.rValueHistory].sort((a, b) => a - b);
+    const medianR = sortedR[Math.floor(sortedR.length / 2)] ?? 0;
+
+    const spo2 = Math.min(
+      spoCfg.DISPLAY_CAP,
+      Math.max(
+        spoCfg.MIN_VALID,
+        spoCfg.R_MODEL_INTERCEPT - spoCfg.R_MODEL_SLOPE * medianR,
+      ),
+    );
+    
+    if (this.frameCount % 30 === 0) {
+      log.info(`[SpO2 Result] R_med:${medianR.toFixed(3)} -> SpO2:${spo2.toFixed(1)}% (n=${this.rValueHistory.length})`);
+    }
+
+    return Number.isFinite(spo2) ? spo2 : 0;
+  }
+
+  /**
+   * Segundo pase EMA sobre un valor ya suavizado por {@link DisplaySmoothing}.
+   * El primer pase (ponderado por confianza) lo hace displaySmoothing;
+   * este segundo pase reduce el residuo ruidoso con alpha fijo, sin añadir
+   * latencia apreciable porque el primer pase ya respondió al cambio.
+   */
+  private applyEma2(
+    key: 'ema2Spo2' | 'ema2Sys' | 'ema2Dia',
+    firstPass: number,
+  ): number {
+    if (firstPass === 0 || isNaN(firstPass)) {
+      this[key] = 0;
+      return firstPass;
+    }
+    const prev = this[key];
+    if (prev === 0 || isNaN(prev)) {
+      this[key] = firstPass;
+      return firstPass;
+    }
+    const out = prev * (1 - this.EMA_ALPHA_SECONDARY) + firstPass * this.EMA_ALPHA_SECONDARY;
+    this[key] = out;
+    return out;
   }
 
   getCalibrationProgress(): number {
@@ -747,6 +857,9 @@ export class VitalSignsProcessor {
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
+    this.ema2Spo2 = 0;
+    this.ema2Sys = 0;
+    this.ema2Dia = 0;
     return result;
   }
 
@@ -781,6 +894,9 @@ export class VitalSignsProcessor {
     this.bpSysWeightedSum = 0;
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
+    this.ema2Spo2 = 0;
+    this.ema2Sys = 0;
+    this.ema2Dia = 0;
   }
 }
 

@@ -71,6 +71,7 @@ const Index = () => {
 
   const {
     processSignal: processHeartBeat,
+    setFingerPlacementMode: setHeartBeatPlacementMode,
     setRuntimeHints: setHeartBeatRuntimeHints,
     reset: resetHeartBeat,
     reacquirePeaks: reacquireHeartPeaks,
@@ -105,9 +106,7 @@ const Index = () => {
   const router = useSignalRouter({
     processHeartBeat: {
       processSignal: processHeartBeat,
-      // No-op deliberado: la detección de HR corre SIEMPRE con gating 'hybrid'
-      // (el estado validado/“bueno”). El placementMode solo afecta a vitals.
-      setFingerPlacementMode: (_mode) => { /* intencionalmente sin efecto */ },
+      setFingerPlacementMode: (mode) => { setHeartBeatPlacementMode(mode); },
       setRuntimeHints: setHeartBeatRuntimeHints,
       reacquirePeaks: reacquireHeartPeaks,
       reset: resetHeartBeat,

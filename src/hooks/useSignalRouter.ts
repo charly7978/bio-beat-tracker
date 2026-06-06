@@ -46,6 +46,8 @@ interface HeartBeatProcessorAPI {
     isPeak: boolean;
     filteredValue: number;
     signalQuality: number;
+    internalSqi?: number;
+    externalSqi?: number;
     ensembleDiagnostics?: Record<string, unknown>;
     rrData?: { intervals: number[]; lastPeakTime: number | null; timestampNow?: number };
   };

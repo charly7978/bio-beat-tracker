@@ -16,6 +16,7 @@ import {
   type DiagnosticStatusState,
 } from '../signal-quality/SignalQualityIndex';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 import {
   hasFingerHemoglobinSignature,
@@ -100,7 +101,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private placementStreak = { mode: 'hybrid' as FingerPlacementMode, count: 0 };
   private readonly pulseAgcState = createPulseAgcState();
 
-  private readonly BUFFER_SIZE = 300;
   private readonly ACDC_WINDOW = 120;
   private readonly TILE_COLUMNS = 5;
   private readonly TILE_ROWS = 5;
@@ -136,11 +136,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }));
 
   // Buffers (ring buffers Float32 — sin Array.shift O(n) por frame)
-  private readonly rawBuffer = new RingF32(this.BUFFER_SIZE);
-  private readonly filteredBuffer = new RingF32(this.BUFFER_SIZE);
-  private readonly redBuffer = new RingF32(this.BUFFER_SIZE);
-  private readonly greenBuffer = new RingF32(this.BUFFER_SIZE);
-  private readonly blueBuffer = new RingF32(this.BUFFER_SIZE);
+  private readonly rawBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
+  private readonly filteredBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
+  private readonly redBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
+  private readonly greenBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
+  private readonly blueBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
   private tileConfidence: number[] = new Array(25).fill(0);
   // Fusión multi-celda por pulsatilidad: señal de verde por celda + cache de
   // pulsatilidad (AC/DC) recalculada con throttle, y su máximo para normalizar.
@@ -151,13 +151,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private readonly tilePulsatilityCache = new Float32Array(this.TILE_COLUMNS * this.TILE_ROWS);
   private tileMaxPulsatility = 0;
   private tilePulseThrottle = 0;
-  private readonly frameIntervalBuffer = new RingF32(30);
+  private readonly frameIntervalBuffer = new RingF32(DSP_CONSTANTS.MAX_RR_INTERVALS);
 
   // Scratch buffers reusables para stats (ACDC, SQI, source-score) — evita
   // `[...arr].sort()` por frame. Tamaño máximo = ACDC_WINDOW.
   private readonly statScratch = new Float32Array(this.ACDC_WINDOW);
   private readonly sortedScratch = new Float32Array(this.ACDC_WINDOW);
-  private readonly periodicityScratch = new Float32Array(this.BUFFER_SIZE);
+  private readonly periodicityScratch = new Float32Array(DSP_CONSTANTS.BUFFER_SIZE);
 
   // LUTs de teselado: cachean Math.floor((px / roiSize) * cols) por píxel
   // del ROI. Se reconstruyen sólo cuando cambia el tamaño del ROI.
@@ -177,7 +177,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private redBaseline = 0;
   private greenBaseline = 0;
   private blueBaseline = 0;
-  private estimatedSampleRate = 30;
+  private estimatedSampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
   private lastFrameTimestamp = 0;
 
   private frameCount = 0;
@@ -273,12 +273,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private readonly acquisitionState: AcquisitionState = createAcquisitionState();
 
   // === MULTI-SOURCE RANKING (CHROM eliminado — amplifica ruido sin dedo) ===
-  private readonly SOURCE_BUFFER_SIZE = 120;
   private readonly sourceBuffers: { [key: string]: RingF32 } = {
-    R: new RingF32(this.SOURCE_BUFFER_SIZE),
-    G: new RingF32(this.SOURCE_BUFFER_SIZE),
-    RG: new RingF32(this.SOURCE_BUFFER_SIZE),
-    POS: new RingF32(this.SOURCE_BUFFER_SIZE),
+    R: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
+    G: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
+    RG: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
+    POS: new RingF32(DSP_CONSTANTS.SOURCE_BUFFER_SIZE),
   };
   private activeSource: string = 'RG';
   private sourceScores: { [key: string]: number } = { R: 0, G: 0, RG: 0, POS: 0 };
@@ -1695,7 +1694,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.resetSignalTrackingBuffers();
     this.tileConfidence = new Array(25).fill(0);
     this.frameIntervalBuffer.reset();
-    this.estimatedSampleRate = 30;
+    this.estimatedSampleRate = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
     this.fingerDetected = false;
     this.contactState = 'NO_CONTACT';
     this.fingerLostCount = 0;
