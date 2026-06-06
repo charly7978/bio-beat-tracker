@@ -105,6 +105,104 @@ describe('peakEmitPolicy', () => {
     expect(d.emit).toBe(false);
   });
 
+  it('refractario de arranque (300 ms) bloquea un segundo pico demasiado cercano', () => {
+    // Sin RR previo el refractario es 300 ms; un pico a 220 ms (típico de muesca
+    // dícrota / ruido) debe rechazarse. (Antes, con 216 ms, se emitía → falso positivo.)
+    const ens = buildTestPeakResult([5220], [0.7]);
+    const d = decidePeakEmit({
+      ens,
+      lastEmittedPeakMs: 5000,
+      minPeakConf: 0.1,
+      sampleRateHz: 30,
+      windowSamples: 90,
+      fingerContactConfirmed: true,
+      nowMs: 5260,
+      emittedPeakCount: 1,
+      recentRrMs: [],
+    });
+    expect(d.emit).toBe(false);
+  });
+
+  it('acepta latido a HR alta (~140 bpm, RR 430 ms) fuera del refractario', () => {
+    // Refractario fijo 300 ms; 430 ms > 300 ms → se emite.
+    const ens = buildTestPeakResult([5430], [0.7]);
+    const d = decidePeakEmit({
+      ens,
+      lastEmittedPeakMs: 5000,
+      minPeakConf: 0.1,
+      sampleRateHz: 30,
+      windowSamples: 90,
+      fingerContactConfirmed: true,
+      nowMs: 5480,
+      emittedPeakCount: 5,
+      recentRrMs: [430, 430, 430],
+    });
+    expect(d.emit).toBe(true);
+    expect(d.peakTimeMs).toBe(5430);
+  });
+
+  it('emite latido con RR irregular (arritmia) — sin gate de regularidad ni stall', () => {
+    // Tras ritmo ~1000 ms, un latido prematuro a 600 ms del último DEBE emitirse.
+    // (Antes, la plausibilidad RR lo rechazaba → bloqueo permanente y se perdían
+    // las arritmias.) Ahora solo aplica el refractario fijo (600 ms > 300 ms).
+    const ens = buildTestPeakResult([5600], [0.55]);
+    const d = decidePeakEmit({
+      ens,
+      lastEmittedPeakMs: 5000,
+      minPeakConf: 0.1,
+      sampleRateHz: 30,
+      windowSamples: 90,
+      fingerContactConfirmed: true,
+      nowMs: 5650,
+      emittedPeakCount: 8,
+      recentRrMs: [1000, 1000, 1000],
+      sqi: 50,
+      perfusionIndex: 0.005,
+    });
+    expect(d.emit).toBe(true);
+    expect(d.peakTimeMs).toBe(5600);
+  });
+
+  it('no se bloquea tras un latido perdido (re-sincroniza con RR largo ~2x)', () => {
+    // Un latido perdido produce un RR ≈ 2× la mediana. No debe rechazarse
+    // (no hay gate de regularidad) → la detección se re-sincroniza sola.
+    const ens = buildTestPeakResult([6000], [0.55]);
+    const d = decidePeakEmit({
+      ens,
+      lastEmittedPeakMs: 5000,
+      minPeakConf: 0.1,
+      sampleRateHz: 30,
+      windowSamples: 90,
+      fingerContactConfirmed: true,
+      nowMs: 6050,
+      emittedPeakCount: 8,
+      recentRrMs: [500, 500, 500],
+      sqi: 50,
+      perfusionIndex: 0.005,
+    });
+    expect(d.emit).toBe(true);
+    expect(d.peakTimeMs).toBe(6000);
+  });
+
+  it('rechaza pico imposiblemente temprano (<45% del RR mediano) — anti dícrota a HR baja', () => {
+    // Ritmo ~1000 ms; un pico a 380 ms del último supera el refractario (300 ms)
+    // pero es < 0.45×1000 = 450 ms → probable muesca dícrota → se rechaza.
+    const ens = buildTestPeakResult([5380], [0.7]);
+    const d = decidePeakEmit({
+      ens,
+      lastEmittedPeakMs: 5000,
+      minPeakConf: 0.1,
+      sampleRateHz: 30,
+      windowSamples: 90,
+      fingerContactConfirmed: true,
+      nowMs: 5430,
+      recentRrMs: [1000, 1000, 1000],
+      sqi: 50,
+      perfusionIndex: 0.005,
+    });
+    expect(d.emit).toBe(false);
+  });
+
   it('bpmFromEmittedRr usa mediana RR', () => {
     expect(bpmFromEmittedRr([800, 820, 810])).toBeCloseTo(74.07, 0);
   });

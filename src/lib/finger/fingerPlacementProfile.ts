@@ -89,7 +89,10 @@ export function passesUnifiedFingerAcquire(
   );
 }
 
-export function placementHintText(mode: FingerPlacementMode): string {
+export function placementHintText(mode: FingerPlacementMode, perfusionIndex?: number): string {
+  if (perfusionIndex !== undefined && perfusionIndex > 0 && perfusionIndex < 0.00025) {
+    return 'Presione más suave (flujo sanguíneo limitado)';
+  }
   switch (mode) {
     case 'tip':
       return 'Cubra la yema con presión media (no solo la punta)';

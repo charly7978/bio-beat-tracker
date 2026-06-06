@@ -23,7 +23,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-package-lock.json
 bio-beat-tracker/
 .env
 !.env.example
@@ -37,3 +36,8 @@ android/.gradle/
 android/build/
 android/local.properties
 android/capacitor-cordova-android-plugins/.gradle/
+
+# Build artifacts
+*.apk
+*.aab
+*.patch

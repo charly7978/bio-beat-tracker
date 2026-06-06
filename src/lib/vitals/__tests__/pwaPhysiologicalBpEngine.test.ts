@@ -53,4 +53,10 @@ describe('pwaPhysiologicalBpEngine', () => {
     expect(isPhysiologicalBp(250, 80)).toBe(false);
     expect(isPhysiologicalBp(120, 20)).toBe(false);
   });
+
+  it('el perfil antropometrico afecta de forma hemodinamica coherente (mas edad -> menor compliancia)', () => {
+    const youngIdx = computePhysiologicalIndices(baseFeatures, { hr: 72, rmssd: 35, cyclePeriodMs: 830 }, { ageYears: 20, heightCm: 180, weightKg: 70, isMale: true });
+    const oldIdx = computePhysiologicalIndices(baseFeatures, { hr: 72, rmssd: 35, cyclePeriodMs: 830 }, { ageYears: 70, heightCm: 180, weightKg: 70, isMale: true });
+    expect(oldIdx.complianceIndex).toBeLessThan(youngIdx.complianceIndex);
+  });
 });

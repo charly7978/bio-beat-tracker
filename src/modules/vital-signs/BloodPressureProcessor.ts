@@ -4,13 +4,12 @@ import { isPhysiologicalRR } from '../../utils/physio';
 import { median } from '../../utils/stats';
 import type { FingerPlacementMode } from '../../types/signal';
 import {
-  applyAnthropometricAdjustment,
-  enforceHemodynamicCoherence,
   estimatePhysiologicalBp,
   isPhysiologicalBp,
   type AnthropometricProfile,
   type PwaMedianFeatures,
 } from '@/lib/vitals/pwaPhysiologicalBpEngine';
+import { CalibrationManager } from './CalibrationManager';
 
 export interface BPEstimate {
   systolic: number;
@@ -114,26 +113,28 @@ export class BloodPressureProcessor {
     const rrVar = PPGFeatureExtractor.extractRRVariability(validRR);
     const cyclePeriodMs = Math.max(280, mf.sutMs + mf.diastolicPhaseMs);
 
-    const raw = estimatePhysiologicalBp(mf, { hr, rmssd: rrVar.rmssd, cyclePeriodMs });
-    const coherent = enforceHemodynamicCoherence(raw.systolic, raw.diastolic);
+    const calib = CalibrationManager.getInstance();
+    const activeBpProfile = calib.getActiveProfile('BP');
+    const calibrationOffsets = activeBpProfile && activeBpProfile.expiresAt > Date.now() ? {
+      sbpOffset: activeBpProfile.coefficients.sbpOffset ?? activeBpProfile.coefficients.systolicOffset ?? 0,
+      dbpOffset: activeBpProfile.coefficients.dbpOffset ?? activeBpProfile.coefficients.diastolicOffset ?? 0,
+    } : null;
 
-    if (!isPhysiologicalBp(coherent.sbp, coherent.dbp)) {
+    const raw = estimatePhysiologicalBp(mf, { hr, rmssd: rrVar.rmssd, cyclePeriodMs }, this.anthropometric, calibrationOffsets);
+    let sbp = raw.systolic;
+    let dbp = raw.diastolic;
+
+    if (!isPhysiologicalBp(sbp, dbp)) {
       return insufficient;
     }
-
-    let sbp = coherent.sbp;
-    let dbp = coherent.dbp;
 
     const fq = this.assessFeatureQuality(mf, this.cycleBuffer.length);
     let confidence: BPEstimate['confidence'] = 'LOW';
     if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_HIGH) confidence = 'HIGH';
     else if (fq >= VITAL_THRESHOLDS.BP.FEATURE_QUALITY_MEDIUM) confidence = 'MEDIUM';
 
-    if (this.anthropometric) {
-      const adj = applyAnthropometricAdjustment(sbp, dbp, this.anthropometric);
-      sbp = adj.sbp;
-      dbp = adj.dbp;
-    }
+    // La estimación del motor ya incluye los ajustes del perfil antropométrico
+    // y de coherencia hemodinámica de forma nativa e integrada.
 
     if (this.lastSBP > 0) {
       sbp = this.lastSBP * (1 - EMA_ALPHA) + sbp * EMA_ALPHA;
@@ -160,17 +161,30 @@ export class BloodPressureProcessor {
 
     this.framesSinceLastEmit++;
     if (this.framesSinceLastEmit < EMIT_EVERY_N_FRAMES) {
-      return this.buildThrottledEmit(confidence, fq);
+      const emitSbp = calibrationOffsets ? this.lastSBP - calibrationOffsets.sbpOffset : this.lastSBP;
+      const emitDbp = calibrationOffsets ? this.lastDBP - calibrationOffsets.dbpOffset : this.lastDBP;
+      return {
+        systolic: Math.round(emitSbp),
+        diastolic: Math.round(emitDbp),
+        map: Math.round(emitDbp + (emitSbp - emitDbp) / 3),
+        pulsePressure: Math.round(emitSbp - emitDbp),
+        confidence,
+        cyclesUsed: this.cycleBuffer.length,
+        featureQuality: fq,
+      };
     }
     this.framesSinceLastEmit = 0;
 
-    const map = dbp + (sbp - dbp) / 3;
+
+
+    const finalSbp = calibrationOffsets ? sbp - calibrationOffsets.sbpOffset : sbp;
+    const finalDbp = calibrationOffsets ? dbp - calibrationOffsets.dbpOffset : dbp;
 
     return {
-      systolic: Math.round(sbp),
-      diastolic: Math.round(dbp),
-      map: Math.round(map),
-      pulsePressure: Math.round(sbp - dbp),
+      systolic: Math.round(finalSbp),
+      diastolic: Math.round(finalDbp),
+      map: Math.round(finalDbp + (finalSbp - finalDbp) / 3),
+      pulsePressure: Math.round(finalSbp - finalDbp),
       confidence,
       cyclesUsed: this.cycleBuffer.length,
       featureQuality: fq,
@@ -212,11 +226,20 @@ export class BloodPressureProcessor {
       return insufficient;
     }
 
+    const calib = CalibrationManager.getInstance();
+    const activeBpProfile = calib.getActiveProfile('BP');
+    const sbpOff = activeBpProfile && activeBpProfile.expiresAt > Date.now()
+      ? (activeBpProfile.coefficients.sbpOffset ?? activeBpProfile.coefficients.systolicOffset ?? 0)
+      : 0;
+    const dbpOff = activeBpProfile && activeBpProfile.expiresAt > Date.now()
+      ? (activeBpProfile.coefficients.dbpOffset ?? activeBpProfile.coefficients.diastolicOffset ?? 0)
+      : 0;
+
     return {
-      systolic: Math.round(this.lastSBP),
-      diastolic: Math.round(this.lastDBP),
-      map: Math.round(this.lastDBP + (this.lastSBP - this.lastDBP) / 3),
-      pulsePressure: Math.round(this.lastSBP - this.lastDBP),
+      systolic: Math.round(this.lastSBP - sbpOff),
+      diastolic: Math.round(this.lastDBP - dbpOff),
+      map: Math.round((this.lastDBP - dbpOff) + ((this.lastSBP - sbpOff) - (this.lastDBP - dbpOff)) / 3),
+      pulsePressure: Math.round((this.lastSBP - sbpOff) - (this.lastDBP - dbpOff)),
       confidence: 'LOW',
       cyclesUsed: this.cycleBuffer.length,
       featureQuality: 0,

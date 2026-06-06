@@ -9,6 +9,7 @@ import type { SignalQualityMetrics } from '../types/measurements';
  */
 export const useVitalSignsProcessor = () => {
   const processorRef = useRef<VitalSignsProcessor | null>(null);
+  const lastValidRef = useRef<VitalSignsResult | null>(null);
   const [lastValidResults, setLastValidResults] = useState<VitalSignsResult | null>(null);
 
   // Lazy initialization
@@ -54,6 +55,19 @@ export const useVitalSignsProcessor = () => {
     perfusionIndexFromPpg?: number,
     sqmBundle?: Partial<SignalQualityMetrics>,
     morphologyValue?: number,
+    splitterChannels?: {
+      morphologyFiltered?: number;
+      respirationFiltered?: number;
+      arrhythmiaFiltered?: number;
+      spo2Channels?: {
+        acRed: number;
+        dcRed: number;
+        acGreen: number;
+        dcGreen: number;
+        acBlue?: number;
+        dcBlue?: number;
+      };
+    },
   ): VitalSignsResult => {
     if (!processorRef.current) return createDefaultVitalSignsResult();
 
@@ -65,27 +79,29 @@ export const useVitalSignsProcessor = () => {
       perfusionIndexFromPpg,
       sqmBundle,
       morphologyValue,
+      splitterChannels,
     );
     
-    // Guardar la última ventana realmente válida para cierre/exportación
+    // Guardar la última ventana realmente válida para cierre/exportación en ref para evitar re-renderizados constantes
     if (
       result.heartRate.status === 'VALID' ||
       result.bloodPressure.status === 'VALID' ||
       (result.spo2.value ?? 0) > 0 ||
       (result.arrhythmia.value?.count ?? 0) > 0
     ) {
-      setLastValidResults(result);
+      lastValidRef.current = result;
     }
     
     return result;
   }, []);
 
   const reset = useCallback(() => {
-    if (!processorRef.current) return lastValidResults;
+    if (!processorRef.current) return lastValidRef.current || lastValidResults;
     const savedResults = processorRef.current.reset();
-    const resultToReturn = savedResults ?? lastValidResults;
+    const resultToReturn = savedResults ?? lastValidRef.current;
     if (resultToReturn) {
       setLastValidResults(resultToReturn);
+      lastValidRef.current = resultToReturn;
     }
     return resultToReturn;
   }, [lastValidResults]);
@@ -94,6 +110,7 @@ export const useVitalSignsProcessor = () => {
 
   const fullReset = useCallback(() => {
     processorRef.current?.fullReset();
+    lastValidRef.current = null;
     setLastValidResults(null);
   }, []);
 

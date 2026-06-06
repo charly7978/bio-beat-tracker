@@ -3,6 +3,7 @@ import type { ProcessedSignal, ContactState, FingerPlacementMode } from '@/types
 import type { VitalSignsResult, RGBData } from '@/modules/vital-signs/VitalSignsProcessor';
 import type { SignalQualityMetrics } from '@/types/measurements';
 import type { CameraRuntimeHints } from '@/lib/device/cameraDeviceProfile';
+
 import { SignalQualityIndex } from '@/modules/signal-quality/SignalQualityIndex';
 import {
   createMeasurementSessionLatch,
@@ -11,6 +12,10 @@ import {
 } from '@/lib/measurement/measurementSessionLatch';
 import { evaluateMeasurementReadiness } from '@/lib/measurement/measurementReadiness';
 import { bpmFromEmittedRr } from '@/lib/measurement/peakEmitPolicy';
+import {
+  createStabilizationState,
+  updateStabilization,
+} from '@/lib/measurement/signalStabilization';
 import {
   DISPLAY_SMOOTH_ALPHAS,
   smoothDisplayPair,
@@ -24,11 +29,9 @@ import {
   getCustomOverrides,
   resolveProfile,
 } from '@/lib/sanity/sanityProfiles';
-import {
-  recordVerdict as recordAuditVerdict,
-  getNegativeCount as getAuditNegativeCount,
-} from '@/lib/sanity/sanityAuditLog';
+import { recordVerdict as recordAuditVerdict } from '@/lib/sanity/sanityAuditLog';
 import { toast } from '@/hooks/use-toast';
+import { triggerArrhythmiaHaptic } from '@/utils/haptics';
 
 interface HeartBeatProcessorAPI {
   processSignal: (
@@ -36,7 +39,7 @@ interface HeartBeatProcessorAPI {
     contactState: ContactState,
     timestamp?: number,
     fingerConfirmed?: boolean,
-    ppgQuality?: { sqi: number; perfusionIndex?: number },
+    ppgQuality?: { sqi: number; perfusionIndex?: number; motionScore?: number },
   ) => {
     bpm: number;
     confidence: number;
@@ -61,25 +64,60 @@ interface VitalSignsProcessorAPI {
     perfusionIndexFromPpg?: number,
     sqmBundle?: Partial<SignalQualityMetrics>,
     morphologyValue?: number,
+    splitterChannels?: {
+      morphologyFiltered?: number;
+      respirationFiltered?: number;
+      arrhythmiaFiltered?: number;
+      spo2Channels?: {
+        acRed: number;
+        dcRed: number;
+        acGreen: number;
+        dcGreen: number;
+        acBlue?: number;
+        dcBlue?: number;
+      };
+    },
+    faceBvp?: number,
+    faceBpm?: number,
+    faceQuality?: number,
+    accelRespiration?: { rpm: number; quality: number },
   ) => VitalSignsResult;
   setPlacementMode: (mode: FingerPlacementMode) => void;
   setRGBData: (data: RGBData) => void;
-  getRGBStats: () => { redAC: number; redDC: number; greenAC: number; greenDC: number; rgRatio: number; ratioOfRatios: number };
+  getRGBStats: () => { redAC: number; redDC: number; greenAC: number; greenDC: number; blueAC?: number; blueDC?: number; rgRatio: number; ratioOfRatios: number };
 }
 
 interface UseSignalRouterInput {
   processHeartBeat: HeartBeatProcessorAPI;
   processVitalSigns: VitalSignsProcessorAPI;
   cameraHintsRef: React.MutableRefObject<CameraRuntimeHints>;
+  ppgMeterRef?: React.RefObject<import('@/components/PPGSignalMeter').PPGSignalMeterHandle | null>;
 }
 
-export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHintsRef }: UseSignalRouterInput) {
+// Frame-gates de contacto y throttles/cadencia DSP — fuente única en VITAL_THRESHOLDS.
+// A scope de módulo: react-hooks los reconoce como constantes estables (no deps).
+const {
+  UNSTABLE_ZERO_THRESHOLD_FRAMES: UNSTABLE_ZERO_THRESHOLD,
+  SESSION_RESET_FRAMES: NO_CONTACT_SESSION_RESET_FRAMES,
+  REGAIN_RESET_MIN_FRAMES: CONTACT_REGAIN_RESET_MIN_FRAMES,
+  STALE_PEAK_REACQUIRE_FRAMES,
+} = VITAL_THRESHOLDS.CONTACT;
+const {
+  HR_PUSH_THROTTLE_MS,
+  VITALS_PUSH_THROTTLE_MS,
+  RR_PUSH_THROTTLE_MS,
+  DIAG_PUSH_THROTTLE_MS,
+  VITALS_PROCESS_EVERY_N_FRAMES,
+} = VITAL_THRESHOLDS.ROUTER;
+
+export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHintsRef, ppgMeterRef }: UseSignalRouterInput) {
   // Estados de salida
   const [vitalSigns, setVitalSigns] = useState<VitalSignsResult>(createDefaultVitalSignsResult);
   const [heartbeatSignal, setHeartbeatSignal] = useState(0);
   const [beatMarker, setBeatMarker] = useState(0);
   const [rrIntervals, setRRIntervals] = useState<number[]>([]);
   const [currentDiagnostics, setCurrentDiagnostics] = useState<Record<string, unknown> | null>(null);
+
 
   // Refs de sesión compartidos
   const vitalSignsRef = useRef<VitalSignsResult>(vitalSigns);
@@ -97,10 +135,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   // Signal routing internals
   const vitalSignsFrameCounter = useRef<number>(0);
   const unstableFrameCounter = useRef<number>(0);
-  const UNSTABLE_ZERO_THRESHOLD = 60;
-  const NO_CONTACT_SESSION_RESET_FRAMES = 25;
-  const CONTACT_REGAIN_RESET_MIN_FRAMES = 30;
-  const STALE_PEAK_REACQUIRE_FRAMES = 40;
   const measurementLatchRef = useRef(createMeasurementSessionLatch());
   const lastRrSnapshotRef = useRef<{ intervals: number[]; lastPeakTime: number | null } | null>(null);
   const lastGoodBpmRef = useRef(0);
@@ -111,6 +145,12 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const displayHrRef = useRef(0);
   const displaySpo2Ref = useRef(0);
   const displayBpRef = useRef({ systolic: 0, diastolic: 0 });
+  // Latch de estabilización de adquisición: hasta que la señal estabiliza
+  // (acquisitionStage READY) no se publica el número de HR (evita BPM errático
+  // mientras la cámara/AE y el contacto se asientan). Una vez estabilizado, se
+  // mantiene durante toda la sesión de contacto.
+  const acqReadyLatchRef = useRef(false);
+  const stabilizationRef = useRef(createStabilizationState());
 
   // Throttle timers
   const lastHrPushRef = useRef(0);
@@ -119,12 +159,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const lastRrPushRef = useRef(0);
   const lastDiagPushRef = useRef(0);
   const beatMarkerTimerRef = useRef<number | null>(null);
-  const HR_PUSH_THROTTLE_MS = 80;
-  const VITALS_PUSH_THROTTLE_MS = 300;
-  const RR_PUSH_THROTTLE_MS = 250;
-  const SIGNAL_PUSH_THROTTLE_MS = 16;
-  const DIAG_PUSH_THROTTLE_MS = 200;
-  const VITALS_PROCESS_EVERY_N_FRAMES = 3;
 
   // Sanity checker
   const [sanityProfileId, setSanityProfileId] = useState<string>(() => getActiveProfileId());
@@ -132,19 +166,18 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const o = getCustomOverrides();
     return Object.keys(o).length ? JSON.stringify(o, null, 2) : "";
   });
-  const [_auditNegativeCount, setAuditNegativeCount] = useState(0);
   const bpmSanityRef = useRef<VitalsSanityChecker>(
     new VitalsSanityChecker({
       ...resolveProfile(getActiveProfileId()).effective,
       onVerdict: (sample, verdict, win) => {
         recordAuditVerdict(sample, verdict, win);
-        if (!verdict.ok) setAuditNegativeCount(getAuditNegativeCount());
       },
     })
   );
+  // Dedup de error de sanity: el ref es la única fuente de verdad (no hay UI que
+  // renderice el mensaje; el aviso al usuario va por toast más abajo).
   const sanityErrorRef = useRef<string | null>(null);
   const sanityToastAtRef = useRef<number>(0);
-  const [_sanityError, setSanityError] = useState<string | null>(null);
   const isMonitoringRef = useRef(false);
 
   useEffect(() => {
@@ -187,6 +220,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastBpmSeenAtRef.current = 0;
     lastRrSnapshotRef.current = null;
     unstableFrameCounter.current = 0;
+    acqReadyLatchRef.current = false;
+    stabilizationRef.current = createStabilizationState();
     setRRIntervals([]);
     setBeatMarker(0);
     if (beatMarkerTimerRef.current) {
@@ -195,7 +230,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     }
     bpmSanityRef.current.reset();
     sanityErrorRef.current = null;
-    setSanityError(null);
     displayHrRef.current = 0;
     displaySpo2Ref.current = 0;
     displayBpRef.current = { systolic: 0, diastolic: 0 };
@@ -205,7 +239,10 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastRrPushRef.current = 0;
     lastSignalPushRef.current = 0;
     lastDiagPushRef.current = 0;
-  }, [processHeartBeat]);
+    ppgMeterRef?.current?.clearBuffer();
+
+  }, [processHeartBeat, ppgMeterRef]);
+
 
   const resetSessionRefs = useCallback(() => {
     totalBeatsRef.current = 0;
@@ -224,10 +261,11 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     artifactCheckFramesRef.current = 0;
     bpmSanityRef.current.reset();
     sanityErrorRef.current = null;
-    setSanityError(null);
     lastArrhythmiaData.current = null;
     arrhythmiaDetectedRef.current = false;
-  }, []);
+    ppgMeterRef?.current?.clearBuffer();
+
+  }, [ppgMeterRef]);
 
   const handleSignalRealtime = useCallback((lastSignal: ProcessedSignal) => {
     if (!isMonitoringRef.current) return;
@@ -273,10 +311,10 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const sqm = diag && typeof diag === 'object' && diag.sqm && typeof diag.sqm === 'object'
       ? diag.sqm as Record<string, unknown>
       : {};
-    if (typeof sqm.saturationRatio === 'number' && sqm.saturationRatio > 0.75) {
+    if (typeof sqm.saturationRatio === 'number' && sqm.saturationRatio > VITAL_THRESHOLDS.ROUTER.SATURATION_FRAME_RATIO) {
       saturationFramesRef.current += 1;
     }
-    if (typeof sqm.underexposureRatio === 'number' && sqm.underexposureRatio > 0.82) {
+    if (typeof sqm.underexposureRatio === 'number' && sqm.underexposureRatio > VITAL_THRESHOLDS.ROUTER.UNDEREXPOSURE_FRAME_RATIO) {
       underexposedFramesRef.current += 1;
     }
 
@@ -311,6 +349,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       {
         sqi: rawSqi,
         perfusionIndex: lastSignal.perfusionIndex ?? 0,
+        motionScore: typeof sqm.motionScore === 'number' ? sqm.motionScore : 0,
       },
     );
 
@@ -318,10 +357,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       diag && typeof diag === 'object'
         ? { ...diag, peakDetection: heartBeatResult.ensembleDiagnostics }
         : { peakDetection: heartBeatResult.ensembleDiagnostics };
-    if (nowT - lastDiagPushRef.current >= DIAG_PUSH_THROTTLE_MS) {
-      lastDiagPushRef.current = nowT;
-      setCurrentDiagnostics(mergedDiag);
-    }
+    // El push del diag se hace MÁS ABAJO, tras sobreescribir el stage/progress de
+    // estabilización con el criterio REAL por convergencia (necesita bpmLive).
 
     const bpmForLatch =
       heartBeatResult.bpm > 0
@@ -368,7 +405,39 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const bpmOut =
       hasUsableContact && fingerConfirmed && bpmLive > 0 ? bpmLive : 0;
 
-    const piMin = Q.MIN_PI * Math.max(0.04, hints.minPiScale * 0.18);
+    // ESTABILIZACIÓN POR CONVERGENCIA (criterio REAL, reemplaza el warm-up fijo).
+    // La señal está estable cuando la LECTURA DE HR convergió (dejó de moverse) y
+    // la calidad se sostiene — el tiempo lo dicta la señal, no un reloj. Robusto a
+    // arritmia: usa el BPM suavizado (la frecuencia media se asienta). Solo aquí se
+    // revela la onda y el número.
+    const stab = updateStabilization(stabilizationRef.current, {
+      hasContact: hasUsableContact,
+      bpm: bpmLive,
+      sqi: rawSqi,
+      perfusionIndex: lastSignal.perfusionIndex ?? 0,
+      periodicity: typeof sqm.periodicity === 'number' ? sqm.periodicity : 0,
+      motionScore: typeof sqm.motionScore === 'number' ? sqm.motionScore : 0,
+      nowMs: nowT,
+    });
+    if (stab.stabilized) acqReadyLatchRef.current = true;
+    const acqStabilized = acqReadyLatchRef.current;
+    const bpmDisplay = acqStabilized ? bpmOut : 0;
+
+    // Sobreescribe el stage/progress del diag con el criterio REAL de convergencia
+    // (la UI revela la onda con ESTO, no con el warm-up por tiempo del procesador).
+    const md = mergedDiag as Record<string, unknown>;
+    md.acquisitionStage = hasUsableContact ? stab.stage : 'SEARCHING';
+    md.acquisitionProgress = stab.progress;
+    md.stabilizationReason = stab.reason;
+    if (nowT - lastDiagPushRef.current >= DIAG_PUSH_THROTTLE_MS) {
+      lastDiagPushRef.current = nowT;
+      setCurrentDiagnostics(mergedDiag);
+    }
+
+    const piMin = Q.MIN_PI * Math.max(
+      VITAL_THRESHOLDS.ROUTER.PI_MIN_READINESS_FLOOR,
+      hints.minPiScale * VITAL_THRESHOLDS.ROUTER.PI_MIN_READINESS_SCALE,
+    );
     const readiness = evaluateMeasurementReadiness({
       hasUsableContact,
       contactState,
@@ -386,28 +455,50 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     const showWaveform = hasUsableContact;
 
-    if (nowT - lastSignalPushRef.current >= SIGNAL_PUSH_THROTTLE_MS) {
-      lastSignalPushRef.current = nowT;
-      setHeartbeatSignal(showWaveform ? signalValue : 0);
+    if (ppgMeterRef?.current) {
+      ppgMeterRef.current.pushSignal(showWaveform ? signalValue : 0, Date.now());
     }
 
     if (hasUsableContact && nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {
       lastHrPushRef.current = nowT;
       const sqRounded = Math.round(rawSqi);
       const hrStatus: import('@/types/measurements').MeasurementStatus =
-        contactState === 'STABLE_CONTACT' && bpmLive > 0 && hrReady
+        acqStabilized && contactState === 'STABLE_CONTACT' && bpmLive > 0 && hrReady
           ? 'VALID'
-          : bpmOut > 0
+          : bpmDisplay > 0
             ? 'WARMUP'
             : 'NO_VALID_SIGNAL';
       setVitalSigns(prev => {
         const next = {
           ...prev,
-          heartRate: { ...prev.heartRate, value: bpmOut, status: hrStatus },
+          heartRate: { ...prev.heartRate, value: bpmDisplay, status: hrStatus },
           signalQuality: sqRounded,
         };
         vitalSignsRef.current = next;
         return applyLiveDisplaySmooth(next);
+      });
+    }
+
+    // Limpieza INMEDIATA del BPM ante NO_CONTACT inequívoco: evita el "BPM sin
+    // dedo" fantasma que persistía mientras el contador de inestabilidad llegaba
+    // a su umbral (~2 s) tras retirar el dedo. Solo dispara con NO_CONTACT (no con
+    // UNSTABLE), así no afecta la tolerancia a artefactos breves con el dedo puesto.
+    // Resetea también el ref del EMA para que el valor caiga a 0 sin decaer.
+    if (
+      !hasUsableContact &&
+      contactState === 'NO_CONTACT' &&
+      nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS &&
+      vitalSignsRef.current.heartRate.value !== 0
+    ) {
+      lastHrPushRef.current = nowT;
+      displayHrRef.current = 0;
+      setVitalSigns(prev => {
+        const next = {
+          ...prev,
+          heartRate: { ...prev.heartRate, value: 0, status: 'NO_VALID_SIGNAL' as const },
+        };
+        vitalSignsRef.current = next;
+        return next;
       });
     }
 
@@ -419,9 +510,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
           const msg = `BPM stream ${verdict.reason} (${verdict.detail})`;
           if (sanityErrorRef.current !== verdict.reason) {
             sanityErrorRef.current = verdict.reason;
-            setSanityError(msg);
             const now = performance.now();
-            if (now - sanityToastAtRef.current > 5000) {
+            if (now - sanityToastAtRef.current > VITAL_THRESHOLDS.ROUTER.SANITY_TOAST_COOLDOWN_MS) {
               sanityToastAtRef.current = now;
               toast({
                 variant: "destructive",
@@ -432,7 +522,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
           }
         } else if (sanityErrorRef.current) {
           sanityErrorRef.current = null;
-          setSanityError(null);
         }
       }
     } else {
@@ -449,7 +538,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         ) {
           processHeartBeat.reacquirePeaks(nowT);
         }
-        const STALE_FINGER_NO_BPM = 90;
+        const STALE_FINGER_NO_BPM = VITAL_THRESHOLDS.CONTACT.STALE_NO_BPM_FRAMES;
         if (
           hasUsableContact &&
           unstableFrameCounter.current === STALE_FINGER_NO_BPM
@@ -520,7 +609,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       beatMarkerTimerRef.current = window.setTimeout(() => {
         setBeatMarker(0);
         beatMarkerTimerRef.current = null;
-      }, 300);
+      }, VITAL_THRESHOLDS.ROUTER.BEAT_MARKER_MS);
     }
 
     if (emittedPeak) {
@@ -572,6 +661,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
           redDC: rgbStats.redDC,
           greenAC: rgbStats.greenAC,
           greenDC: rgbStats.greenDC,
+          blueAC: rgbStats.blueAC,
+          blueDC: rgbStats.blueDC,
         });
       }
 
@@ -602,14 +693,25 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
             ? { ...lastRrSnapshotRef.current, timestampNow: nowT }
             : undefined;
 
+      // Extraer canales del banco de filtros especializado (PPGSignalSplitter)
+      const splitterChannels = {
+        morphologyFiltered: lastSignal.morphologyFiltered,
+        respirationFiltered: lastSignal.respirationFiltered,
+        arrhythmiaFiltered: lastSignal.arrhythmiaFiltered,
+        spo2Channels: lastSignal.spo2Channels,
+      };
+
+      const effectiveBpm = bpmOut || lastGoodBpmRef.current;
+
       const vitals = processVitalSigns.processSignal(
         lastSignal.filteredValue,
         rawSqi || lastSignal.quality || 0,
-        bpmOut || lastGoodBpmRef.current,
+        effectiveBpm,
         rrForVitals,
         lastSignal.perfusionIndex,
         enrichedSqm,
         lastSignal.morphologyValue ?? lastSignal.filteredValue,
+        splitterChannels
       );
 
       vitalSignsRef.current = vitals;
@@ -624,7 +726,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         fullVitalsReady &&
         heartBeatResult.rrData &&
         heartBeatResult.rrData.intervals.length >= 2 &&
-        heartBeatResult.confidence > 0.15 &&
+        heartBeatResult.confidence > VITAL_THRESHOLDS.ROUTER.ARRHYTHMIA_MIN_CONF &&
         vitals.heartRate.status === 'VALID'
       ) {
         const arrhythmiaStatus = vitals.arrhythmia.value?.status ?? '';
@@ -636,9 +738,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
             arrhythmiaDetectedRef.current = isArrhythmiaDetected;
 
             if (isArrhythmiaDetected) {
-              if (navigator.vibrate) {
-                navigator.vibrate([200, 100, 200]);
-              }
+              triggerArrhythmiaHaptic().catch(() => undefined);
               toast({
                 title: "⚠️ Arritmia detectada",
                 description: `Latido irregular #${vitals.arrhythmia.value?.count ?? 0}`,
@@ -656,7 +756,10 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     cameraHintsRef,
     resetFingerContactSession,
     applyLiveDisplaySmooth,
+    ppgMeterRef,
   ]);
+
+
 
   // Conectar isMonitoringRef externamente
   const setIsMonitoringRef = useCallback((val: boolean) => {
@@ -675,6 +778,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     setRRIntervals,
     currentDiagnostics,
     setCurrentDiagnostics,
+
 
     // Refs for save
     vitalSignsRef,
@@ -695,6 +799,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     // Callbacks
     handleSignalRealtime,
+
     resetFingerContactSession,
     resetSessionRefs,
     setIsMonitoringRef,

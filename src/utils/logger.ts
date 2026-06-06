@@ -20,7 +20,9 @@ function resolveLevel(): LogLevel {
   try {
     const env = import.meta.env.VITE_LOG_LEVEL as LogLevel | undefined;
     if (env && env in ORDER) return env;
-  } catch {}
+  } catch {
+    // Ignore environment variable resolution failures
+  }
   return 'info';
 }
 

@@ -1,4 +1,7 @@
 // Sonido de finalización de medición usando Web Audio API
+import { createLogger } from './logger';
+
+const log = createLogger('soundUtils');
 let audioCtx: AudioContext | null = null;
 
 const getAudioContext = (): AudioContext => {
@@ -40,7 +43,7 @@ export const playCompletionSound = () => {
       offset += durations[i] + 0.06;
     });
   } catch (e) {
-    console.log('Audio no disponible:', e);
+    log.warn('Audio no disponible:', e);
   }
 };
 

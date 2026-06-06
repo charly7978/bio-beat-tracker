@@ -85,7 +85,7 @@ const violations = [];
 const malformedMarkers = [];
 for (const file of walk(ROOT)) {
   const text = readFileSync(file, "utf8");
-  const lines = text.split("\n");
+  const lines = text.split(/\r?\n/);
   const fileRel = relative(".", file);
   lines.forEach((line, i) => {
     const marker = inlineMarkerValid(line);

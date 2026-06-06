@@ -34,6 +34,7 @@ export class CalibrationManager {
   }
 
   private loadFromStorage(): void {
+    if (typeof localStorage === 'undefined') return;
     try {
       const stored = localStorage.getItem('calibration_profiles');
       if (stored) {
@@ -49,6 +50,7 @@ export class CalibrationManager {
   }
 
   private saveToStorage(): void {
+    if (typeof localStorage === 'undefined') return;
     try {
       const obj: Record<string, CalibrationProfile> = {};
       this.profiles.forEach((p, id) => {
@@ -64,6 +66,7 @@ export class CalibrationManager {
   }
 
   private loadAnthropometric(): void {
+    if (typeof localStorage === 'undefined') return;
     try {
       const stored = localStorage.getItem('anthropometric_profile');
       if (stored) {
@@ -73,6 +76,7 @@ export class CalibrationManager {
   }
 
   private saveAnthropometric(): void {
+    if (typeof localStorage === 'undefined') return;
     try {
       if (this.anthropometric) {
         localStorage.setItem('anthropometric_profile', JSON.stringify(this.anthropometric));
@@ -158,8 +162,10 @@ export class CalibrationManager {
     this.profiles.clear();
     this.activeProfileId = null;
     this.anthropometric = null;
-    localStorage.removeItem('calibration_profiles');
-    localStorage.removeItem('active_calibration_id');
-    localStorage.removeItem('anthropometric_profile');
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('calibration_profiles');
+      localStorage.removeItem('active_calibration_id');
+      localStorage.removeItem('anthropometric_profile');
+    }
   }
 }

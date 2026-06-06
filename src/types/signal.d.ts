@@ -8,6 +8,21 @@ export interface ProcessedSignal {
   filteredValue: number;
   /** Señal verde suavizada para morfología PA (menos AGC que HR) */
   morphologyValue?: number;
+  /** Canal 3 del banco de filtros: morfología con Bessel de fase lineal (preserva fiduciales) */
+  morphologyFiltered?: number;
+  /** Canal 4 del banco de filtros: señal de modulación lenta para estimación de FR */
+  respirationFiltered?: number;
+  /** Canal 5 del banco de filtros: señal limpia para detección de intervalos RR / arritmias */
+  arrhythmiaFiltered?: number;
+  /** Canal 2 del banco de filtros: componentes AC y DC separados por canal para ratio SpO2 */
+  spo2Channels?: {
+    acRed: number;
+    dcRed: number;
+    acGreen: number;
+    dcGreen: number;
+    acBlue?: number;
+    dcBlue?: number;
+  };
   placementMode?: FingerPlacementMode;
   quality: number;
   fingerDetected: boolean;
@@ -22,6 +37,13 @@ export interface ProcessedSignal {
   perfusionIndex?: number;
   rawRed?: number;
   rawGreen?: number;
+  rawBlue?: number;
+  /**
+   * Respiración derivada del acelerómetro (IMU), modalidad NO-óptica que se
+   * fusiona con las ópticas (RIAV/RIIV/RIFV) en la Smart Fusion respiratoria.
+   * Pre-estimada en el procesador porque vive con el listener DeviceMotion.
+   */
+  accelRespiration?: { rpm: number; quality: number };
   diagnostics?: {
     message: string;
     hasPulsatility: boolean;
@@ -30,6 +52,7 @@ export interface ProcessedSignal {
     coverageRatio?: number;
     placementMode?: FingerPlacementMode;
     placementHint?: string;
+    fingerPressure?: 'LIGHT' | 'IDEAL' | 'HEAVY';
     status?: import('./measurements').MeasurementStatus;
     sqm?: Partial<import('./measurements').SignalQualityMetrics>;
     /** Estado de la estabilización de adquisición (fase inicial de colocación). */

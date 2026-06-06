@@ -22,10 +22,10 @@ export const VITAL_THRESHOLDS = {
     R_VALUE_MIN: 0.1,
     R_VALUE_MAX: 2.5,
     /** SpO2 = intercept − slope × R_mediana (calibración smartphone) */
-    R_MODEL_INTERCEPT: 101,
-    R_MODEL_SLOPE: 10,
+    R_MODEL_INTERCEPT: 103,
+    R_MODEL_SLOPE: 11,
     DISPLAY_CAP: 99,
-    R_HISTORY_SAMPLES: 7,
+    R_HISTORY_SAMPLES: 15,
     MIN_PI_PERCENT: 0.02,
     MIN_RED_DC: 10,
     MIN_GREEN_DC: 5,
@@ -122,6 +122,41 @@ export const VITAL_THRESHOLDS = {
     DIAG_EXIT_VALID_SQI: 26,
     DIAG_LOW_FRAMES_REQ: 10,
     DIAG_VALID_FRAMES_REQ: 4,
+    /**
+     * MICRO-MOVIMIENTO DEL DEDO DESDE LA SEÑAL (complementa al IMU). El IMU solo
+     * capta que se mueva el teléfono; el micro-movimiento del dedo contra el lente
+     * —artefacto dominante en PPG por cámara (~11 BPM de error, lit. 2019–2024)—
+     * se ve como un ESCALÓN brusco del DC del rojo crudo entre frames, mucho mayor
+     * que el incremento pulsátil (el pulso es lento: <1% del DC por frame). Se mapea
+     * |ΔrawRed|/DC a un score [0..1] y se fusiona (max) con el motionScore del IMU
+     * que alimenta el supresor de emisión (peakEmitMotionSuppress). Conservador:
+     * zona muerta amplia + EMA lenta → solo el movimiento SOSTENIDO suprime; un
+     * latido aislado nunca alcanza el umbral.
+     */
+    MOTION_DC_JUMP_DEADZONE: 0.005,
+    MOTION_DC_JUMP_SCALE: 0.02,
+    MOTION_SIGNAL_EMA_ALPHA: 0.35,
+    /**
+     * SQI POR SKEWNESS (Elgendi 2016, "Optimal SQI for PPG"): el índice de calidad
+     * más fuerte. PPG limpio = skewness POSITIVA (subida sistólica abrupta → cola a
+     * la derecha); ruido simétrico / corrupción por movimiento = skewness ≈0 o
+     * negativa. Se usa como PENALIZACIÓN SUAVE (factor [FLOOR..1]) de la confianza
+     * del ensemble, NO como bloqueo duro: una ventana ruidosa baja su confianza
+     * (menos FP) pero un latido real (skew>HIGH) nunca se penaliza ni se pierde.
+     * factor = FLOOR + (1−FLOOR)·clamp((skew−LOW)/(HIGH−LOW),0,1).
+     */
+    SKEWNESS_SQI_LOW: -0.3,
+    SKEWNESS_SQI_HIGH: 0.2,
+    SKEWNESS_SQI_FLOOR: 0.55,
+    /**
+     * HONESTIDAD DE LA ONDA: la altura mostrada se multiplica por la fuerza
+     * pulsátil real = f(perfusión) × f(periodicidad). Por debajo del piso de
+     * perfusión (ruido de objeto inerte) o sin periodicidad cardíaca → onda PLANA;
+     * con perfusión + periodicidad reales (dedo) → onda completa. Ver waveHonesty.ts.
+     */
+    WAVE_PI_FLOOR: 0.0004,
+    WAVE_PI_REF: 0.003,
+    WAVE_PERIODICITY_REF: 0.25,
   },
 
   /**
@@ -170,6 +205,75 @@ export const VITAL_THRESHOLDS = {
   },
 
   /**
+   * ESTABILIZACIÓN POR CONVERGENCIA (criterio REAL, no timer).
+   *
+   * La señal NO está estable "por tiempo": está estable cuando la LECTURA DE HR
+   * dejó de moverse (convergió) Y la calidad se sostiene. No revela la onda hasta
+   * que la medición es confiable; el tiempo que tarda lo dicta la SEÑAL, no un reloj
+   * (señal limpia → converge en pocos segundos; señal pobre → nunca converge →
+   * no revela basura). Esto reemplaza el warm-up fijo (que se sentía simulado).
+   *
+   * READY = el BPM (suavizado, robusto a arritmia) se mantuvo dentro de un margen
+   * estrecho durante una ventana mínima, con SQI/PI/periodicidad sostenidos y poco
+   * movimiento. El progreso refleja el PEOR de los criterios (eslabón débil) → es
+   * honesto: si la convergencia o la calidad no avanzan, el progreso se estanca.
+   */
+  STABILIZATION: {
+    /** Ventana deslizante de BPM para medir convergencia (ms). */
+    WINDOW_MS: 4500,
+    /** Span temporal MÍNIMO de BPM válido y convergido antes de READY (ms). El
+     *  mínimo físico para confirmar que un ritmo se asentó — NO un warm-up ciego. */
+    MIN_WINDOW_MS: 3000,
+    /** Muestras mínimas de BPM válido en la ventana. */
+    MIN_SAMPLES: 40,
+    /** Margen máx (max−min) del BPM en la ventana para considerarlo CONVERGIDO (bpm). */
+    BPM_SPREAD_MAX: 6,
+    /** Frames de calidad sostenida (SQI/PI/periodicidad/movimiento) requeridos. */
+    QUALITY_DWELL_FRAMES: 30,
+    /** Umbrales de calidad instantánea (sostenidos durante el dwell). */
+    MIN_SQI: 32,
+    MIN_PI: 0.0010,
+    MIN_PERIODICITY: 0.30,
+    MAX_MOTION: 0.6,
+    /** Suavizado del progreso (subida/bajada por frame). */
+    PROGRESS_RISE: 0.05,
+    PROGRESS_FALL: 0.03,
+  },
+
+  /**
+   * ACONDICIONADOR ACTIVO DE SEÑAL (DSP en vivo): estabiliza la línea base y hace
+   * denoise que PRESERVA los picos (edge-preserving). Trabaja la señal frame a frame.
+   * Unidades en la escala de `pulseSource` (~±95). Ver activeStabilizer.ts.
+   */
+  ACTIVE_STAB: {
+    /** EMA de la línea base (lenta: no se come el pulso, sí quita la deriva). */
+    BASELINE_ALPHA: 0.012,
+    /** Umbral de "flanco/pico": |Δ| por encima → se sigue (no se suaviza). */
+    EDGE_THRESHOLD: 6,
+    /** Suavizado mínimo en zona plana (peso a la muestra nueva con ruido chico). */
+    ALPHA_MIN: 0.30,
+  },
+
+  /**
+   * FUSIÓN ADAPTATIVA MULTI-CELDA POR PULSATILIDAD (Tiling & Aggregation, estado
+   * del arte para PPG por cámara). Cada celda de la grilla ROI mantiene su señal
+   * temporal; se puntúa por PULSATILIDAD real (AC/DC en banda cardíaca) y la señal
+   * compuesta pondera más las celdas con pulso fuerte → robusto a colocación
+   * imperfecta del dedo, optimiza la SNR inicial. Fallback seguro: sin info de
+   * pulsatilidad (arranque) el realce es neutro = comportamiento por presencia actual.
+   */
+  TILE_FUSION: {
+    /** Tamaño del ring de verde por celda (≈2 s @30 fps). */
+    BUFFER_SIZE: 64,
+    /** Muestras mínimas por celda antes de confiar en su pulsatilidad. */
+    MIN_SAMPLES: 24,
+    /** Cada cuántos frames se recalcula la pulsatilidad por celda (throttle). */
+    THROTTLE_FRAMES: 8,
+    /** Ganancia del realce: la mejor celda pesa (1+GAIN)× respecto a la de peor pulso. */
+    BOOST_GAIN: 3.5,
+  },
+
+  /**
    * Arrhythmia / AF detection via weighted scoring over a multi-feature set.
    *
    * Sub-scores: clamp01((value - LO) / (HI - LO)) → [0,1].
@@ -181,7 +285,30 @@ export const VITAL_THRESHOLDS = {
     RR_WINDOW_SIZE: 10,
     MIN_INTERVALS: 9,
     MIN_SQI: 62,
-    LEARNING_PERIOD_MS: 12_000,
+    /**
+     * FASES DE ARRANQUE (anti falsos positivos):
+     *   0 – QUIET_PERIOD_MS (8 s): NADA. El sistema aún se asienta (AE/baseline/
+     *     AGC); cualquier "irregularidad" aquí es transitorio de arranque, no
+     *     arritmia. Estado UI: "CALIBRANDO...".
+     *   QUIET – LEARNING_PERIOD_MS (8–18 s, warm-up de 10 s): el sistema YA está
+     *     estable → se APRENDE el patrón rítmico normal del usuario (spread de RR)
+     *     sin detectar. Estado UI: "APRENDIENDO RITMO...".
+     *   ≥ LEARNING_PERIOD_MS (18 s): recién aquí se detectan arritmias REALES,
+     *     usando el deadband personalizado aprendido en el warm-up.
+     */
+    QUIET_PERIOD_MS: 8_000,
+    LEARNING_PERIOD_MS: 18_000,
+    /**
+     * DEADBAND ANTI-JITTER personalizado (causa raíz de FP en cámara: el jitter de
+     * localización de pico ±1–2 muestras ≈ 33–66 ms satura pNN31/pNN325). Tras el
+     * warm-up se aprende el spread normal del usuario (p90 de |RR−mediana|) y se fija
+     * el piso = clamp(max(RR_JITTER_FLOOR_MS, p90·FACTOR), FLOOR, MAX). En detección,
+     * todo RR a < piso de la mediana se colapsa a la mediana → el jitter normal
+     * desaparece, las desviaciones grandes (arritmia real >100 ms) sobreviven.
+     */
+    RR_JITTER_FLOOR_MS: 70,
+    LEARNED_FLOOR_FACTOR: 1.4,
+    LEARNED_FLOOR_MAX_MS: 150,
     MIN_EVENT_INTERVAL_MS: 6000,
     OUTLIER_RATIO: 0.16,
     ABRUPT_RR_FRAC: 0.16,
@@ -210,7 +337,7 @@ export const VITAL_THRESHOLDS = {
     RRVAR_LO: 0.07,
     RRVAR_HI: 0.25,
 
-    // ── Feature weights (must sum ≅ 1.0)
+    // ── Feature weights (RMSSD..RRVAR suman 1.0; ECTOPY se añade y se renormaliza)
     W_RMSSD: 0.15,
     W_CV: 0.10,
     W_PNN31: 0.20,
@@ -222,6 +349,29 @@ export const VITAL_THRESHOLDS = {
     W_OUTLIER: 0.05,
     W_ABRUPT: 0.03,
     W_RRVAR: 0.02,
+    /** Latidos prematuros (ectopia): peso del sub-score en el total. */
+    W_ECTOPY: 0.12,
+
+    /**
+     * Latidos prematuros (PVC/PAC) — firma fisiológica "acoplamiento corto +
+     * pausa compensatoria": un latido adelantado seguido de una pausa, cuya
+     * suma se aproxima a 2× el RR basal (PVC: pausa completa; PAC: incompleta).
+     * Umbrales conservadores para no confundir el jitter de detección de picos
+     * con extrasístoles reales.
+     */
+    PREMATURE_SHORT_FRAC: 0.75,
+    PREMATURE_COMP_MIN: 1.10,
+    PREMATURE_PAIR_TOL: 0.18,
+    /** ≥ este nº de prematuros en la ventana → arritmia (ectopia frecuente: trigeminismo+). */
+    ECTOPY_MIN_FLAG: 3,
+    /** Saturación del sub-score de ectopia. */
+    ECTOPY_HI: 3,
+    /**
+     * Confirmación temporal: la arritmia debe SOSTENERSE este tiempo (ms) antes
+     * de marcarse, para rechazar falsos positivos transitorios (jitter, un latido
+     * mal detectado). Una arritmia real (FA, ectopia frecuente) es persistente.
+     */
+    ARRHYTHMIA_CONFIRM_MS: 2500,
 
     // ── Score cutoffs
     MILD_THRESHOLD: 0.30,
@@ -233,20 +383,17 @@ export const VITAL_THRESHOLDS = {
   // FINGER + ROI (cámara trasera + dedo; hemoglobina + pulsación temporal)
   // NOTA: umbrales relajados para tolerar dedo no perfectamente centrado
   // (ROI más grande, centerBias más plano, tiles más permisivos)
+  // ENSEMBLE: detección multi-métrica universal (brightness + coverage + histogram + temporal variance)
   FINGER: {
-    /** Fracción del lado corto del frame usada como ROI cuadrado central.
-     *  0.82 captura la mayor parte del dedo con buena relación señal/ruido,
-     *  permitiendo que el dedo no esté perfectamente centrado. */
+    /** Fracción del lado corto del frame usada como ROI cuadrado central. */
     ROI_SIZE_FRACTION: 0.82,
-    /** Penalización radial en tiles: menor = más tolerante si el dedo no está perfectamente centrado */
     ROI_CENTER_BIAS_MULT: 0.50,
     ROI_CENTER_BIAS_MIN: 0.50,
-    /** Brillo mínimo en score de tile (total RGB medio por celda) */
     TILE_BRIGHTNESS_OFFSET: 82,
-    /** Umbral absoluto de rojo (se escala adaptativamente por brillo en fingerContactSignature) */
     MIN_RED_INTENSITY: 36,
     MIN_RED_DOMINANCE: 5,
     MIN_RG_RATIO: 1.00,
+    ENSEMBLE_FINGER_THRESHOLD: 0.50,
     MIN_COVERAGE: 0.09,
     /** R/B mínimo — dedo absorbe azul; flash sin dedo suele fallar esto */
     HEMOGLOBIN_MIN_RB: 1.15,
@@ -256,7 +403,7 @@ export const VITAL_THRESHOLDS = {
     ACQUIRE_INTENSITY_MIN: 68,
     ACQUIRE_INTENSITY_MAX: 780,
     ACQUIRE_SMOOTHED_FINGER_MIN: 0.14,
-    ACQUIRE_MAX_MOTION_STRICT: 1.85,
+    ACQUIRE_MAX_MOTION_STRICT: 0.85,
     /** Adquisición suave (parcial / flash desigual) */
     ACQUIRE_SOFT_MIN_RED: 28,
     ACQUIRE_SOFT_RG: 1.025,
@@ -266,7 +413,7 @@ export const VITAL_THRESHOLDS = {
     ACQUIRE_SOFT_INTENSITY_MAX: 850,
     ACQUIRE_SOFT_FINGER_SCORE_ROI: 0.18,
     ACQUIRE_SOFT_SMOOTHED_FINGER: 0.15,
-    ACQUIRE_MAX_MOTION_SOFT: 1.9,
+    ACQUIRE_MAX_MOTION_SOFT: 0.90,
     /** Mantener contacto */
     MAINTAIN_MIN_RED: 28,
     MAINTAIN_RG: 1.03,
@@ -279,7 +426,7 @@ export const VITAL_THRESHOLDS = {
     PULSE_HOLD_RG: 1.03,
     PULSE_HOLD_RB: 1.05,
     PULSE_HOLD_COVERAGE: 0.080,
-    PULSE_HOLD_MAX_MOTION: 1.85,
+    PULSE_HOLD_MAX_MOTION: 0.80,
     /** Pulsación ROI (CV de rawRed) — tercera vía de adquisición */
     ROI_PULSE_BUFFER: 24,
     ROI_PULSE_MIN_SAMPLES: 12,
@@ -290,7 +437,7 @@ export const VITAL_THRESHOLDS = {
     PULSATILE_ACQUIRE_RB: 1.05,
     PULSATILE_ACQUIRE_COVERAGE: 0.075,
     PULSATILE_ACQUIRE_FINGER_ROI: 0.12,
-    PULSATILE_ACQUIRE_MAX_MOTION: 2.1,
+    PULSATILE_ACQUIRE_MAX_MOTION: 1.0,
     PULSATILE_ACQUIRE_MIN_DOMINANCE: 4.4,
     /** Clasificación por tile (ROI 5×5) — umbrales relajados para tolerar dedo parcial/ladeado */
     TILE_MIN_RED: 24,
@@ -311,6 +458,63 @@ export const VITAL_THRESHOLDS = {
     SOFT_HOLD_DOMINANCE_DELTA: 6,
     SOFT_HOLD_FINGER_SCORE: 0.14,
     SOFT_HOLD_RG: 1.04,
+  },
+
+  /**
+   * REINICIO POR PÉRDIDA/REGANANCIA DE CONTACTO (frame-gates @ ~30 fps).
+   * Fuente única consumida por useHeartBeatProcessor y useSignalRouter — antes
+   * estaban hardcodeados y desalineados en cada hook. Tolerantes a parpadeos
+   * breves: un artefacto corto no corta la detección ni obliga a re-ritmar.
+   */
+  CONTACT: {
+    /** useHeartBeatProcessor: ~1,1 s sin dedo → re-adquisición SUAVE de picos */
+    SOFT_RESET_FRAMES: 33,
+    /** useHeartBeatProcessor: ~1,6 s sin dedo → reset COMPLETO del procesador */
+    HARD_RESET_FRAMES: 48,
+    /** useSignalRouter: NO_CONTACT sostenido → reset de sesión de dedo */
+    SESSION_RESET_FRAMES: 25,
+    /** useSignalRouter: frames sin contacto previos para que un re-contacto dispare reset */
+    REGAIN_RESET_MIN_FRAMES: 30,
+    /** useSignalRouter: frames con dedo sin BPM → re-adquisición de picos */
+    STALE_PEAK_REACQUIRE_FRAMES: 40,
+    /** useSignalRouter: frames con dedo sin BPM → reset agresivo de SpO2/BP */
+    STALE_NO_BPM_FRAMES: 90,
+    /** useSignalRouter: frames de cero/inestable antes de limpiar todo el estado */
+    UNSTABLE_ZERO_THRESHOLD_FRAMES: 60,
+  },
+
+  /**
+   * ORQUESTACIÓN DEL ROUTER (useSignalRouter): cadencia de procesamiento DSP,
+   * throttles de push a estado React (evitan rerenders por frame) y knobs de
+   * gating que NO viven en el path de detección. Cero efecto sobre la matemática
+   * de la señal; solo controlan frecuencia de actualización de UI y umbrales de
+   * conteo de artefactos.
+   */
+  ROUTER: {
+    /** Procesar DSP de vitals cada N frames de señal */
+    VITALS_PROCESS_EVERY_N_FRAMES: 3,
+    /** Throttles de push a estado React (ms) */
+    HR_PUSH_THROTTLE_MS: 80,
+    VITALS_PUSH_THROTTLE_MS: 300,
+    RR_PUSH_THROTTLE_MS: 250,
+    SIGNAL_PUSH_THROTTLE_MS: 16,
+    DIAG_PUSH_THROTTLE_MS: 200,
+    FACE_PUSH_THROTTLE_MS: 100,
+    DUAL_STREAM_PUSH_THROTTLE_MS: 250,
+    /** Duración del marcador de latido en UI (ms) */
+    BEAT_MARKER_MS: 300,
+    /** Cooldown entre toasts de señal sospechosa (ms) */
+    SANITY_TOAST_COOLDOWN_MS: 5000,
+    /** Ratio de frames saturados/subexpuestos para contabilizar artefacto */
+    SATURATION_FRAME_RATIO: 0.75,
+    UNDEREXPOSURE_FRAME_RATIO: 0.82,
+    /** Escala y piso del PI mínimo aplicados en evaluateMeasurementReadiness */
+    PI_MIN_READINESS_SCALE: 0.18,
+    PI_MIN_READINESS_FLOOR: 0.04,
+    /** Confianza mínima de fusión dual-stream para usar su BPM de consenso (0–100) */
+    FUSION_CONSENSUS_MIN_CONF: 60,
+    /** Confianza mínima del ensemble para alimentar arritmia desde el router */
+    ARRHYTHMIA_MIN_CONF: 0.15,
   },
 };
 

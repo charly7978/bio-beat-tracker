@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   bpZoneLabel,
   buildRhythmPanel,
-  computeRrIrregularityPct,
   formatContactState,
   hrZoneLabel,
   ibiSegmentLabel,
@@ -29,11 +28,10 @@ describe('ppgMonitorClinical', () => {
   });
 
   it('detecta irregularidad RR y arritmia en panel', () => {
-    const irr = computeRrIrregularityPct([800, 620, 910, 580, 850]);
-    expect(irr).not.toBeNull();
     expect(ibiSegmentLabel(1050, 800).level).toBe('danger');
     const panel = buildRhythmPanel('ARRITMIA DETECTADA', 2, [800, 620, 910], { sdnn: 85, rmssd: 42 });
     expect(panel.level).toBe('danger');
     expect(panel.title).toContain('ARRITMIA');
+    expect(panel.irregularityPct).toBeGreaterThan(0);
   });
 });

@@ -1,4 +1,4 @@
-import { CircularBuffer, PPGDataPoint } from '../../utils/CircularBuffer';
+import { CircularBuffer } from '../../utils/CircularBuffer';
 import { isPhysiologicalRR } from '../../utils/physio';
 import {
   buildRhythmPanel,
@@ -24,7 +24,7 @@ export const COLORS = {
   SIGNAL_GLOW: 'rgba(34, 197, 94, 0.45)',
   SIGNAL_ARR: '#ef4444',
   SIGNAL_ARR_GLOW: 'rgba(239, 68, 68, 0.45)',
-  PEAK_NORMAL: '#3b82f6',
+  PEAK_NORMAL: '#00f2ff',
   PEAK_ARR: '#ef4444',
   VALLEY: '#64748b',
   TEXT_PRIMARY: '#22c55e',
@@ -38,15 +38,233 @@ export const COLORS = {
   BP: '#818cf8',
 };
 
+/**
+ * TABLA DE CONSTANTES CONFIGURABLES PARA LAS ONDAS CARDÍACAS (PPG MONITOR)
+ * 
+ * Modifica estos valores para calibrar detalladamente la visualización de la onda
+ * y ajustar el comportamiento de los trazos, brillo, auto-escala y marcadores fiduciales.
+ */
+export const CARDIAC_WAVE_CONFIG = {
+  // === Ventana de Tiempo e Historial ===
+  /**
+   * Ventana de tiempo visualizada en pantalla en milisegundos.
+   * - ¿Qué significa?: El lapso de tiempo físico de señal representado de izquierda a derecha.
+   * - Si se sube (ej. 2500 - 3500): La onda se comprime horizontalmente (se ven más ciclos en pantalla, dando un aspecto veloz o de "látigo").
+   * - Si se baja (ej. 1500 - 2000): La onda se estira horizontalmente (se ven menos ciclos, dibujo lento y detallado).
+   */
+  WINDOW_MS: 2200,
+
+  /**
+   * Capacidad del buffer circular de almacenamiento de señal.
+   * - ¿Qué significa?: Cantidad de muestras históricas máximas guardadas para dibujar en el Canvas.
+   * - Si se sube: Retiene más muestras históricas de la señal (evita cortes visuales si la tasa de muestreo sube).
+   * - Si se baja: Reduce el uso de memoria RAM, pero si se baja demasiado la onda podría truncarse.
+   */
+  BUFFER_SIZE: 2500,
+
+  /**
+   * Retraso visual de renderizado en milisegundos.
+   * - ¿Qué significa?: Tiempo de espera artificial antes de graficar la señal entrante.
+   * - Si se sube: La onda tarda más en aparecer en el gráfico, desfasándola hacia el pasado.
+   * - Si se baja: La onda se dibuja de forma más instantánea y reactiva en tiempo real.
+   */
+  VISUAL_DELAY_MS: 0,
+
+  // === Auto-escala de Amplitud (Ajuste dinámico Y) ===
+  /**
+   * Coeficiente de ataque (crecimiento) del escalado automático de amplitud.
+   * - ¿Qué significa?: Qué tan rápido se expande la escala vertical cuando la señal de entrada aumenta de tamaño.
+   * - Si se sube: La onda se adapta instantáneamente a picos de gran amplitud (evita que se corte por arriba/abajo).
+   * - Si se baja: La onda cambia su tamaño vertical más despacio, suavizando transiciones bruscas.
+   */
+  AMP_ATTACK: 0.50,
+
+  /**
+   * Coeficiente de relajación (decrecimiento) del escalado automático de amplitud.
+   * - ¿Qué significa?: Qué tan rápido se contrae la escala vertical cuando la amplitud de la señal decae.
+   * - Si se sube: La onda recupera tamaño visual de forma veloz cuando la señal de entrada se debilita.
+   * - Si se baja: Mantiene la escala amplia por más tiempo, evitando vibraciones molestas si la amplitud fluctúa.
+   */
+  AMP_RELEASE: 0.30,
+
+  // === Estética y Grosor de Línea (Canvas Rendering) ===
+  /**
+   * Grosor de la línea principal de la onda.
+   * - ¿Qué significa?: El ancho en píxeles del trazo base de la señal.
+   * - Si se sube: Onda más gruesa, densa y visible en pantallas de alta densidad de píxeles.
+   * - Si se baja: Onda más fina, nítida y con un look clínico o médico de alta precisión (efecto "eléctrico").
+   */
+  BASE_STROKE_WIDTH: 2.0,
+
+  /**
+   * Grosor de la línea de brillo secundaria.
+   */
+  GLOW_STROKE_WIDTH: 1.6,
+
+  /**
+   * Grosor de la punta o cabeza de la onda de barrido.
+   */
+  LEADING_STROKE_WIDTH: 1.5,
+
+  /**
+   * Desenfoque de sombra del cuerpo de la señal (Glow).
+   */
+  SHADOW_BLUR_BASE: 8,
+
+  /**
+   * Desenfoque de sombra de la punta o cabeza conductora de la señal.
+   */
+  SHADOW_BLUR_LEADING: 15,
+
+  // === Marcadores Fisiológicos (Fiduciales) ===
+  /**
+   * Radio del punto indicador del Pico Sistólico (SYS).
+   * - ¿Qué significa?: Tamaño del círculo cian en el punto máximo de cada latido.
+   * - Si se sube: Círculos marcadores sistólicos más grandes y fáciles de identificar.
+   * - Si se baja: Círculos más pequeños y discretos en los picos.
+   */
+  SYS_PEAK_RADIUS: 3.5,
+
+  /**
+   * Radio del indicador del Valle Diastólico (DIA).
+   * - ¿Qué significa?: Diámetro del anillo gris de marcación en el punto mínimo del latido.
+   * - Si se sube: Marcador diastólico más grande y visible.
+   * - Si se baja: Marcador diastólico más diminuto.
+   */
+  DIA_VALLEY_RADIUS: 2.4,
+
+  /**
+   * Radio del indicador de la Muesca Dícrota (DIC).
+   * - ¿Qué significa?: Tamaño del punto cian claro que resalta el rebote elástico aórtico.
+   * - Si se sube: Marcador de muesca dícrota más grande y notorio.
+   * - Si se baja: Marcador más imperceptible y minimalista.
+   */
+  DIC_NOTCH_RADIUS: 2.4,
+
+  /**
+   * Radio del anillo de alarma rojo para latidos con arritmia (ARR).
+   * - ¿Qué significa?: El diámetro del círculo exterior rojo que envuelve los picos anómalos.
+   * - Si se sube: El anillo se expande más lejos de la coordenada del pico.
+   * - Si se baja: El anillo abraza estrechamente y de cerca el pico con arritmia.
+   */
+  ARR_WARNING_RADIUS: 10.0,
+
+  /**
+   * Grosor de la línea del anillo de advertencia de arritmia.
+   * - ¿Qué significa?: Ancho del trazo circular de alerta roja.
+   * - Si se sube: Anillo más grueso, visible y alarmante.
+   * - Si se baja: Anillo rojo más fino y discreto.
+   */
+  ARR_WARNING_WIDTH: 1.5,
+
+  // === Cursor Conductor (Punta de Barrido) ===
+  /**
+   * Radio base del halo pulsátil que sigue a la punta del barrido.
+   * - ¿Qué significa?: El tamaño base del círculo que late al ritmo del pulso al frente del barrido.
+   * - Si se sube: Aura de barrido de mayor tamaño y dinamismo.
+   * - Si se baja: Aura pequeña y compacta en el extremo del trazado.
+   */
+  HEAD_PULSE_BASE_RADIUS: 6.0,
+
+  /**
+   * Radio del núcleo central blanco en la punta conductora del barrido.
+   */
+  HEAD_PULSE_INNER_RADIUS: 3.0,
+
+  // === Márgenes y Límites de Dibujo ===
+  /**
+   * Margen superior de la onda en el gráfico.
+   * - ¿Qué significa?: Espacio vacío superior en píxeles para que la onda no solape los textos superiores del monitor.
+   * - Si se sube: Desplaza la onda hacia abajo, comprimiendo el área útil de dibujo.
+   * - Si se baja: Permite que la onda se desplace más arriba en pantalla.
+   */
+  WAVE_PAD_TOP: 20,
+
+  /**
+   * Margen inferior de la onda en el gráfico.
+   * - ¿Qué significa?: Espacio vacío inferior en píxeles antes del tacograma para evitar solapamientos.
+   * - Si se sube: Comprime la onda hacia arriba, alejándola del tacograma.
+   * - Si se baja: Permite que los valles de la onda bajen más cerca de la sección del tacograma.
+   */
+  WAVE_PAD_BOTTOM: 44,
+
+  // === Tiempos de Reacción y Velocidades Dinámicas ===
+  /**
+   * Velocidad de amortiguación (desvanecimiento) de la punta conductora tras cada latido.
+   * - ¿Qué significa?: Factor multiplicador por cuadro que reduce el tamaño del halo del cursor (sweepPulse).
+   * - Si se sube: El halo brillante de la punta se apaga más lentamente, dejando un rastro luminoso más largo.
+   * - Si se baja: El halo se apaga de forma abrupta y veloz.
+   */
+  SWEEP_PULSE_DECAY: 0.90,
+
+  /**
+   * Tiempo de rebote (debounce) mínimo entre picos registrados en milisegundos.
+   * - ¿Qué significa?: El tiempo de espera mínimo necesario para procesar visualmente el siguiente latido y evitar falsas detecciones duplicadas.
+   * - Si se sube: Evita falsos picos por ruido, pero puede ignorar latidos reales si la frecuencia cardíaca es extremadamente alta (taquicardia).
+   * - Si se baja: Aumenta la sensibilidad ante frecuencias altas, pero puede duplicar marcas visuales en un solo latido.
+   */
+  PEAK_DEBOUNCE_MS: 250,
+
+  /**
+   * Intervalo RR (IBI) por defecto utilizado cuando no hay mediciones previas.
+   * - ¿Qué significa?: El valor base de intervalo entre latidos en milisegundos para inicializar cálculos de ritmo.
+   * - Si se sube: La duración de la ventana de análisis inicial es mayor.
+   * - Si se baja: La duración de la ventana inicial es menor.
+   */
+  DEFAULT_RR_INTERVAL_MS: 800,
+
+  /**
+   * Límite de duración fisiológica mínimo para el cálculo de alineación de arritmias en milisegundos.
+   * - ¿Qué significa?: El intervalo RR mínimo aceptado en el mapeo visual de la alerta.
+   * - Si se sube: Agranda el intervalo mínimo a marcar.
+   * - Si se baja: Permite marcar anomalías extremadamente rápidas.
+   */
+  MIN_ARR_DURATION_MS: 400,
+
+  /**
+   * Límite de duración fisiológica máximo para el cálculo de alineación de arritmias en milisegundos.
+   * - ¿Qué significa?: El intervalo RR máximo aceptado en el mapeo visual de la alerta.
+   * - Si se sube: Permite que las marcas de arritmia persistan en el tiempo de manera prolongada.
+   * - Si se baja: Acorta el tiempo máximo en pantalla que dura el trazo rojo.
+   */
+  MAX_ARR_DURATION_MS: 1500,
+
+  /**
+   * Factor de alineación retrógrada para el marcado de arritmias.
+   * - ¿Qué significa?: La proporción del intervalo RR que se pinta de rojo hacia atrás en el tiempo a partir del pico detectado.
+   * - Si se sube: La alerta roja abarca una porción mayor del trazado de la onda antes del pico.
+   * - Si se baja: La alerta se concentra solo sobre el pico o ligeramente después.
+   */
+  ARR_RETRO_ALIGN_FACTOR: 0.35,
+
+  /**
+   * Factor de alineación anterógrada para el marcado de arritmias.
+   * - ¿Qué significa?: La proporción del intervalo RR que la alerta roja se mantiene activa hacia adelante en el tiempo a partir del pico.
+   * - Si se sube: El color rojo de la alerta persiste durante más tiempo en el barrido que se desplaza.
+   * - Si se baja: El color rojo desaparece rápidamente después de que pasa el pico.
+   */
+  ARR_ANTERO_ALIGN_FACTOR: 1.65,
+
+  /**
+   * Exponente de agudeza visual para controlar la velocidad de subida y bajada de la onda.
+   * - ¿Qué significa?: Distorsión no-lineal matemática aplicada exclusivamente al trazado del Canvas.
+   * - Si se sube (ej. 1.3 - 1.7): Hace que la subida al pico sistólico y la caída posterior sean visualmente mucho más rápidas y agudas (efecto "látigo" o "relámpago").
+   * - Si se baja (ej. 1.0): La onda se grafica de forma 100% lineal y fiel a la fisiología pura sin distorsión.
+   * - ¡ATENCIÓN!: Esta constante es 100% visual y estética. No afecta la lógica interna de captación de latidos ni las matemáticas médicas del procesador, por lo que es totalmente seguro calibrarla sin alterar la detección de pulso.
+   */
+  WAVE_SHARPNESS_EXPONENT: 1.75,
+};
+
+// Exportaciones individuales para mantener compatibilidad total con componentes importadores externos (como PPGSignalMeter.tsx)
 export const TARGET_FPS = 60;
-export const WINDOW_MS = 2000;
-export const BUFFER_SIZE = 2500;
+export const WINDOW_MS = CARDIAC_WAVE_CONFIG.WINDOW_MS;
+export const BUFFER_SIZE = CARDIAC_WAVE_CONFIG.BUFFER_SIZE;
 export const TREND_WINDOW_MS = 60_000;
 export const TREND_MAX_POINTS = 240;
 export const BEAT_HISTORY_MAX = 30;
-export const VISUAL_DELAY_MS = 0;
-export const AMP_ATTACK = 0.03;
-export const AMP_RELEASE = 0.04;
+export const VISUAL_DELAY_MS = CARDIAC_WAVE_CONFIG.VISUAL_DELAY_MS;
+export const AMP_ATTACK = CARDIAC_WAVE_CONFIG.AMP_ATTACK;
+export const AMP_RELEASE = CARDIAC_WAVE_CONFIG.AMP_RELEASE;
 export const RR_TACHO_H = 34;
 
 export interface PpgLayout {
@@ -113,6 +331,7 @@ export interface PpgRenderProps {
     status?: string;
     message?: string;
     placementHint?: string;
+    fingerPressure?: 'LIGHT' | 'IDEAL' | 'HEAVY';
     hasPulsatility?: boolean;
     acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY';
     acquisitionProgress?: number;
@@ -149,6 +368,10 @@ export interface PpgRenderState {
   pendingTrendArr: boolean;
   lastPeakProcessedTime: number;
   arrActiveUntil: number;
+  /** Latch: la onda solo se revela cuando la señal se ESTABILIZÓ (adquisición READY). */
+  traceRevealed: boolean;
+  /** Fuerza pulsátil real [0..1]: comprime la altura de la onda (objeto inerte → plana). */
+  signalStrength: number;
 }
 
 export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: number): void {
@@ -225,8 +448,6 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   const placementHint =
     typeof diag?.placementHint === 'string' ? diag.placementHint : '';
   const stage = diag?.acquisitionStage;
-  // Blockers accionables (el usuario puede corregirlos) tienen prioridad sobre
-  // el mensaje calmado de "estabilizando".
   const hardBlocker =
     diag?.status === 'MOTION_ARTIFACT' ||
     diag?.status === 'SATURATED' ||
@@ -237,9 +458,16 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   if (detected && stage === 'STABILIZING' && !hardBlocker) {
     const pct = Math.round((diag?.acquisitionProgress ?? 0) * 100);
     ctx.fillStyle = COLORS.TEXT_INFO;
-    ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.textAlign = 'center';
-    ctx.fillText(`ESTABILIZANDO SEÑAL · ${pct}%`, header.w / 2, header.y + 12);
+    if (placementHint) {
+      ctx.font = `bold 9px ${FONT_MONO}`;
+      ctx.fillText(`ESTABILIZANDO SEÑAL · ${pct}%`, header.w / 2, header.y + 8);
+      ctx.font = `9px ${FONT_MONO}`;
+      ctx.fillText(placementHint, header.w / 2, header.y + 18);
+    } else {
+      ctx.font = `bold 10px ${FONT_MONO}`;
+      ctx.fillText(`ESTABILIZANDO SEÑAL · ${pct}%`, header.w / 2, header.y + 12);
+    }
   } else if (placementHint && detected && stage === 'READY') {
     ctx.fillStyle = COLORS.TEXT_INFO;
     ctx.font = `9px ${FONT_MONO}`;
@@ -473,7 +701,7 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.fillStyle = grad;
   ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
 
-  const pxPerMm = Math.max(4, Math.min(8, plot.h / 30));
+  const pxPerMm = Math.max(5, Math.min(10, plot.h / 25));
   const minor = pxPerMm;
   const major = pxPerMm * 5;
 
@@ -523,32 +751,94 @@ export function drawECGGrid(ctx: CanvasRenderingContext2D, state: PpgRenderState
   ctx.setLineDash([]);
 
   ctx.strokeStyle = COLORS.PANEL_BORDER;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = 1.5;
   ctx.strokeRect(plot.x, plot.y, plot.w, plot.h);
 
   const seconds = Math.floor(WINDOW_MS / 1000);
-  ctx.font = `bold 9px ${FONT_MONO}`;
+  ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
   for (let s = 0; s <= seconds; s++) {
     const x = plot.x + plot.w - (s / seconds) * plot.w;
-    ctx.fillText(`-${s}s`, x, plot.y + plot.h + 12);
+    ctx.fillText(`-${s}s`, x, plot.y + plot.h + 14);
   }
 
   const stats = state.amplitudeStats;
   ctx.fillStyle = '#ffffff';
-  ctx.font = `bold 9px ${FONT_MONO}`;
+  ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.textAlign = 'right';
   for (let i = 0; i <= 4; i++) {
     const y = plot.y + (i / 4) * plot.h;
     const val = stats.max - (i / 4) * stats.range;
-    ctx.fillText(val.toFixed(0), plot.x - 4, y + 3);
+    ctx.fillText(val.toFixed(0), plot.x - 6, y + 4);
   }
 
   ctx.textAlign = 'left';
   ctx.fillStyle = COLORS.TEXT_DIM;
-  ctx.font = `9px ${FONT_MONO}`;
-  ctx.fillText('25 mm/s · 0.3–5 Hz · PPG-RG', plot.x + 4, plot.y - 4);
+  ctx.font = `bold 10px ${FONT_MONO}`;
+  ctx.fillText('25 mm/s · 0.5–12 Hz · HIGH-FIDELITY PPG', plot.x + 8, plot.y - 8);
+
+  drawPressureGauge(ctx, state);
+}
+
+export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
+  const p = state.props;
+  if (!p.isFingerDetected) return;
+
+  const { plot } = state.layout;
+  const diag = p.diagnostics;
+  const pressure = diag?.fingerPressure || 'LIGHT';
+
+  const gaugeW = 120;
+  const gaugeH = 8;
+  const gaugeX = plot.x + plot.w - gaugeW - 16;
+  const gaugeY = plot.y + 24;
+
+  ctx.save();
+  ctx.font = `bold 9px ${FONT_MONO}`;
+  ctx.textAlign = 'left';
+  
+  let labelText = 'PRESIÓN: IDEAL';
+  let labelColor = COLORS.SIGNAL;
+  let targetPct = 0.5;
+
+  if (pressure === 'LIGHT') {
+    labelText = 'PRESIÓN: SUAVE';
+    labelColor = COLORS.TEXT_WARN;
+    targetPct = 0.2;
+  } else if (pressure === 'HEAVY') {
+    labelText = 'PRESIÓN: EXCESIVA';
+    labelColor = COLORS.TEXT_DANGER;
+    targetPct = 0.8;
+  }
+
+  ctx.fillStyle = labelColor;
+  ctx.fillText(labelText, gaugeX, gaugeY - 8);
+
+  const grad = ctx.createLinearGradient(gaugeX, 0, gaugeX + gaugeW, 0);
+  grad.addColorStop(0, '#f59e0b');
+  grad.addColorStop(0.35, '#f59e0b');
+  grad.addColorStop(0.45, '#22c55e');
+  grad.addColorStop(0.55, '#22c55e');
+  grad.addColorStop(0.65, '#ef4444');
+  grad.addColorStop(1, '#ef4444');
+
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+  ctx.fillRect(gaugeX - 4, gaugeY - 4, gaugeW + 8, gaugeH + 8);
+  
+  ctx.fillStyle = grad;
+  ctx.fillRect(gaugeX, gaugeY, gaugeW, gaugeH);
+
+  const cursorX = gaugeX + gaugeW * targetPct;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(cursorX, gaugeY - 2);
+  ctx.lineTo(cursorX - 5, gaugeY - 8);
+  ctx.lineTo(cursorX + 5, gaugeY - 8);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
 }
 
 export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
@@ -558,42 +848,32 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   const p = state.props;
 
   if (p.preserveResults && !p.isFingerDetected) return;
-
-  const scaledValue = p.value * state.waveGain;
   if (p.isPeak) state.sweepPulse = 1;
 
   if (p.isPeak) {
     const peakAge = state.now - state.lastPeakProcessedTime;
-    if (peakAge > 200) {
+    if (peakAge > CARDIAC_WAVE_CONFIG.PEAK_DEBOUNCE_MS) {
       state.lastPeakProcessedTime = state.now;
-
       const currentCount = p.arrhythmiaCount || 0;
       const rrArr = p.rrIntervals;
       const lastRR = rrArr && rrArr.length > 0 ? rrArr[rrArr.length - 1] : 0;
-
       const isNewArr = currentCount > state.lastArrhythmiaCount;
 
       if (isNewArr) {
         state.lastArrhythmiaCount = currentCount;
         state.pendingTrendArr = true;
-        const retroRR = lastRR > 0 ? lastRR : 800;
-        const retroDuration = Math.min(Math.max(retroRR, 400), 1500);
-        buffer.markArrhythmiaBack(retroDuration * 0.35);
-        state.arrActiveUntil = state.now + retroDuration * 0.65;
+        const retroRR = lastRR > 0 ? lastRR : CARDIAC_WAVE_CONFIG.DEFAULT_RR_INTERVAL_MS;
+        const retroDuration = Math.min(Math.max(retroRR, CARDIAC_WAVE_CONFIG.MIN_ARR_DURATION_MS), CARDIAC_WAVE_CONFIG.MAX_ARR_DURATION_MS);
+        buffer.markArrhythmiaBack(retroDuration * CARDIAC_WAVE_CONFIG.ARR_RETRO_ALIGN_FACTOR);
+        state.arrActiveUntil = state.now + retroDuration * CARDIAC_WAVE_CONFIG.ARR_ANTERO_ALIGN_FACTOR;
       }
       const storedRR = isPhysiologicalRR(lastRR) ? Math.round(lastRR) : 0;
-      state.beatHistory.push({
-        isArrhythmia: isNewArr,
-        time: state.now - VISUAL_DELAY_MS,
-        rr: storedRR,
-      });
+      state.beatHistory.push({ isArrhythmia: isNewArr, time: state.now - VISUAL_DELAY_MS, rr: storedRR });
       if (state.beatHistory.length > BEAT_HISTORY_MAX) {
         state.beatHistory = state.beatHistory.slice(-BEAT_HISTORY_MAX);
       }
     }
   }
-
-  buffer.push({ time: state.now, value: scaledValue, isArrhythmia: state.now < state.arrActiveUntil });
 
   const points = buffer.getPoints();
   if (points.length > 30) {
@@ -617,23 +897,31 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
   const stats = state.amplitudeStats;
   if (points.length < 2) return;
-
   const safeRange = stats.range > 1 ? stats.range : 1;
-
-  const wavePadTop = 12;
-  const wavePadBot = RR_TACHO_H + 12;
+  const wavePadTop = CARDIAC_WAVE_CONFIG.WAVE_PAD_TOP;
+  const wavePadBot = CARDIAC_WAVE_CONFIG.WAVE_PAD_BOTTOM;
   const waveH = Math.max(40, plot.h - wavePadTop - wavePadBot);
   const waveBaseY = plot.y + wavePadTop + waveH;
 
-  const coords: { x: number; y: number; isArr: boolean }[] = [];
+  const strength = state.traceRevealed
+    ? (state.signalStrength < 0 ? 0 : state.signalStrength > 1 ? 1 : state.signalStrength)
+    : 0.5; // Default amplitude during warmup so we can see finger contact immediately
+  const midValue = (stats.max + stats.min) / 2;
+  const coords: { x: number; y: number; isArr: boolean; val: number }[] = [];
   for (let i = 0; i < points.length; i++) {
     const pt = points[i];
     const age = state.now - pt.time - VISUAL_DELAY_MS;
     if (age > WINDOW_MS) continue;
     const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
     if (x < plot.x || x > plot.x + plot.w) continue;
-    const y = plot.y + wavePadTop + ((stats.max - pt.value) / safeRange) * waveH;
-    coords.push({ x, y, isArr: pt.isArrhythmia });
+    const honestValue = midValue + (pt.value - midValue) * strength;
+    
+    // Mapeo normalizado [0..1] para aplicar la transformación de subida/bajada no lineal
+    const pct = Math.max(0, Math.min(1, (honestValue - stats.min) / safeRange));
+    const transformedPct = Math.pow(pct, CARDIAC_WAVE_CONFIG.WAVE_SHARPNESS_EXPONENT);
+    const y = plot.y + wavePadTop + (1 - transformedPct) * waveH;
+    
+    coords.push({ x, y, isArr: pt.isArrhythmia, val: pt.value });
   }
 
   if (coords.length < 2) return;
@@ -643,12 +931,10 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
+  // Background areas for arrhythmia
   let seg = 0;
   while (seg < coords.length) {
-    if (!coords[seg].isArr) {
-      seg++;
-      continue;
-    }
+    if (!coords[seg].isArr) { seg++; continue; }
     let end = seg;
     while (end < coords.length && coords[end].isArr) end++;
     const x0 = coords[seg].x;
@@ -658,7 +944,9 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     seg = end;
   }
 
+  // Waveform Fill
   const fillSegment = (startIdx: number, endIdx: number, arrhythmia: boolean) => {
+    if (!state.traceRevealed) return; // Do not draw background fills when stabilizing
     if (endIdx <= startIdx) return;
     ctx.beginPath();
     ctx.moveTo(coords[startIdx].x, waveBaseY);
@@ -667,11 +955,11 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.closePath();
     const fillGrad = ctx.createLinearGradient(0, plot.y + wavePadTop, 0, waveBaseY);
     if (arrhythmia) {
-      fillGrad.addColorStop(0, 'rgba(248, 113, 113, 0.08)');
-      fillGrad.addColorStop(1, 'rgba(127, 29, 29, 0.01)');
+      fillGrad.addColorStop(0, 'rgba(248, 113, 113, 0.12)');
+      fillGrad.addColorStop(1, 'rgba(127, 29, 29, 0.02)');
     } else {
-      fillGrad.addColorStop(0, 'rgba(34, 197, 94, 0.05)');
-      fillGrad.addColorStop(1, 'rgba(34, 197, 94, 0.005)');
+      fillGrad.addColorStop(0, 'rgba(34, 197, 94, 0.10)');
+      fillGrad.addColorStop(1, 'rgba(34, 197, 94, 0.01)');
     }
     ctx.fillStyle = fillGrad;
     ctx.fill();
@@ -686,209 +974,207 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     fi = fj;
   }
 
+  // Waveform Stroke
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
-
   const drawDirectSegment = (startIdx: number, endIdx: number) => {
     ctx.beginPath();
     ctx.moveTo(coords[startIdx].x, coords[startIdx].y);
-    for (let k = startIdx + 1; k < endIdx; k++) {
-      ctx.lineTo(coords[k].x, coords[k].y);
-    }
+    for (let k = startIdx + 1; k < endIdx; k++) ctx.lineTo(coords[k].x, coords[k].y);
   };
 
   const totalLen = coords.length;
   const recentCut = Math.max(0, totalLen - Math.floor(totalLen * 0.35));
   const leadingCut = Math.max(0, totalLen - Math.floor(totalLen * 0.10));
 
-  ctx.shadowBlur = 0;
+  // Base stroke
   seg = 0;
   while (seg < totalLen - 1) {
     const isArr = coords[seg].isArr;
     let segEnd = seg;
     while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
-    const segEndClamped = segEnd + 1 > totalLen ? segEnd : segEnd + 1;
-    drawDirectSegment(seg, segEndClamped);
-    ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.35)' : 'rgba(34, 197, 94, 0.38)';
-    ctx.lineWidth = 3.5;
+    drawDirectSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
+    ctx.strokeStyle = state.traceRevealed
+      ? (isArr ? 'rgba(239, 68, 68, 0.4)' : 'rgba(34, 197, 94, 0.45)')
+      : 'rgba(148, 163, 184, 0.25)'; // Low opacity zinc when stabilizing
+    ctx.lineWidth = CARDIAC_WAVE_CONFIG.BASE_STROKE_WIDTH;
+    ctx.stroke();
+    seg = segEnd;
+  }
+
+  if (state.traceRevealed) {
+    // Glow and leading strokes
+    ctx.shadowColor = COLORS.SIGNAL_GLOW;
+    ctx.shadowBlur = CARDIAC_WAVE_CONFIG.SHADOW_BLUR_BASE;
+    seg = Math.max(recentCut, 0);
+    while (seg < totalLen - 1) {
+      const isArr = coords[seg].isArr;
+      let segEnd = seg;
+      while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
+      drawDirectSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
+      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.65)' : 'rgba(34, 197, 94, 0.68)';
+      ctx.lineWidth = CARDIAC_WAVE_CONFIG.GLOW_STROKE_WIDTH;
+      ctx.stroke();
+      seg = segEnd;
+    }
+
+    ctx.shadowBlur = CARDIAC_WAVE_CONFIG.SHADOW_BLUR_LEADING;
+    seg = Math.max(leadingCut, 0);
+    while (seg < totalLen - 1) {
+      const isArr = coords[seg].isArr;
+      let segEnd = seg;
+      while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
+      drawDirectSegment(seg, segEnd + 1 > totalLen ? segEnd : segEnd + 1);
+      ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.85)' : '#4ade80';
+      ctx.lineWidth = CARDIAC_WAVE_CONFIG.LEADING_STROKE_WIDTH;
+      ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
+      ctx.stroke();
+      seg = segEnd;
+    }
     ctx.shadowBlur = 0;
-    ctx.stroke();
-    seg = segEnd;
+  } else {
+    // Simple slightly clearer leading stroke for current signal without glow when stabilizing
+    seg = Math.max(leadingCut, 0);
+    if (seg < totalLen - 1) {
+      drawDirectSegment(seg, totalLen);
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)';
+      ctx.lineWidth = CARDIAC_WAVE_CONFIG.BASE_STROKE_WIDTH;
+      ctx.stroke();
+    }
   }
 
-  ctx.shadowColor = COLORS.SIGNAL_GLOW;
-  ctx.shadowBlur = 6;
-  seg = Math.max(recentCut, 0);
-  while (seg < totalLen - 1) {
-    const isArr = coords[seg].isArr;
-    let segEnd = seg;
-    while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
-    const segEndClamped = segEnd + 1 > totalLen ? segEnd : segEnd + 1;
-    drawDirectSegment(seg, segEndClamped);
-    ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.55)' : 'rgba(34, 197, 94, 0.58)';
-    ctx.lineWidth = 3;
-    ctx.stroke();
-    seg = segEnd;
-  }
-
-  ctx.shadowBlur = 12;
-  seg = Math.max(leadingCut, 0);
-  while (seg < totalLen - 1) {
-    const isArr = coords[seg].isArr;
-    let segEnd = seg;
-    while (segEnd < totalLen - 1 && coords[segEnd].isArr === isArr) segEnd++;
-    const segEndClamped = segEnd + 1 > totalLen ? segEnd : segEnd + 1;
-    drawDirectSegment(seg, segEndClamped);
-    ctx.strokeStyle = isArr ? 'rgba(239, 68, 68, 0.75)' : '#4ade80';
-    ctx.lineWidth = 2.8;
-    ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
-    ctx.stroke();
-    seg = segEnd;
-  }
-
-  state.sweepPulse *= 0.75;
+  // Head Pulse
+  state.sweepPulse *= CARDIAC_WAVE_CONFIG.SWEEP_PULSE_DECAY;
   const head = coords[coords.length - 1];
   if (head) {
     const pulse = Math.max(state.sweepPulse, 0.04);
-    ctx.shadowBlur = 6;
-
-    ctx.strokeStyle = head.isArr ? 'rgba(248, 113, 113, 0.50)' : 'rgba(34, 197, 94, 0.5)';
-    ctx.lineWidth = 1.2;
-    ctx.shadowBlur = 0;
     ctx.beginPath();
-    ctx.moveTo(head.x, plot.y + wavePadTop);
-    ctx.lineTo(head.x, plot.y + plot.h - wavePadBot + 8);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.arc(head.x, head.y, 5 + pulse * 8, 0, Math.PI * 2);
-    ctx.fillStyle = head.isArr ? 'rgba(248, 113, 113, 0.25)' : 'rgba(34, 197, 94, 0.25)';
-    ctx.shadowBlur = 20 + pulse * 15;
-    ctx.shadowColor = head.isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
+    ctx.arc(head.x, head.y, CARDIAC_WAVE_CONFIG.HEAD_PULSE_BASE_RADIUS + pulse * 8, 0, Math.PI * 2);
+    ctx.fillStyle = state.traceRevealed
+      ? (head.isArr ? 'rgba(248, 113, 113, 0.3)' : 'rgba(0, 242, 255, 0.3)')
+      : 'rgba(148, 163, 184, 0.18)'; // Dimmer when stabilizing
     ctx.fill();
-
     ctx.beginPath();
-    ctx.arc(head.x, head.y, 2.8, 0, Math.PI * 2);
+    ctx.arc(head.x, head.y, CARDIAC_WAVE_CONFIG.HEAD_PULSE_INNER_RADIUS, 0, Math.PI * 2);
     ctx.fillStyle = '#ffffff';
-    ctx.shadowBlur = 10 + pulse * 12;
     ctx.fill();
   }
-  ctx.shadowBlur = 0;
 
-  const visiblePeaks: { x: number; y: number; isArr: boolean; time: number }[] = [];
-  for (const beat of state.beatHistory) {
-    const age = state.now - beat.time - VISUAL_DELAY_MS;
-    if (age > WINDOW_MS || age < 0) continue;
-    const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
-    if (x < plot.x || x > plot.x + plot.w) continue;
-    let nearestPt: PPGDataPoint | null = null;
-    let minDist = Infinity;
-    for (const pt of points) {
-      const d = Math.abs(pt.time - beat.time);
-      if (d < minDist) { minDist = d; nearestPt = pt; }
-    }
-    if (nearestPt && minDist < 200) {
-      const y = plot.y + wavePadTop + ((stats.max - nearestPt.value) / safeRange) * waveH;
-      visiblePeaks.push({ x, y, isArr: beat.isArrhythmia, time: beat.time });
-    }
-  }
+  // ─── FIDUCIAL MARKERS: INSTRUMENTATION GRADE (Annotated) ───────────
+  if (state.traceRevealed) {
+    ctx.font = `bold 8px ${FONT_MONO}`;
+    for (let i = 2; i < coords.length - 2; i++) {
+      const v = coords[i].val;
+      const isArr = coords[i].isArr;
+      const prev2 = coords[i - 2].val;
+      const prev = coords[i - 1].val;
+      const next = coords[i + 1].val;
+      const next2 = coords[i + 2].val;
 
-  const pdOverlay = state.props.diagnostics?.peakDetection;
-  const detectorPeaks: { x: number; y: number }[] = [];
-  if (pdOverlay?.elgendiPeakTimes) {
-    for (const peakTime of pdOverlay.elgendiPeakTimes) {
-      const age = state.now - peakTime - VISUAL_DELAY_MS;
+      // Systolic Peak (Max Local)
+      if (v > prev && v > next && v > prev2 && v > next2 && v > midValue) {
+        ctx.beginPath();
+        ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.SYS_PEAK_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = isArr ? COLORS.PEAK_ARR : '#ffffff';
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = isArr ? COLORS.PEAK_ARR : '#00f2ff';
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Numerical Annotation (Magnitude)
+        ctx.fillStyle = isArr ? COLORS.PEAK_ARR : '#00f2ff';
+        ctx.textAlign = 'center';
+        ctx.fillText(v.toFixed(1), coords[i].x, coords[i].y - 12);
+
+        // Marker label (SYS or ARR)
+        ctx.font = `7px ${FONT_MONO}`;
+        ctx.fillStyle = isArr ? '#fecaca' : 'rgba(255, 255, 255, 0.7)';
+        ctx.fillText(isArr ? 'ARR' : 'SYS', coords[i].x, coords[i].y - 22);
+        ctx.font = `bold 8px ${FONT_MONO}`;
+
+        // Red Warning Ring for Arrhythmia
+        if (isArr) {
+          ctx.beginPath();
+          ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.ARR_WARNING_RADIUS, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.65)';
+          ctx.lineWidth = CARDIAC_WAVE_CONFIG.ARR_WARNING_WIDTH;
+          ctx.stroke();
+        }
+      }
+
+      // Diastolic Valley (Min Local)
+      if (v < prev && v < next && v < prev2 && v < next2 && v < midValue) {
+        ctx.beginPath();
+        ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.DIA_VALLEY_RADIUS, 0, Math.PI * 2);
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+
+        // Numerical Annotation
+        ctx.fillStyle = '#94a3b8';
+        ctx.textAlign = 'center';
+        ctx.fillText(v.toFixed(1), coords[i].x, coords[i].y + 16);
+        ctx.font = `7px ${FONT_MONO}`;
+        ctx.fillText('DIA', coords[i].x, coords[i].y + 24);
+        ctx.font = `bold 8px ${FONT_MONO}`;
+      }
+
+      // Dicrotic Notch Detection
+      const d1_curr = v - prev;
+      const d1_next = next - v;
+      if (d1_curr < 0 && d1_next > d1_curr && d1_next < 0 && v > midValue) {
+         ctx.beginPath();
+         ctx.arc(coords[i].x, coords[i].y, CARDIAC_WAVE_CONFIG.DIC_NOTCH_RADIUS, 0, Math.PI * 2);
+         ctx.fillStyle = 'rgba(103, 232, 249, 0.6)';
+         ctx.fill();
+
+         if (state.props.quality > 70) {
+           ctx.font = `7px ${FONT_MONO}`;
+           ctx.fillStyle = 'rgba(103, 232, 249, 0.8)';
+           ctx.fillText('DIC', coords[i].x, coords[i].y - 8);
+           ctx.font = `bold 8px ${FONT_MONO}`;
+         }
+      }
+    }
+
+    const rrForLabels = state.props.rrIntervals ?? [];
+    const validRr = rrForLabels.filter((r) => isPhysiologicalRR(r));
+    const meanIbi = validRr.length > 0 ? validRr.reduce((a, v) => a + v, 0) / validRr.length : state.ibiDisplay;
+
+    // IBI Labels
+    ctx.font = `bold 10px ${FONT_MONO}`;
+    ctx.textAlign = 'center';
+    const visiblePeaks: { x: number; y: number; time: number }[] = [];
+    for (const beat of state.beatHistory) {
+      const age = state.now - beat.time - VISUAL_DELAY_MS;
       if (age > WINDOW_MS || age < 0) continue;
       const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
       if (x < plot.x || x > plot.x + plot.w) continue;
-      let nearestPt: PPGDataPoint | null = null;
-      let minDist = Infinity;
-      for (const pt of points) {
-        const d = Math.abs(pt.time - peakTime);
-        if (d < minDist) { minDist = d; nearestPt = pt; }
-      }
-      if (nearestPt && minDist < 280) {
-        const y = plot.y + wavePadTop + ((stats.max - nearestPt.value) / safeRange) * waveH;
-        detectorPeaks.push({ x, y });
-      }
+      visiblePeaks.push({ x, y: 0, time: beat.time });
     }
-  }
 
-  for (const dp of detectorPeaks) {
-    ctx.beginPath();
-    ctx.arc(dp.x, dp.y, 3, 0, Math.PI * 2);
-    ctx.fillStyle = '#22d3ee';
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(34, 211, 238, 0.5)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-
-  for (const peak of visiblePeaks) {
-    ctx.save();
-    ctx.strokeStyle = peak.isArr ? 'rgba(239,68,68,0.30)' : 'rgba(34,197,94,0.22)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 4]);
-    ctx.beginPath();
-    ctx.moveTo(peak.x, plot.y);
-    ctx.lineTo(peak.x, plot.y + plot.h);
-    ctx.stroke();
-    ctx.restore();
-
-    ctx.beginPath();
-    ctx.arc(peak.x, peak.y, peak.isArr ? 6 : 4, 0, Math.PI * 2);
-    ctx.fillStyle = peak.isArr ? COLORS.PEAK_ARR : COLORS.PEAK_NORMAL;
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(peak.x, peak.y, 1.5, 0, Math.PI * 2);
-    ctx.fillStyle = '#fff';
-    ctx.fill();
-
-    if (peak.isArr) {
+    for (let i = 0; i < visiblePeaks.length - 1; i++) {
+      const p1 = visiblePeaks[i];
+      const p2 = visiblePeaks[i + 1];
+      const ibiMs = Math.abs(p2.time - p1.time);
+      if (!isPhysiologicalRR(ibiMs)) continue;
+      const label = ibiSegmentLabel(ibiMs, meanIbi);
+      const midX = (p1.x + p2.x) / 2;
+      const topY = plot.y + 40;
+      ctx.strokeStyle = label.level === 'danger' ? 'rgba(248, 113, 113, 0.7)' : label.level === 'warn' ? 'rgba(245, 158, 11, 0.65)' : 'rgba(103, 232, 249, 0.5)';
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.arc(peak.x, peak.y, 10, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(239, 68, 68, 0.65)';
-      ctx.lineWidth = 1.5;
+      ctx.moveTo(p1.x, topY + 6);
+      ctx.lineTo(p1.x, topY);
+      ctx.lineTo(p2.x, topY);
+      ctx.lineTo(p2.x, topY + 6);
       ctx.stroke();
-      ctx.font = `bold 8px ${FONT_MONO}`;
-      ctx.fillStyle = '#fecaca';
-      ctx.textAlign = 'center';
-      ctx.fillText('ARR', peak.x, peak.y - 12);
+      ctx.fillStyle = levelColor(label.level);
+      ctx.fillText(label.text, midX, topY - 4);
     }
   }
 
-  const rrForLabels = state.props.rrIntervals ?? [];
-  const validRr = rrForLabels.filter((r) => isPhysiologicalRR(r));
-  const meanIbi =
-    validRr.length > 0 ? validRr.reduce((a, v) => a + v, 0) / validRr.length : state.ibiDisplay;
-
-  ctx.font = `bold 9px ${FONT_MONO}`;
-  ctx.textAlign = 'center';
-  for (let i = 0; i < visiblePeaks.length - 1; i++) {
-    const p1 = visiblePeaks[i];
-    const p2 = visiblePeaks[i + 1];
-    const ibiMs = Math.abs(p2.time - p1.time);
-    if (!isPhysiologicalRR(ibiMs)) continue;
-    const label = ibiSegmentLabel(ibiMs, meanIbi);
-    const midX = (p1.x + p2.x) / 2;
-    const topY = Math.min(p1.y, p2.y) - 20;
-    ctx.strokeStyle =
-      label.level === 'danger'
-        ? 'rgba(248, 113, 113, 0.7)'
-        : label.level === 'warn'
-          ? 'rgba(245, 158, 11, 0.65)'
-          : 'rgba(103, 232, 249, 0.5)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(p1.x, topY + 6);
-    ctx.lineTo(p1.x, topY);
-    ctx.lineTo(p2.x, topY);
-    ctx.lineTo(p2.x, topY + 6);
-    ctx.stroke();
-    ctx.fillStyle = levelColor(label.level);
-    ctx.fillText(label.text, midX, topY - 3);
-  }
-
+  // Tachogram
   const tachoY = plot.y + plot.h - RR_TACHO_H + 4;
   ctx.fillStyle = 'rgba(8, 14, 26, 0.85)';
   ctx.fillRect(plot.x + 2, tachoY - 4, plot.w - 4, RR_TACHO_H);
@@ -896,41 +1182,12 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.fillStyle = COLORS.TEXT_DIM;
   ctx.textAlign = 'left';
   ctx.fillText('TACHOGRAMA RR (IBI)', plot.x + 8, tachoY + 8);
-  if (visiblePeaks.length >= 2) {
-    const ibis: number[] = [];
-    for (let i = 0; i < visiblePeaks.length - 1; i++) {
-      const d = Math.abs(visiblePeaks[i + 1].time - visiblePeaks[i].time);
-      if (isPhysiologicalRR(d)) ibis.push(d);
-    }
-    const maxIbi = Math.max(...ibis, 900);
-    const minIbi = Math.min(...ibis, 400);
-    const spanIbi = Math.max(120, maxIbi - minIbi);
-    for (let i = 0; i < visiblePeaks.length - 1; i++) {
-      const ibiMs = Math.abs(visiblePeaks[i + 1].time - visiblePeaks[i].time);
-      if (!isPhysiologicalRR(ibiMs)) continue;
-      const midX = (visiblePeaks[i].x + visiblePeaks[i + 1].x) / 2;
-      const h = ((ibiMs - minIbi) / spanIbi) * (RR_TACHO_H - 16);
-      const irregular = ibiSegmentLabel(ibiMs, meanIbi).level !== 'normal';
-      ctx.fillStyle = irregular ? 'rgba(239, 68, 68, 0.85)' : 'rgba(34, 197, 94, 0.75)';
-      ctx.fillRect(midX - 3, tachoY + RR_TACHO_H - 10 - h, 6, h);
-    }
-  }
 
-  const rhythm = buildRhythmPanel(
-    p.arrhythmiaStatus,
-    p.arrhythmiaCount ?? 0,
-    p.rrIntervals ?? [],
-    state.hrv,
-  );
+  const rhythm = buildRhythmPanel(p.arrhythmiaStatus, p.arrhythmiaCount ?? 0, p.rrIntervals ?? [], state.hrv);
   const panelH = 56;
   const panelY = plot.y + 8;
   ctx.fillStyle = 'rgba(8, 14, 26, 0.88)';
-  ctx.strokeStyle =
-    rhythm.level === 'danger'
-      ? 'rgba(239, 68, 68, 0.55)'
-      : rhythm.level === 'warn'
-        ? 'rgba(245, 158, 11, 0.45)'
-        : 'rgba(34, 197, 94, 0.35)';
+  ctx.strokeStyle = rhythm.level === 'danger' ? 'rgba(239, 68, 68, 0.55)' : rhythm.level === 'warn' ? 'rgba(245, 158, 11, 0.45)' : 'rgba(34, 197, 94, 0.35)';
   ctx.lineWidth = 1;
   ctx.fillRect(plot.x + 8, panelY, Math.min(plot.w - 16, 340), panelH);
   ctx.strokeRect(plot.x + 8, panelY, Math.min(plot.w - 16, 340), panelH);
@@ -967,31 +1224,22 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.restore();
 }
 
-/**
- * Indicador fino de estabilización. NO oculta el trazo PPG real: dibuja solo una
- * barra delgada en el borde superior del área de señal, ligada a la confianza real
- * de adquisición. Así la lectura inicial se ve real (la onda del pulso es visible)
- * en lugar de una pantalla de carga artificial. No se dibuja en READY.
- */
 export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const p = state.props;
   const diag = p.diagnostics;
-  if (!diag || diag.acquisitionStage !== 'STABILIZING') return;
   if (!p.isFingerDetected || p.preserveResults) return;
+  if (state.traceRevealed) return;
 
   const { plot } = state.layout;
-  const progress = Math.max(0, Math.min(1, diag.acquisitionProgress ?? 0));
-
+  const progress = Math.max(0, Math.min(1, diag?.acquisitionProgress ?? 0));
   const barX = plot.x + 12;
   const barW = plot.w - 24;
   const barH = 4;
   const barY = plot.y + 4;
 
   ctx.save();
-  // Pista tenue de la barra.
   ctx.fillStyle = 'rgba(148, 163, 184, 0.16)';
   ctx.fillRect(barX, barY, barW, barH);
-  // Progreso = confianza real de adquisición (se estanca si la señal es pobre).
   const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
   grad.addColorStop(0, 'rgba(34, 197, 94, 0.9)');
   grad.addColorStop(1, 'rgba(103, 232, 249, 0.95)');

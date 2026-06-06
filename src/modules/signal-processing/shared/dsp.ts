@@ -6,7 +6,8 @@ import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { clamp } from '../../../utils/math';
 import { median } from '../../../utils/stats';
 import { BandpassFilter } from '../BandpassFilter';
-import { RESPIRATION_DEFAULTS } from '../../../config/signalProcessing';
+
+const TWO_PI_DSP = Math.PI * 2;
 
 export function detrendLinear(y: number[]): number[] {
   const n = y.length;
@@ -212,33 +213,70 @@ export function bpmFromAutocorr(signal: number[], fs: number): { bpm: number; sc
   return { bpm: (60 * fs) / lag, score };
 }
 
+/**
+ * Frecuencia dominante (Hz) de una serie uniformemente muestreada dentro de la
+ * banda [fMinHz, fMaxHz], por PERIODOGRAMA (DFT por recurrencia de rotación, sin
+ * trig por muestra). Frente a la autocorrelación, elige el fundamental por
+ * energía espectral → sin ambigüedad de sub-armónico. La serie se centra por su
+ * media internamente (pásela ya detrended si tiene tendencia lineal). Devuelve
+ * la frecuencia del pico y su concentración espectral normalizada (0–1; ≈1 para
+ * una onda pura, ≈0 para ruido sin periodicidad).
+ */
+export function bandLimitedDominantFreq(
+  series: number[],
+  fsHz: number,
+  fMinHz: number,
+  fMaxHz: number,
+): { freqHz: number; quality: number } {
+  const n = series.length;
+  const fMax = Math.min(fMaxHz, fsHz * 0.5 - 1e-6); // respeta Nyquist
+  if (n < 8 || fsHz <= 0 || fMax <= fMinHz) return { freqHz: 0, quality: 0 };
+
+  let mean = 0;
+  for (let i = 0; i < n; i++) mean += series[i];
+  mean /= n;
+  const centered = new Array<number>(n);
+  let totalPower = 0;
+  for (let i = 0; i < n; i++) {
+    const c = series[i] - mean;
+    centered[i] = c;
+    totalPower += c * c;
+  }
+  if (totalPower < 1e-12) return { freqHz: 0, quality: 0 };
+
+  // Resolución ≈0.004 Hz (~0.25 rpm), acotada para limitar el coste.
+  const steps = clamp(Math.round((fMax - fMinHz) / 0.004), 64, 2048);
+  let bestMag = 0;
+  let bestF = 0;
+  for (let s = 0; s <= steps; s++) {
+    const f = fMinHz + ((fMax - fMinHz) * s) / steps;
+    const w = (TWO_PI_DSP * f) / fsHz;
+    const cosW = Math.cos(w);
+    const sinW = Math.sin(w);
+    let cw = 1;
+    let sw = 0;
+    let re = 0;
+    let im = 0;
+    for (let i = 0; i < n; i++) {
+      re += centered[i] * cw;
+      im += centered[i] * sw;
+      const nextCw = cw * cosW - sw * sinW;
+      sw = sw * cosW + cw * sinW;
+      cw = nextCw;
+    }
+    const mag = re * re + im * im;
+    if (mag > bestMag) {
+      bestMag = mag;
+      bestF = f;
+    }
+  }
+
+  const quality = clamp((2 * bestMag) / (n * totalPower), 0, 1);
+  return { freqHz: bestF, quality };
+}
+
 export function bandpassOffline(signal: number[], fs: number): number[] {
   const f = new BandpassFilter(fs);
   f.reset();
   return signal.map((s) => f.filter(s));
-}
-
-/**
- * Estima frecuencia respiratoria (rpm) desde modulación de amplitud / baseline del PPG.
- * Fs debe reflejar la cadencia real de muestras del buffer (p.ej. ~10 Hz si se alimenta cada ~100 ms).
- */
-export function estimateRespiratoryModulationRpm(
-  samples: number[],
-  fsHz: number
-): { rpm: number; score: number } | null {
-  const n = samples.length;
-  if (n < RESPIRATION_DEFAULTS.minBuffer * 0.5 || fsHz < 4) return null;
-  const det = detrendLinear(samples);
-  const w = Math.max(3, Math.round(fsHz * 0.35));
-  const ma = movingAverage(det.map((v) => Math.abs(v)), w);
-  const env = det.map((v, i) => Math.abs(v) - (ma[i] ?? 0));
-  const mean = env.reduce((a, b) => a + b, 0) / env.length;
-  const centered = env.map((v) => v - mean);
-  const minLag = Math.max(6, Math.round((60 / RESPIRATION_DEFAULTS.maxRpm) * fsHz));
-  const maxLag = Math.min(centered.length - 3, Math.max(minLag + 2, Math.round((60 / RESPIRATION_DEFAULTS.minRpm) * fsHz)));
-  const { lag, score } = autocorrDominantLag(centered, minLag, maxLag);
-  if (lag <= 0 || score < 0.12) return null;
-  const rpm = (60 * fsHz) / lag;
-  if (rpm < RESPIRATION_DEFAULTS.minRpm || rpm > RESPIRATION_DEFAULTS.maxRpm) return null;
-  return { rpm, score };
 }

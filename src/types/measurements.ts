@@ -37,6 +37,16 @@ export interface SignalQualityMetrics {
   elgendiConfidence?: number | null;
   /** Acuerdo espectral/estructural de picos (0–1) */
   detectorAgreement?: number | null;
+  /** Skewness de señal: >0 = PPG limpio, ~0 = ruido simétrico (Elgendi 2016) */
+  skewness?: number;
+  /** Kurtosis de señal: alta = picos agudos, baja = ruido plano */
+  kurtosis?: number;
+  /** Hjorth parameters: activity, mobility, complexity */
+  hjorthActivity?: number;
+  hjorthMobility?: number;
+  hjorthComplexity?: number;
+  /** Potencia relativa en banda cardíaca 0.5-4Hz (0-1) */
+  relativePower?: number;
 }
 
 export interface CalibrationInfo {

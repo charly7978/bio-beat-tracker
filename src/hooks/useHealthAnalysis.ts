@@ -1,5 +1,8 @@
 import { useState, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { createLogger } from '@/utils/logger';
+
+const log = createLogger('useHealthAnalysis');
 import { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
 import { toast } from '@/hooks/use-toast';
 
@@ -64,7 +67,7 @@ export const useHealthAnalysis = () => {
 
       setAnalysis(result.analysis);
     } catch (err: unknown) {
-      console.error('Error análisis AI:', err);
+      log.error('Error análisis AI:', err);
       const msg = err instanceof Error ? err.message : 'Error desconocido';
       if (msg.includes('429') || msg.includes('rate')) {
         toast({ title: "Demasiadas solicitudes", description: "Intenta de nuevo en unos segundos.", variant: "destructive", duration: 4000 });

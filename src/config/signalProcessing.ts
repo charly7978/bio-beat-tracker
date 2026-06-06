@@ -11,8 +11,20 @@ export const PEAK_DETECTION_DEFAULTS = {
   maxPeakDistanceMs: VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS,
   /** Ventana corta tipo Elgendi (~111 ms @ fs nominal) */
   peakWindowMs: 111,
-  /** Ventana larga tipo Elgendi (~667 ms) */
+  /** Ventana larga tipo Elgendi (~667 ms) — referencia del umbral MA_beat */
   beatWindowMs: 667,
+  /**
+   * Beat-window ADAPTATIVO a la frecuencia: a baja HR (RR largo) la ventana fija
+   * de 667 ms es MÁS CORTA que un latido, así que el umbral no se asienta bajo el
+   * pico sistólico lento/ancho y cuesta detectar latidos lentos/débiles. Se escala
+   * `beatWindow = clamp(RR_mediana · factor, 667, max)`: a HR alta (RR<785 ms) queda
+   * en 667 (no cambia lo que ya anda); a HR baja se ensancha → umbral suave bajo el
+   * pico lento. FP-seguro: una ventana MAYOR baja el umbral entre latidos pero el
+   * burst sistólico (energía cuadrada, MA_peak) y el ancho mínimo de bloque siguen
+   * exigiendo un latido real; no crea picos espurios.
+   */
+  beatWindowRrFactor: 0.85,
+  beatWindowMsMax: 1100,
   /** Prominencia mínima de referencia (Elgendi); se escala por calibración en ventana */
   minProminence: 0.019,
   /** Peso del offset adaptativo MA_beat (referencia; calibración ajusta por SQI/PI) */
@@ -23,8 +35,44 @@ export const PEAK_DETECTION_DEFAULTS = {
    * SQI/PI lo escala vía `offsetWeight` (β_efectivo = beatOffset·offsetWeight/0.22).
    */
   beatOffset: 0.02,
-  /** Factor mínimo del RR fisiológico entre emisiones de pico (anti-doble latido) */
-  peakEmitRefractoryFactor: 0.80,
+  /**
+   * Periodo refractario FIJO de EMISIÓN de pico (anti muesca dícrota / doble
+   * conteo). 300 ms es el mínimo validado (HR máx ~200 bpm). Es FIJO (no escala
+   * con la mediana RR) para no bloquear latidos prematuros en arritmias ni
+   * frenar la detección tras un latido perdido.
+   */
+  peakEmitRefractoryMinMs: 300,
+  /**
+   * Guard "latido imposiblemente temprano": rechaza un pico cuyo RR sea menor
+   * que esta fracción de la mediana RR reciente (probable muesca dícrota a HR
+   * baja o doble conteo que superó el refractario fijo). Sólo actúa por el lado
+   * bajo del RR → no bloquea pausas/arritmias (los PVC acoplan >0.5× la mediana)
+   * ni se re-sincroniza mal tras un latido perdido (un RR largo siempre pasa), y
+   * a HR altas queda por debajo del refractario (no recorta la frecuencia máxima).
+   */
+  peakEmitMinRrFrac: 0.45,
+  /**
+   * Movimiento (IMU, motionScore EMA) por encima del cual se SUPRIME la emisión
+   * de latidos: durante un movimiento claro la señal está corrupta y los picos
+   * son artefactos. Conservador (rest ≈ 0.1–0.3; artefacto duro = 0.75) → no
+   * actúa en reposo. Degrada con gracia: sin permiso de IMU motionScore = 0.
+   */
+  peakEmitMotionSuppress: 0.6,
+  /**
+   * Rechazo relativo de amplitud en Elgendi: se descartan picos cuya prominencia
+   * sea menor que esta fracción de la prominencia mediana (muesca dícrota/ruido
+   * son de menor amplitud que el pico sistólico). Conservador para no perder
+   * latidos reales con modulación respiratoria.
+   */
+  peakAmplitudeRejectFraction: 0.35,
+  /**
+   * Cota SUPERIOR de amplitud relativa: se descartan picos cuya prominencia
+   * supere esta fracción × la mediana. El micro-movimiento del dedo produce
+   * excursiones bruscas (picos de amplitud anómala) — un latido real no supera
+   * ~2.6× la prominencia mediana ni con potenciación post-extrasístole. Relativo
+   * → no afecta señales débiles; alto → no descarta latidos reales ni PVC.
+   */
+  peakAmplitudeRejectUpper: 2.6,
   minSQI: 10,
   /** Ventana para emitir pico respecto al frame actual (ms) — ~½ RR @ 45 BPM */
   peakEmitWindowMs: 720,
@@ -67,4 +115,30 @@ export const RESPIRATION_DEFAULTS = {
   maxRpm: 40,
   minStableFrames: 90,
   minBuffer: 240,
+} as const;
+
+/**
+ * Fusión multi-modalidad de respiración — "Smart Fusion" (Karlen et al. 2013,
+ * IEEE TBME, "Multiparameter Respiratory Rate Estimation From the PPG"). Se
+ * estima la frecuencia respiratoria de TRES modulaciones inducidas por la
+ * respiración y se fusionan SOLO si concuerdan (alta especificidad):
+ *   - RIAV: variación de amplitud del pulso (envolvente)
+ *   - RIIV: variación de intensidad/baseline (canal LP respiratorio)
+ *   - RIFV: variación de frecuencia (arritmia sinusal respiratoria, serie RR)
+ */
+export const RESP_SMART_FUSION = {
+  /** Calidad (pico de autocorrelación 0–1) mínima para que una modalidad cuente */
+  MIN_MODALITY_QUALITY: 0.30,
+  /** Std máxima (rpm) entre modalidades para considerarlas en consenso (Karlen ~4 bpm) */
+  AGREEMENT_STD_RPM: 4.0,
+  /** Frecuencia de re-muestreo de la serie RR para RIFV (Hz) */
+  RIFV_RESAMPLE_HZ: 4.0,
+  /** Mínimo de intervalos RR para intentar la modalidad RIFV */
+  RIFV_MIN_RR: 6,
+  /** Escala de confianza cuando solo UNA modalidad está disponible */
+  SINGLE_MODALITY_CONF_SCALE: 0.55,
+  /** Escala de confianza cuando las modalidades DISCREPAN (especificidad Karlen) */
+  DISAGREEMENT_CONF_SCALE: 0.30,
+  /** Mínimo de muestras en una serie de modalidad para estimar */
+  MIN_SERIES_SAMPLES: 24,
 } as const;

@@ -2,6 +2,7 @@ import { useEffect, useCallback, useRef } from 'react';
 import { HeartBeatProcessor } from '../modules/HeartBeatProcessor';
 import type { ContactState } from '../types/signal';
 import type { CameraRuntimeHints } from '../lib/device/cameraDeviceProfile';
+import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 
 interface HeartBeatResult {
   bpm: number;
@@ -19,6 +20,12 @@ interface HeartBeatResult {
 
 const EMPTY_RR = { intervals: [] as number[], lastPeakTime: null as number | null, timestampNow: 0 };
 
+/** ~1,1 s sin dedo antes de re-adquisición suave (más tolerante: un artefacto
+ * breve no corta la detección ni obliga a "ponerse en ritmo" de nuevo) */
+const NO_CONTACT_PEAK_RESET_FRAMES = VITAL_THRESHOLDS.CONTACT.SOFT_RESET_FRAMES;
+/** ~1,6 s sin dedo: reset completo del procesador (tolerante a parpadeos breves) */
+const NO_CONTACT_FULL_RESET_FRAMES = VITAL_THRESHOLDS.CONTACT.HARD_RESET_FRAMES;
+
 /**
  * Hook de procesamiento cardíaco.
  * Reinicia seguimiento de picos al perder contacto y al volver a colocar el dedo.
@@ -34,11 +41,6 @@ export const useHeartBeatProcessor = () => {
   const lastSqiRef = useRef<number>(0);
   const noContactFramesRef = useRef<number>(0);
   const wasNoContactRef = useRef(true);
-
-  /** ~0,8 s sin dedo antes de re-adquisición suave (evita vaciar buffer en micro-parpadeos) */
-  const NO_CONTACT_PEAK_RESET_FRAMES = 24;
-  /** ~1,2 s sin dedo: reset completo del procesador */
-  const NO_CONTACT_FULL_RESET_FRAMES = 36;
 
   useEffect(() => {
     const t = Date.now().toString(36);
@@ -61,7 +63,7 @@ export const useHeartBeatProcessor = () => {
     contactState: ContactState = 'STABLE_CONTACT',
     timestamp?: number,
     fingerConfirmed = true,
-    ppgQuality?: { sqi: number; perfusionIndex?: number },
+    ppgQuality?: { sqi: number; perfusionIndex?: number; motionScore?: number },
   ): HeartBeatResult => {
     if (!processorRef.current || processingStateRef.current !== 'ACTIVE') {
       return {
@@ -81,6 +83,7 @@ export const useHeartBeatProcessor = () => {
       processorRef.current.setPpgQualityMetrics(
         ppgQuality.sqi,
         ppgQuality.perfusionIndex,
+        ppgQuality.motionScore,
       );
     }
 

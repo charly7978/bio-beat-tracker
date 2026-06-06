@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, XCircle, Brain, Loader2 } from "lucide-react";
+import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, XCircle, Brain, Loader2, Sliders, User, Check } from "lucide-react";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
+import { CalibrationManager } from "@/modules/vital-signs/CalibrationManager";
+import { supabase } from "@/integrations/supabase/client";
 import { useSignalProcessor } from "@/hooks/useSignalProcessor";
 import { useHeartBeatProcessor } from "@/hooks/useHeartBeatProcessor";
 import { useVitalSignsProcessor } from "@/hooks/useVitalSignsProcessor";
@@ -10,23 +12,46 @@ import { useFrameLoop } from "@/hooks/useFrameLoop";
 import { useSignalRouter } from "@/hooks/useSignalRouter";
 import { useMeasurementSession } from "@/hooks/useMeasurementSession";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
+import { PoincarePlot } from "@/components/PoincarePlot";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
 import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
+import { isNative } from "@/lib/device/platform";
 import type { ContactState } from "@/types/signal";
 import { usePerfTelemetry } from "@/hooks/usePerfTelemetry";
-import type { BackpressureConfig } from "@/lib/perf/backpressureConfig";
+import { triggerCalibrationCompleteHaptic } from "@/utils/haptics";
+import { createLogger } from "@/utils/logger";
+
+const log = createLogger('Index');
+
+interface ActiveUser {
+  id: string;
+  email?: string;
+}
+
+interface HistoricalMeasurement {
+  id: string;
+  heart_rate: number;
+  spo2: number;
+  systolic: number;
+  diastolic: number;
+  arrhythmia_count: number;
+  quality: number;
+  measured_at: string;
+  isCloud?: boolean;
+}
 
 const Index = () => {
   // Canvas sincrónico (render-phase, fuera de effects)
   const cameraRef = useRef<CameraViewHandle>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const ppgMeterRef = useRef<import('@/components/PPGSignalMeter').PPGSignalMeterHandle>(null);
   if (!canvasRef.current && typeof document !== 'undefined') {
     const c = document.createElement('canvas');
     c.width = 320;
     c.height = 240;
     canvasRef.current = c;
-    ctxRef.current = c.getContext('2d', { willReadFrequently: true, alpha: false });
+    ctxRef.current = c.getContext('2d', { willReadFrequently: !isNative(), alpha: false });
   }
 
   // Hooks de procesamiento
@@ -39,7 +64,6 @@ const Index = () => {
     getRGBStats,
     getBackpressureState,
     getBackpressureConfig,
-    setBackpressureConfig,
     currentStride,
     setSignalCallback,
     setCameraRuntimeHints,
@@ -77,19 +101,13 @@ const Index = () => {
     setHeartBeatRuntimeHints(cameraHintsRef.current);
   }, [setCameraRuntimeHints, setHeartBeatRuntimeHints]);
 
-  // Frame loop
-  const { startFrameLoop, stopFrameLoop } = useFrameLoop({
-    cameraRef,
-    canvasRef,
-    ctxRef,
-    processFrame,
-  });
-
   // Signal router (encapsula todo el routing de señal, throttling, latch, sanity)
   const router = useSignalRouter({
     processHeartBeat: {
       processSignal: processHeartBeat,
-      setFingerPlacementMode: (_mode) => { /* via processHeartBeat */ },
+      // No-op deliberado: la detección de HR corre SIEMPRE con gating 'hybrid'
+      // (el estado validado/“bueno”). El placementMode solo afecta a vitals.
+      setFingerPlacementMode: (_mode) => { /* intencionalmente sin efecto */ },
       setRuntimeHints: setHeartBeatRuntimeHints,
       reacquirePeaks: reacquireHeartPeaks,
       reset: resetHeartBeat,
@@ -101,6 +119,15 @@ const Index = () => {
       getRGBStats,
     },
     cameraHintsRef,
+    ppgMeterRef,
+  });
+
+  // Frame loop
+  const { startFrameLoop, stopFrameLoop } = useFrameLoop({
+    cameraRef,
+    canvasRef,
+    ctxRef,
+    processFrame,
   });
 
   // Session management
@@ -152,6 +179,28 @@ const Index = () => {
     router.setIsMonitoringRef(session.isMonitoring);
   }, [session.isMonitoring, router]);
 
+  // Al estabilizarse el contacto, bloquear la exposición de la cámara a la
+  // escena real del dedo iluminado. Frena la deriva del auto-exposure (causa del
+  // arranque errático de ~25-30 s). Se re-arma al perder el contacto.
+  const exposureLockedRef = useRef(false);
+  // Ref con el último rojo medido: el effect de abajo lo lee en la transición a
+  // STABLE_CONTACT sin depender de él (no re-ejecuta por frame ni queda obsoleto).
+  const lastRawRedRef = useRef(0);
+  if (typeof lastSignal?.rawRed === 'number') lastRawRedRef.current = lastSignal.rawRed;
+  useEffect(() => {
+    const cs = lastSignal?.contactState;
+    if (cs === 'NO_CONTACT' || cs == null) {
+      exposureLockedRef.current = false;
+      return;
+    }
+    if (!exposureLockedRef.current && cs === 'STABLE_CONTACT') {
+      exposureLockedRef.current = true;
+      // Acción concreta sobre el hardware: foco cercano + WB bloqueado + exposición
+      // auto-optimizada según el nivel REAL del rojo del dedo (no un valor fijo).
+      cameraRef.current?.optimizeForFinger?.(lastRawRedRef.current);
+    }
+  }, [lastSignal?.contactState]);
+
   // Sincronizar resultados post-medición
   useEffect(() => {
     if (lastValidResults && !session.isMonitoring) {
@@ -162,11 +211,307 @@ const Index = () => {
 
   // UI states
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
-  const [_bpCfg, setBpCfg] = useState<BackpressureConfig>(() => getBackpressureConfig());
-  const _updateBp = useCallback((patch: Partial<BackpressureConfig>) => {
-    const next = setBackpressureConfig(patch);
-    setBpCfg(next);
-  }, [setBackpressureConfig]);
+  const [showSettings, setShowSettings] = useState(false);
+  const [age, setAge] = useState<string>("35");
+  const [height, setHeight] = useState<string>("172");
+  const [weight, setWeight] = useState<string>("70");
+  const [gender, setGender] = useState<"male" | "female">("male");
+  const [refSys, setRefSys] = useState<string>("");
+  const [refDia, setRefDia] = useState<string>("");
+  const [refSpo2, setRefSpo2] = useState<string>("");
+
+  // --- PRODUCTION AND COMMERCIAL FEATURES ---
+  const [disclaimerAccepted, setDisclaimerAccepted] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem("disclaimer_accepted") === "true";
+    }
+    return false;
+  });
+
+  const handleAcceptDisclaimer = useCallback(() => {
+    localStorage.setItem("disclaimer_accepted", "true");
+    setDisclaimerAccepted(true);
+  }, []);
+
+  const [activeTab, setActiveTab] = useState<'profile' | 'history' | 'account'>('profile');
+  const [history, setHistory] = useState<HistoricalMeasurement[]>([]);
+  const [currentUser, setCurrentUser] = useState<ActiveUser | null>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+
+  const fetchHistory = useCallback(async () => {
+    try {
+      const localStr = localStorage.getItem("local_measurements");
+      const localData = localStr ? JSON.parse(localStr) : [];
+      const formattedLocal = localData.map((m: HistoricalMeasurement) => ({
+        ...m,
+        isCloud: false,
+      }));
+
+      const { data: { user } } = await supabase.auth.getUser();
+      let cloudData: HistoricalMeasurement[] = [];
+      if (user) {
+        const { data, error } = await supabase
+          .from("measurements")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("measured_at", { ascending: false });
+        if (!error && data) {
+          cloudData = data.map((m: HistoricalMeasurement) => ({
+            ...m,
+            isCloud: true,
+          }));
+        }
+      }
+
+      const combined = [...formattedLocal, ...cloudData].sort(
+        (a, b) => new Date(b.measured_at).getTime() - new Date(a.measured_at).getTime()
+      );
+      setHistory(combined);
+    } catch (err) {
+      log.error("Error fetching history:", err);
+    }
+  }, []);
+
+  const handleClearHistory = useCallback(() => {
+    if (window.confirm("¿Estás seguro de que quieres borrar el historial local de este dispositivo?")) {
+      localStorage.removeItem("local_measurements");
+      fetchHistory();
+    }
+  }, [fetchHistory]);
+
+  const handleExportCSV = useCallback(() => {
+    if (history.length === 0) {
+      alert("No hay mediciones en el historial para exportar.");
+      return;
+    }
+    let csvContent = "data:text/csv;charset=utf-8,";
+    csvContent += "Fecha,Origen,Pulso (bpm),SpO2 (%),Presion Sistolica (mmHg),Presion Diastolica (mmHg),Latidos Irregulares\n";
+    
+    history.forEach((m) => {
+      const date = new Date(m.measured_at).toISOString();
+      const origin = m.isCloud ? "Nube" : "Local";
+      const hr = m.heart_rate ?? "";
+      const spo2 = m.spo2 ?? "";
+      const sys = m.systolic ?? "";
+      const dia = m.diastolic ?? "";
+      const arr = m.arrhythmia_count ?? 0;
+      csvContent += `"${date}","${origin}",${hr},${spo2},${sys},${dia},${arr}\n`;
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `historial_bio_beat_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [history]);
+
+  const handleAuth = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) {
+      alert("Por favor rellene todos los campos.");
+      return;
+    }
+    setAuthLoading(true);
+    try {
+      if (authMode === 'signin') {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) throw error;
+        alert("Sesión iniciada correctamente.");
+      } else {
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+        });
+        if (error) throw error;
+        alert("Registro completado. Por favor revisa tu correo electrónico para confirmar la cuenta.");
+      }
+      setEmail("");
+      setPassword("");
+    } catch (error: unknown) {
+      const err = error as Error;
+      alert(err.message || "Error al procesar la autenticación");
+    } finally {
+      setAuthLoading(false);
+    }
+  }, [email, password, authMode]);
+
+  const handleSignOut = useCallback(async () => {
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      alert("Sesión cerrada.");
+    } catch (error: unknown) {
+      const err = error as Error;
+      alert(err.message || "Error al cerrar sesión");
+    }
+  }, []);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setCurrentUser(session?.user ?? null);
+      fetchHistory();
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCurrentUser(session?.user ?? null);
+      fetchHistory();
+    });
+
+    return () => subscription.unsubscribe();
+  }, [fetchHistory]);
+
+  useEffect(() => {
+    if (showSettings) {
+      fetchHistory();
+    }
+  }, [showSettings, fetchHistory]);
+
+  // Cargar datos antropométricos desde CalibrationManager al montar
+  useEffect(() => {
+    const profile = CalibrationManager.getInstance().getAnthropometric();
+    if (profile) {
+      setAge(profile.ageYears.toString());
+      setHeight(profile.heightCm.toString());
+      setWeight(profile.weightKg.toString());
+      setGender(profile.isMale ? "male" : "female");
+    }
+  }, []);
+
+  const handleSaveProfile = useCallback(() => {
+    const ageVal = parseInt(age, 10);
+    const heightVal = parseInt(height, 10);
+    const weightVal = parseInt(weight, 10);
+
+    if (isNaN(ageVal) || ageVal < 1 || ageVal > 120) {
+      alert("Por favor introduce una edad válida");
+      return;
+    }
+    if (isNaN(heightVal) || heightVal < 50 || heightVal > 250) {
+      alert("Por favor introduce una altura válida");
+      return;
+    }
+    if (isNaN(weightVal) || weightVal < 10 || weightVal > 300) {
+      alert("Por favor introduce un peso válido");
+      return;
+    }
+
+    const profile = {
+      ageYears: ageVal,
+      heightCm: heightVal,
+      weightKg: weightVal,
+      isMale: gender === 'male',
+    };
+    CalibrationManager.getInstance().setAnthropometric(profile);
+    
+    alert("Perfil fisiológico guardado y aplicado correctamente.");
+  }, [age, height, weight, gender]);
+
+  const handleCalibrateReference = useCallback(() => {
+    const sysVal = parseInt(refSys, 10);
+    const diaVal = parseInt(refDia, 10);
+    const spo2Val = parseInt(refSpo2, 10);
+    const calib = CalibrationManager.getInstance();
+
+    let calibratedBP = false;
+    let calibratedSpo2 = false;
+
+    if (sysVal && diaVal) {
+      if (sysVal < 70 || sysVal > 220 || diaVal < 40 || diaVal > 130) {
+        alert("Los valores de presión arterial están fuera de los rangos lógicos (Sistólica: 70-220, Diastólica: 40-130).");
+        return;
+      }
+      
+      const lastBP = lastValidResults?.bloodPressure.value;
+      if (lastBP) {
+        const sbpOffset = sysVal - lastBP.systolic;
+        const dbpOffset = diaVal - lastBP.diastolic;
+        
+        calib.addProfile({
+          id: `bp_${Date.now()}`,
+          type: 'BP',
+          deviceId: 'camera_ppg',
+          modelName: 'PWA Engine v4',
+          coefficients: { sbpOffset, dbpOffset },
+          referenceValues: { systolic: sysVal, diastolic: diaVal },
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+          method: 'cuff_reference'
+        });
+        calibratedBP = true;
+      }
+    }
+
+    if (spo2Val) {
+      if (spo2Val < 70 || spo2Val > 100) {
+        alert("El valor de SpO2 debe estar entre 70 y 100.");
+        return;
+      }
+
+      const lastSpo2 = lastValidResults?.spo2.value;
+      if (lastSpo2) {
+        const spo2Offset = spo2Val - lastSpo2;
+        
+        calib.addProfile({
+          id: `spo2_${Date.now()}`,
+          type: 'SPO2',
+          deviceId: 'camera_ppg',
+          modelName: 'Beer-Lambert Camera Proxy',
+          coefficients: { spo2Offset },
+          referenceValues: { spo2: spo2Val },
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+          method: 'oximeter_reference'
+        });
+        calibratedSpo2 = true;
+      }
+    }
+
+    if (calibratedBP || calibratedSpo2) {
+      alert("Calibración completada con éxito. Los offsets han sido guardados y se aplicarán de inmediato.");
+      setRefSys("");
+      setRefDia("");
+      setRefSpo2("");
+      
+      // Forzar renderizado y recargar los valores en pantalla
+      if (lastValidResults) {
+        const updatedBP = calib.applyBloodPressureCalibration(
+          lastValidResults.bloodPressure.value?.systolic ?? 120,
+          lastValidResults.bloodPressure.value?.diastolic ?? 80
+        );
+        const activeSpo2 = calib.getActiveProfile('SPO2');
+        const spo2Off = activeSpo2 ? (activeSpo2.coefficients.spo2Offset ?? 0) : 0;
+        const updatedSpo2 = lastValidResults.spo2.value 
+          ? Math.min(99, Math.max(88, lastValidResults.spo2.value + spo2Off))
+          : 98;
+          
+        router.setVitalSigns((prev) => ({
+          ...prev,
+          bloodPressure: {
+            ...prev.bloodPressure,
+            value: { systolic: updatedBP.systolic, diastolic: updatedBP.diastolic },
+            status: 'VALID',
+            calibration: calib.getCalibrationInfo('BP')
+          },
+          spo2: {
+            ...prev.spo2,
+            value: updatedSpo2,
+            status: 'VALID',
+            calibration: calib.getCalibrationInfo('SPO2')
+          }
+        }));
+      }
+    } else {
+      alert("Introduce valores de referencia para calibrar.");
+    }
+  }, [refSys, refDia, refSpo2, lastValidResults, router]);
 
   usePerfTelemetry({
     enabled: false,
@@ -245,9 +590,7 @@ const Index = () => {
 
       if (currentProgress >= 100) {
         clearInterval(interval);
-        if (navigator.vibrate) {
-          navigator.vibrate([100]);
-        }
+        triggerCalibrationCompleteHaptic().catch(() => undefined);
       }
     }, 500);
 
@@ -256,11 +599,27 @@ const Index = () => {
 
   // Camera error toast
   useEffect(() => {
-    const handler = () => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const errType = detail?.type;
+      const titles: Record<string, string> = {
+        permission_denied: "Permiso de cámara denegado",
+        not_found: "No se encontró cámara trasera",
+        not_readable: "Cámara en uso por otra aplicación",
+        overconstrained: "Cámara no compatible",
+        abort: "Inicio de cámara cancelado",
+      };
+      const descriptions: Record<string, string> = {
+        permission_denied: "Concede el permiso en Ajustes > Aplicaciones > Bio-Beat Tracker > Permisos.",
+        not_found: "Asegúrate de que el dispositivo tenga cámara trasera.",
+        not_readable: "Cierra otras apps que usen la cámara e intenta de nuevo.",
+        overconstrained: "Usando configuración por defecto.",
+        abort: "Intenta nuevamente.",
+      };
       import('@/hooks/use-toast').then(({ toast }) => toast({
-        title: "Cámara trasera no disponible",
-        description: "Verifica los permisos de cámara e intenta nuevamente.",
-        duration: 5000,
+        title: titles[errType] || "Cámara trasera no disponible",
+        description: descriptions[errType] || "Verifica los permisos de cámara e intenta nuevamente.",
+        duration: 6000,
       }));
     };
     window.addEventListener('camera-error', handler);
@@ -360,21 +719,22 @@ const Index = () => {
           />
         </div>
 
-        {/* AJUSTES — Removido para simplificar la interfaz según preferencia del usuario */}
-        {/* <button
+        {/* AJUSTES */}
+        <button
           type="button"
           onClick={() => setShowSettings(true)}
           aria-label="Ajustes"
-          className="absolute top-2 right-2 z-30 p-2 rounded-full bg-black/40 text-white/70 hover:text-white hover:bg-black/60 transition-colors"
+          className="absolute top-4 right-4 z-30 p-2.5 rounded-full bg-black/50 backdrop-blur-md border border-zinc-900 text-white/75 hover:text-white hover:bg-black/80 hover:scale-105 active:scale-95 shadow-lg shadow-black/35 transition-all"
         >
-          <SettingsIcon className="h-4 w-4" />
-        </button> */}
+          <Sliders className="h-4 w-4" />
+        </button>
 
         {/* MODAL DE AJUSTES REMOVIDO PARA PRODUCCIÓN */}
 
         <div className="relative z-10 h-full">
           <div className="flex-1 h-full">
             <PPGSignalMeter 
+              ref={ppgMeterRef}
               value={router.heartbeatSignal}
               quality={lastSignal?.quality || 0}
               isFingerDetected={
@@ -427,10 +787,10 @@ const Index = () => {
             
             return (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 animate-fade-in">
-                <div className="bg-slate-950 border border-slate-700/50 rounded-2xl max-w-sm w-[92%] shadow-2xl overflow-hidden">
+                <div className="bg-black border border-slate-700/50 rounded-2xl max-w-sm w-[92%] shadow-2xl overflow-hidden">
                   
                   {/* Header con estado */}
-                  <div className={`px-4 py-3 ${bgClass} border-b border-slate-800`}>
+                  <div className={`px-4 py-3 ${bgClass} border-b border-zinc-900`}>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <StatusIcon className={`w-5 h-5 ${textClass}`} />
@@ -441,9 +801,9 @@ const Index = () => {
                       </div>
                       <button 
                         onClick={() => session.setLocalMeasurementSummary(null)}
-                        className="p-1.5 rounded-full bg-slate-800 hover:bg-slate-700 transition-colors"
+                        className="p-1.5 rounded-full bg-zinc-900 hover:bg-slate-700 transition-colors"
                       >
-                        <X className="w-4 h-4 text-slate-400" />
+                        <X className="w-4 h-4 text-zinc-400" />
                       </button>
                     </div>
                   </div>
@@ -453,28 +813,28 @@ const Index = () => {
                     
                     {/* BPM y SpO2 en fila */}
                     <div className="grid grid-cols-2 gap-2">
-                      <div className="bg-slate-900/80 rounded-xl p-3 text-center border border-slate-800/50">
+                      <div className="bg-zinc-950/80 rounded-xl p-3 text-center border border-zinc-900/50">
                         <Heart className="w-4 h-4 text-red-400 mx-auto mb-1" fill="currentColor" />
                         <div className="text-white text-2xl font-bold leading-none">{avgBpm}</div>
-                        <div className="text-slate-500 text-[9px] mt-1 font-medium">BPM PROMEDIO</div>
+                        <div className="text-zinc-500 text-[9px] mt-1 font-medium">BPM PROMEDIO</div>
                       </div>
-                      <div className="bg-slate-900/80 rounded-xl p-3 text-center border border-slate-800/50">
+                      <div className="bg-zinc-950/80 rounded-xl p-3 text-center border border-zinc-900/50">
                         <Activity className="w-4 h-4 text-cyan-400 mx-auto mb-1" />
                         <div className="text-white text-2xl font-bold leading-none">
                           {router.vitalSigns.spo2.value != null && router.vitalSigns.spo2.value > 0 ? Math.round(router.vitalSigns.spo2.value) : '--'}
-                          <span className="text-sm text-slate-400">%</span>
+                          <span className="text-sm text-zinc-400">%</span>
                         </div>
-                        <div className="text-slate-500 text-[9px] mt-1 font-medium">SpO₂</div>
+                        <div className="text-zinc-500 text-[9px] mt-1 font-medium">SpO₂</div>
                       </div>
                     </div>
 
                     {/* Presión arterial */}
                     {router.vitalSigns.bloodPressure.value && router.vitalSigns.bloodPressure.value.systolic > 0 && (
-                      <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-800/50 flex items-center gap-3">
+                      <div className="bg-zinc-950/80 rounded-xl p-3 border border-zinc-900/50 flex items-center gap-3">
                         <Shield className="w-5 h-5 text-blue-400" />
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-1">
-                            <div className="text-slate-500 text-[9px] font-medium tracking-tight">PRESIÓN ARTERIAL</div>
+                            <div className="text-zinc-500 text-[9px] font-medium tracking-tight">PRESIÓN ARTERIAL</div>
                             {router.vitalSigns.bloodPressure.calibration?.available ? (
                               <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">CALIBRADO</span>
                             ) : (
@@ -483,19 +843,19 @@ const Index = () => {
                           </div>
                           <div className="text-white text-lg font-bold">
                             {Math.round(router.vitalSigns.bloodPressure.value.systolic)}/{Math.round(router.vitalSigns.bloodPressure.value.diastolic)}
-                            <span className="text-xs text-slate-500 ml-1">mmHg</span>
+                            <span className="text-xs text-zinc-500 ml-1">mmHg</span>
                           </div>
                         </div>
                       </div>
                     )}
 
                     {/* Barras de ritmo */}
-                    <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-800/50">
+                    <div className="bg-zinc-950/80 rounded-xl p-3 border border-zinc-900/50">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-slate-400 text-[10px] font-semibold tracking-wide">ANÁLISIS DE RITMO</span>
+                        <span className="text-zinc-400 text-[10px] font-semibold tracking-wide">ANÁLISIS DE RITMO</span>
                         <div className="flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-slate-500" />
-                          <span className="text-slate-500 text-[9px]">60s</span>
+                          <Clock className="w-3 h-3 text-zinc-500" />
+                          <span className="text-zinc-500 text-[9px]">60s</span>
                         </div>
                       </div>
                       
@@ -505,7 +865,7 @@ const Index = () => {
                           <span className="text-emerald-400 text-[9px] font-medium">■ Normales</span>
                           <span className="text-white text-xs font-bold">{normalBeats}</span>
                         </div>
-                        <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                        <div className="w-full h-2 bg-zinc-900 rounded-full overflow-hidden">
                           <div className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-full transition-all duration-1000 ease-out"
                                style={{ width: `${totalBeats > 0 ? (normalBeats / totalBeats) * 100 : 0}%` }} />
                         </div>
@@ -517,12 +877,19 @@ const Index = () => {
                           <span className="text-red-400 text-[9px] font-medium">■ Arrítmicos</span>
                           <span className="text-white text-xs font-bold">{arrhythmiaBeats}</span>
                         </div>
-                        <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                        <div className="w-full h-2 bg-zinc-900 rounded-full overflow-hidden">
                           <div className={`h-full rounded-full transition-all duration-1000 ease-out ${arrhythmiaBeats > 0 ? 'bg-gradient-to-r from-red-600 to-red-400' : 'bg-slate-700'}`}
                                style={{ width: `${totalBeats > 0 ? (arrhythmiaBeats / totalBeats) * 100 : 100}%` }} />
                         </div>
                       </div>
                     </div>
+
+                    {/* Poincaré Plot de HRV */}
+                    {router.rrIntervals && router.rrIntervals.length >= 2 && (
+                      <div className="flex justify-center my-2 animate-in fade-in zoom-in-95 duration-500">
+                        <PoincarePlot rrIntervals={router.rrIntervals} width={200} height={200} />
+                      </div>
+                    )}
 
                     {/* Porcentaje circular visual */}
                     <div className="flex items-center justify-center gap-4 pt-1">
@@ -545,7 +912,7 @@ const Index = () => {
                       </div>
                       <div>
                         <div className="text-white text-xs font-semibold">Ritmo Normal</div>
-                        <div className="text-slate-500 text-[9px]">{totalBeats} latidos analizados</div>
+                        <div className="text-zinc-500 text-[9px]">{totalBeats} latidos analizados</div>
                         <div className={`text-[10px] font-semibold mt-0.5 ${textClass}`}>
                           {statusText}
                         </div>
@@ -575,24 +942,24 @@ const Index = () => {
           {/* MODAL ANÁLISIS AI */}
           {showAIAnalysis && (
             <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 animate-fade-in">
-              <div className="bg-slate-950 border border-slate-700/50 rounded-2xl max-w-sm w-[92%] max-h-[80vh] shadow-2xl overflow-hidden flex flex-col">
-                <div className="px-4 py-3 bg-purple-500/10 border-b border-slate-800 flex items-center justify-between">
+              <div className="bg-black border border-slate-700/50 rounded-2xl max-w-sm w-[92%] max-h-[80vh] shadow-2xl overflow-hidden flex flex-col">
+                <div className="px-4 py-3 bg-purple-500/10 border-b border-zinc-900 flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Brain className="w-5 h-5 text-purple-400" />
                     <h3 className="text-white text-sm font-bold">Análisis AI de Salud</h3>
                   </div>
                   <button
                     onClick={() => { setShowAIAnalysis(false); clearAnalysis(); }}
-                    className="p-1.5 rounded-full bg-slate-800 hover:bg-slate-700 transition-colors"
+                    className="p-1.5 rounded-full bg-zinc-900 hover:bg-slate-700 transition-colors"
                   >
-                    <X className="w-4 h-4 text-slate-400" />
+                    <X className="w-4 h-4 text-zinc-400" />
                   </button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-4">
                   {isAnalyzing ? (
                     <div className="flex flex-col items-center justify-center py-12 gap-3">
                       <Loader2 className="w-8 h-8 text-purple-400 animate-spin" />
-                      <p className="text-slate-400 text-sm">Analizando tus signos vitales...</p>
+                      <p className="text-zinc-400 text-sm">Analizando tus signos vitales...</p>
                     </div>
                   ) : analysis ? (
                     <div className="text-slate-300 text-xs leading-relaxed whitespace-pre-wrap">
@@ -600,10 +967,433 @@ const Index = () => {
                     </div>
                   ) : (
                     <div className="flex flex-col items-center justify-center py-12 gap-3">
-                      <p className="text-slate-500 text-sm">No se pudo generar el análisis.</p>
+                      <p className="text-zinc-500 text-sm">No se pudo generar el análisis.</p>
                     </div>
                   )}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* PANEL DE AJUSTES Y CALIBRACIÓN */}
+          {showSettings && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in">
+              <div className="bg-black/95 border border-zinc-900/80 rounded-2xl max-w-sm w-[92%] shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
+                
+                {/* Header */}
+                <div className="px-4 pt-3 bg-gradient-to-r from-slate-900 to-slate-950 border-b border-zinc-900 flex flex-col">
+                  <div className="flex items-center justify-between pb-2">
+                    <div className="flex items-center gap-2">
+                      <Sliders className="w-5 h-5 text-emerald-400" />
+                      <div>
+                        <h3 className="text-white text-sm font-bold tracking-wide uppercase">Ajustes del Sistema</h3>
+                        <p className="text-zinc-500 text-[8px] font-medium tracking-wider uppercase">Monitorización y calibración clínica</p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => setShowSettings(false)}
+                      className="p-1.5 rounded-full bg-zinc-950 hover:bg-zinc-900 text-zinc-400 hover:text-white transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  
+                  {/* Tabs Selector */}
+                  <div className="flex border-t border-zinc-950 text-[10px] font-bold">
+                    <button 
+                      onClick={() => setActiveTab('profile')}
+                      className={`flex-1 py-2 text-center transition-colors border-b-2 ${activeTab === 'profile' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-zinc-500 hover:text-slate-300'}`}
+                    >
+                      PERFIL Y CALIB.
+                    </button>
+                    <button 
+                      onClick={() => setActiveTab('history')}
+                      className={`flex-1 py-2 text-center transition-colors border-b-2 ${activeTab === 'history' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-zinc-500 hover:text-slate-300'}`}
+                    >
+                      HISTORIAL ({history.length})
+                    </button>
+                    <button 
+                      onClick={() => setActiveTab('account')}
+                      className={`flex-1 py-2 text-center transition-colors border-b-2 ${activeTab === 'account' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-zinc-500 hover:text-slate-300'}`}
+                    >
+                      NUBE / SYNC
+                    </button>
+                  </div>
+                </div>
+
+                {/* Body */}
+                <div className="flex-1 overflow-y-auto p-4">
+                  
+                  {/* TAB 1: PERFIL Y CALIBRACIÓN */}
+                  {activeTab === 'profile' && (
+                    <div className="space-y-4 animate-in fade-in duration-200">
+                      {/* Sección 1: Perfil Fisiológico */}
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] font-bold uppercase tracking-wider">
+                          <User className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Perfil Fisiológico (PA Neuronal)</span>
+                        </div>
+                        
+                        <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3.5">
+                          {/* Edad y Género */}
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Edad (años)</label>
+                              <input 
+                                type="number" 
+                                value={age}
+                                onChange={(e) => setAge(e.target.value)}
+                                className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
+                                placeholder="35"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Sexo Biológico</label>
+                              <div className="grid grid-cols-2 gap-1 bg-black p-0.5 rounded-lg border border-zinc-900">
+                                <button 
+                                  type="button"
+                                  onClick={() => setGender('male')}
+                                  className={`py-1 text-[10px] font-bold rounded ${gender === 'male' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'text-zinc-500 hover:text-white'}`}
+                                >
+                                  MASC
+                                </button>
+                                <button 
+                                  type="button"
+                                  onClick={() => setGender('female')}
+                                  className={`py-1 text-[10px] font-bold rounded ${gender === 'female' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'text-zinc-500 hover:text-white'}`}
+                                >
+                                  FEM
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Altura y Peso */}
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Altura (cm)</label>
+                              <input 
+                                type="number" 
+                                value={height}
+                                onChange={(e) => setHeight(e.target.value)}
+                                className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
+                                placeholder="172"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Peso (kg)</label>
+                              <input 
+                                type="number" 
+                                value={weight}
+                                onChange={(e) => setWeight(e.target.value)}
+                                className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
+                                placeholder="70"
+                              />
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={handleSaveProfile}
+                            className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] transition-colors flex items-center justify-center gap-1.5"
+                          >
+                            <Check className="w-3.5 h-3.5" /> GUARDAR PERFIL
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Sección 2: Calibración Cruzada */}
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] font-bold uppercase tracking-wider">
+                          <Activity className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Calibración con Dispositivo Médico</span>
+                        </div>
+
+                        <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3.5">
+                          {lastValidResults ? (
+                            <>
+                              <div className="bg-black/60 rounded-lg p-2.5 border border-zinc-900/40 text-[10px] space-y-1">
+                                <span className="text-zinc-500 font-semibold block uppercase">Última medición registrada:</span>
+                                <div className="flex justify-between text-white font-bold">
+                                  <span>PA: {lastValidResults.bloodPressure.value ? `${Math.round(lastValidResults.bloodPressure.value.systolic)}/${Math.round(lastValidResults.bloodPressure.value.diastolic)} mmHg` : 'No detectada'}</span>
+                                  <span>SpO₂: {lastValidResults.spo2.value ? `${Math.round(lastValidResults.spo2.value)}%` : 'No detectado'}</span>
+                                </div>
+                              </div>
+
+                              <div className="space-y-2.5">
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Ref. Sistólica (mmHg)</label>
+                                    <input 
+                                      type="number" 
+                                      value={refSys}
+                                      onChange={(e) => setRefSys(e.target.value)}
+                                      className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
+                                      placeholder="120"
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Ref. Diastólica (mmHg)</label>
+                                    <input 
+                                      type="number" 
+                                      value={refDia}
+                                      onChange={(e) => setRefDia(e.target.value)}
+                                      className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
+                                      placeholder="80"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="space-y-1">
+                                  <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Ref. SpO₂ (%)</label>
+                                  <input 
+                                    type="number" 
+                                    value={refSpo2}
+                                    onChange={(e) => setRefSpo2(e.target.value)}
+                                    className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
+                                    placeholder="98"
+                                  />
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={handleCalibrateReference}
+                                  className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] transition-colors flex items-center justify-center gap-1.5"
+                                >
+                                  <Activity className="w-3.5 h-3.5" /> CALIBRAR DISPOSITIVO
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="text-center py-4 space-y-2">
+                              <AlertTriangle className="w-6 h-6 text-amber-500 mx-auto" />
+                              <p className="text-zinc-400 text-[10px] font-semibold leading-relaxed">
+                                Realiza al menos una medición completa para poder calibrar los sensores ópticos con tus valores de referencia.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Sección 3: Estado de Calibraciones */}
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] font-bold uppercase tracking-wider">
+                          <Shield className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Calibraciones Activas</span>
+                        </div>
+
+                        <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-2 text-[10px] font-semibold text-zinc-400">
+                          <div className="flex justify-between items-center py-1 border-b border-zinc-900/50">
+                            <span>Presión Arterial (BP)</span>
+                            {CalibrationManager.getInstance().getCalibrationInfo('BP').available ? (
+                              <span className="text-emerald-400 font-bold uppercase">Activo (Válido)</span>
+                            ) : (
+                              <span className="text-slate-600 uppercase">Sin calibrar</span>
+                            )}
+                          </div>
+                          <div className="flex justify-between items-center py-1">
+                            <span>Oxígeno en Sangre (SpO2)</span>
+                            {CalibrationManager.getInstance().getCalibrationInfo('SPO2').available ? (
+                              <span className="text-emerald-400 font-bold uppercase">Activo (Válido)</span>
+                            ) : (
+                              <span className="text-slate-600 uppercase">Sin calibrar</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* TAB 2: HISTORIAL DE MEDICIONES */}
+                  {activeTab === 'history' && (
+                    <div className="space-y-4 animate-in fade-in duration-200">
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={handleExportCSV}
+                          className="flex-1 py-2 rounded-xl bg-zinc-950 border border-zinc-900 hover:bg-zinc-900 text-white font-bold text-xs transition-all flex items-center justify-center gap-2"
+                        >
+                          <Activity className="w-4 h-4 text-cyan-400" /> EXPORTAR CSV
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleClearHistory}
+                          className="px-4 py-2 rounded-xl bg-red-950/20 border border-red-900/40 text-red-400 hover:bg-red-950/40 font-bold text-xs transition-all"
+                        >
+                          LIMPIAR
+                        </button>
+                      </div>
+
+                      <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                        {history.length > 0 ? (
+                          history.map((m: HistoricalMeasurement) => {
+                            const dateStr = new Date(m.measured_at).toLocaleDateString(undefined, {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            });
+                            return (
+                              <div key={m.id} className="bg-zinc-950/60 border border-zinc-900/40 rounded-xl p-3 space-y-2 relative">
+                                <div className="flex justify-between items-center">
+                                  <span className="text-[10px] text-zinc-500 font-bold uppercase">{dateStr}</span>
+                                  {m.isCloud ? (
+                                    <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400">NUBE</span>
+                                  ) : (
+                                    <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-zinc-900 text-zinc-400">LOCAL</span>
+                                  )}
+                                </div>
+                                <div className="grid grid-cols-3 gap-2 text-center">
+                                  <div className="bg-black/40 rounded-lg py-1 border border-zinc-950">
+                                    <span className="text-zinc-500 text-[8px] block font-bold">PULSO</span>
+                                    <span className="text-white text-xs font-bold">{m.heart_rate || '--'} <span className="text-[8px] text-zinc-400">bpm</span></span>
+                                  </div>
+                                  <div className="bg-black/40 rounded-lg py-1 border border-zinc-950">
+                                    <span className="text-zinc-500 text-[8px] block font-bold">SpO₂</span>
+                                    <span className="text-white text-xs font-bold">{m.spo2 || '--'}<span className="text-[8px] text-zinc-400">%</span></span>
+                                  </div>
+                                  <div className="bg-black/40 rounded-lg py-1 border border-zinc-950">
+                                    <span className="text-zinc-500 text-[8px] block font-bold">PRESIÓN</span>
+                                    <span className="text-white text-xs font-bold">
+                                      {m.systolic && m.diastolic ? `${m.systolic}/${m.diastolic}` : '--'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div className="text-center py-10 space-y-2 border border-dashed border-zinc-900 rounded-xl">
+                            <Activity className="w-8 h-8 text-slate-700 mx-auto animate-pulse" />
+                            <p className="text-zinc-500 text-[10px] font-semibold">Aún no hay mediciones guardadas en este dispositivo.</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* TAB 3: SINCRONIZACIÓN EN LA NUBE */}
+                  {activeTab === 'account' && (
+                    <div className="space-y-4 animate-in fade-in duration-200">
+                      {currentUser ? (
+                        <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-4 space-y-4 text-center">
+                          <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto">
+                            <Check className="w-6 h-6 text-emerald-400" />
+                          </div>
+                          <div className="space-y-1">
+                            <h4 className="text-white text-xs font-bold">SESIÓN INICIADA</h4>
+                            <p className="text-zinc-400 text-[10px] font-mono">{currentUser.email}</p>
+                          </div>
+                          <p className="text-zinc-500 text-[9px] leading-relaxed">
+                            Tus signos vitales se guardarán automáticamente en la nube y se sincronizarán en todos tus dispositivos.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={handleSignOut}
+                            className="w-full py-2 rounded-xl bg-red-950/20 border border-red-900/40 text-red-400 hover:bg-red-950/40 font-bold text-xs transition-all"
+                          >
+                            CERRAR SESIÓN
+                          </button>
+                        </div>
+                      ) : (
+                        <form onSubmit={handleAuth} className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-4 space-y-4">
+                          <div className="text-center space-y-1 pb-2">
+                            <h4 className="text-white text-xs font-bold uppercase">Sincronización en la Nube</h4>
+                            <p className="text-zinc-500 text-[9px] font-medium leading-relaxed">
+                              Crea una cuenta para guardar tu historial en internet de forma permanente y segura.
+                            </p>
+                          </div>
+
+                          <div className="space-y-2.5">
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Correo Electrónico</label>
+                              <input 
+                                type="email" 
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
+                                placeholder="tu@correo.com"
+                                required
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-zinc-500 font-bold uppercase tracking-wide">Contraseña</label>
+                              <input 
+                                type="password" 
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                className="w-full bg-black border border-zinc-900 rounded-lg px-2.5 py-1.5 text-white text-xs font-semibold focus:outline-none focus:border-emerald-500 transition-colors" 
+                                placeholder="••••••••"
+                                required
+                              />
+                            </div>
+                          </div>
+
+                          <div className="pt-2 space-y-3">
+                            <button
+                              type="submit"
+                              disabled={authLoading}
+                              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white font-bold text-xs tracking-wider transition-all disabled:opacity-50"
+                            >
+                              {authLoading ? "Procesando..." : (authMode === 'signin' ? "INICIAR SESIÓN" : "CREAR CUENTA")}
+                            </button>
+
+                            <div className="text-center">
+                              <button
+                                type="button"
+                                onClick={() => setAuthMode(prev => prev === 'signin' ? 'signup' : 'signin')}
+                                className="text-emerald-400 hover:text-emerald-300 text-[10px] font-bold"
+                              >
+                                {authMode === 'signin' ? "¿No tienes cuenta? Regístrate aquí" : "¿Ya tienes cuenta? Inicia sesión"}
+                              </button>
+                            </div>
+                          </div>
+                        </form>
+                      )}
+                    </div>
+                  )}
+
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* DESCARGO DE RESPONSABILIDAD MÉDICA */}
+          {!disclaimerAccepted && (
+            <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/95 backdrop-blur-md animate-fade-in p-4 overflow-y-auto">
+              <div className="bg-black border border-zinc-900/80 rounded-2xl max-w-sm w-full shadow-2xl p-5 space-y-5 animate-in zoom-in-95 duration-300 max-h-[90vh] flex flex-col">
+                <div className="text-center space-y-2">
+                  <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto">
+                    <AlertTriangle className="w-6 h-6 text-red-500" />
+                  </div>
+                  <h3 className="text-white text-base font-bold tracking-wide uppercase">DESCARGO DE RESPONSABILIDAD MÉDICA</h3>
+                  <p className="text-red-400 text-[10px] font-bold tracking-wider uppercase">IMPORTANTE LEER ANTES DE USAR</p>
+                </div>
+
+                <div className="flex-1 overflow-y-auto text-zinc-400 text-[11px] leading-relaxed space-y-3.5 pr-1 border-y border-zinc-950 py-4">
+                  <p>
+                    Esta aplicación utiliza fotopletismografía (PPG) a través de la cámara y el flash de su smartphone para estimar el pulso, la variabilidad de la frecuencia cardíaca, la saturación de oxígeno ($SpO_2$) y la presión arterial.
+                  </p>
+                  <p className="font-semibold text-white">
+                    Esta aplicación NO es un dispositivo médico y NO ha sido certificada por la FDA, EMA ni ninguna entidad reguladora de salud.
+                  </p>
+                  <p>
+                    Los resultados mostrados son aproximaciones con fines informativos y de bienestar personal. No deben utilizarse para autodiagnóstico, prevención o tratamiento de ninguna condición médica.
+                  </p>
+                  <p>
+                    Si usted tiene antecedentes de hipertensión, arritmia u otras afecciones cardiovasculares, debe utilizar dispositivos clínicos de grado médico validados y consultar con su médico antes de tomar cualquier decisión clínica.
+                  </p>
+                  <p>
+                    Al hacer clic en "Aceptar y Continuar", usted confirma que comprende y acepta que el uso de esta app es bajo su propio riesgo y discreción.
+                  </p>
+                </div>
+
+                <button
+                  onClick={handleAcceptDisclaimer}
+                  className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white font-bold text-xs tracking-wider transition-all hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  ACEPTAR Y CONTINUAR
+                </button>
               </div>
             </div>
           )}

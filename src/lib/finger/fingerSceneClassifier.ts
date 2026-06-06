@@ -1,28 +1,29 @@
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import { hasFingerHemoglobinSignature, type FingerRgbSnapshot } from './fingerContactSignature';
+import {
+  computeFingerEnsemble,
+  isFingerPresentByEnsemble,
+  hasFingerHemoglobinSignature,
+  type FingerRgbSnapshot,
+  type FingerEnsembleMetrics,
+} from './fingerContactSignature';
 import { passesUnifiedFingerAcquire } from './fingerPlacementProfile';
 
-/**
- * Flash al aire / superficie roja: brillo alto, G y B aún altos, R/B bajo.
- * La causa habitual de “detecta más sin dedo”.
- */
+let lastEnsemble: FingerEnsembleMetrics | null = null;
+
+export function getLastEnsemble(): FingerEnsembleMetrics | null {
+  return lastEnsemble;
+}
+
 export function isOpenFlashWithoutContact(s: FingerRgbSnapshot): boolean {
   const r = s.red;
   const g = Math.max(1, s.green);
   const b = Math.max(1, s.blue);
   const total = r + g + b;
   if (total < 45) return false;
-
-  const rb = r / b;
-  const rg = r / g;
   const dom = r - (g + b) / 2;
-
-  if (total > 175 && rb < 1.45 && rg < 1.25) return true;
-  if (total > 140 && rb < 1.32 && rg < 1.18) return true;
-  if (total > 105 && rb < 1.48 && rg < 1.2 && dom < 44) return true;
-  if (g > 88 && b > 72 && dom < 36) return true;
-  if (r > 0 && g > 0.68 * r && b > 0.6 * r && total > 115) return true;
-
+  if (dom > 20) return false;
+  if (g > 0.8 * r && b > 0.7 * r && total > 200) return true;
+  if (g > 0.75 * r && b > 0.65 * r && total > 150 && dom < 10) return true;
   return false;
 }
 
@@ -32,59 +33,66 @@ export interface FingerRoiSpatial {
   fingerTileCount: number;
 }
 
-/** Contacto vivo: hemoglobina en crudo Y suavizado, tiles, sin flash abierto. */
 export function passesLiveFingerContact(
   raw: FingerRgbSnapshot,
   smoothed: FingerRgbSnapshot,
   spatial: FingerRoiSpatial,
+  ensembleScore?: number,
 ): boolean {
   const F = VITAL_THRESHOLDS.FINGER;
   if (isOpenFlashWithoutContact(raw) || isOpenFlashWithoutContact(smoothed)) return false;
-  if (!hasFingerHemoglobinSignature(raw) || !hasFingerHemoglobinSignature(smoothed)) {
-    return false;
-  }
   if (spatial.coverageRatio < F.MIN_COVERAGE * 0.88) return false;
   if (spatial.fingerTileCount < F.MIN_FINGER_TILES_FOR_WEIGHTING) return false;
-  const b = Math.max(1, raw.blue);
-  if (raw.red / b < F.HEMOGLOBIN_MIN_RB) return false;
 
-  return true;
+  if (ensembleScore !== undefined && ensembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.85) {
+    return true;
+  }
+  if (hasFingerHemoglobinSignature(raw) || hasFingerHemoglobinSignature(smoothed)) {
+    return true;
+  }
+  return false;
 }
 
-/** Mantener contacto ya adquirido (umbrales más tolerantes — AE/torch variables en Motorola, etc.). */
 export function passesFingerMaintain(
   raw: FingerRgbSnapshot,
   smoothed: FingerRgbSnapshot,
   spatial: FingerRoiSpatial,
+  ensembleScore?: number,
 ): boolean {
   const F = VITAL_THRESHOLDS.FINGER;
   if (isOpenFlashWithoutContact(raw) || isOpenFlashWithoutContact(smoothed)) return false;
-
   const r = Math.max(raw.red, smoothed.red);
   const g = Math.max(1, raw.green, smoothed.green);
   const b = Math.max(1, raw.blue, smoothed.blue);
   const dom = r - (g + b) / 2;
-
   if (r < F.MAINTAIN_MIN_RED) return false;
   if (r / g < F.MAINTAIN_RG) return false;
   if (r / b < F.MAINTAIN_RB) return false;
   if (dom < F.MAINTAIN_DOMINANCE) return false;
   if (spatial.coverageRatio < F.MAINTAIN_COVERAGE) return false;
+  if (ensembleScore !== undefined && ensembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.8) {
+    return true;
+  }
   if (!hasFingerHemoglobinSignature(raw)) return false;
-
   return true;
 }
 
-/** Primera adquisición: punta, almohadilla o escena en lente (postura unificada). */
 export function passesFingerAcquire(
   raw: FingerRgbSnapshot,
   smoothed: FingerRgbSnapshot,
   spatial: FingerRoiSpatial,
-  opts?: { roiRedCv?: number; perfusionIndex?: number },
+  opts?: { roiRedCv?: number; perfusionIndex?: number; ensembleScore?: number },
 ): boolean {
-  if (!passesLiveFingerContact(raw, smoothed, spatial)) return false;
   const F = VITAL_THRESHOLDS.FINGER;
   const rb = raw.red / Math.max(1, raw.blue);
+
+  if (opts?.ensembleScore !== undefined && opts.ensembleScore > F.ENSEMBLE_FINGER_THRESHOLD) {
+    if (spatial.coverageRatio >= F.MIN_COVERAGE * 0.88 && spatial.fingerTileCount >= F.MIN_FINGER_TILES_FOR_WEIGHTING) {
+      return true;
+    }
+  }
+
+  if (!passesLiveFingerContact(raw, smoothed, spatial, opts?.ensembleScore)) return false;
   if (rb < F.ACQUIRE_RB_STRICT) return false;
 
   if (
@@ -114,9 +122,32 @@ export function passesFingerAcquire(
   return onLens || strict;
 }
 
-/**
- * Variación temporal alta con poca firma hemoglobina → AE del sensor, no pulso en dedo.
- */
+export function passesPulsatileAcquire(
+  raw: FingerRgbSnapshot,
+  smoothed: FingerRgbSnapshot,
+  spatial: FingerRoiSpatial,
+  roiRedCv: number,
+  ensembleScore?: number,
+): boolean {
+  const F = VITAL_THRESHOLDS.FINGER;
+  if (ensembleScore !== undefined && ensembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.75) {
+    if (roiRedCv >= F.ROI_RED_CV_MIN * 0.8) return true;
+  }
+  if (roiRedCv < F.ROI_RED_CV_MIN) return false;
+  if (isExposureFlickerNotFingerPulse(roiRedCv, smoothed, F.PULSATILE_ACQUIRE_RB)) return false;
+  const r = Math.max(raw.red, smoothed.red);
+  const g = Math.max(1, raw.green, smoothed.green);
+  const b = Math.max(1, raw.blue, smoothed.blue);
+  const dom = r - (g + b) / 2;
+  return (
+    r >= F.PULSATILE_ACQUIRE_MIN_RED &&
+    r / g >= F.PULSATILE_ACQUIRE_RG &&
+    r / b >= F.PULSATILE_ACQUIRE_RB &&
+    dom >= F.PULSATILE_ACQUIRE_MIN_DOMINANCE &&
+    spatial.coverageRatio >= F.PULSATILE_ACQUIRE_COVERAGE
+  );
+}
+
 export function isExposureFlickerNotFingerPulse(
   roiRedCv: number,
   snap: FingerRgbSnapshot,
@@ -128,7 +159,6 @@ export function isExposureFlickerNotFingerPulse(
   return rb < minRbForPulse;
 }
 
-/** Dedo cubriendo lente: intensidad moderada, buena cobertura, hemoglobina clara. */
 export function isFingerOnLensScene(
   snap: FingerRgbSnapshot,
   coverage: number,
@@ -141,7 +171,6 @@ export function isFingerOnLensScene(
   const rb = r / b;
   const rg = r / g;
   const dom = r - (g + b) / 2;
-
   return (
     total >= 48 &&
     total <= 520 &&
@@ -152,4 +181,17 @@ export function isFingerOnLensScene(
     fingerScore >= 0.14 &&
     snap.coverage >= 0.1
   );
+}
+
+export function updateFingerDetection(
+  raw: FingerRgbSnapshot,
+  smoothed: FingerRgbSnapshot,
+  spatial: FingerRoiSpatial,
+  grayPixels: Uint8ClampedArray | null,
+  temporalVariance: number,
+): { fingerDetected: boolean; ensemble: FingerEnsembleMetrics } {
+  const ensemble = computeFingerEnsemble(raw, grayPixels, temporalVariance);
+  lastEnsemble = ensemble;
+  const fingerDetected = isFingerPresentByEnsemble(ensemble);
+  return { fingerDetected, ensemble };
 }

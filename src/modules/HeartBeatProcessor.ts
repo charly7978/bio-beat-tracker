@@ -3,11 +3,13 @@
  * BPM y hápticos solo desde picos emitidos.
  */
 import { clamp } from '../utils/math';
+import { triggerHeartbeatHaptic } from '../utils/haptics';
 import { robustBounds } from '../utils/stats';
 import { PEAK_DETECTION_DEFAULTS } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
 import { autocorrDominantLag } from './signal-processing/shared/dsp';
+import { computeRrHrv } from '../utils/physio';
 import {
   inferCameraRuntimeHints,
   type CameraRuntimeHints,
@@ -62,27 +64,37 @@ export class HeartBeatProcessor {
   /** SQI del pipeline PPG (SignalQualityIndex) — fuente primaria para el ensemble */
   private ppgSqi = 0;
   private ppgPerfusionIndex = 0;
+  /** Movimiento IMU (EMA) del pipeline — suprime emisión de latidos durante movimiento. */
+  private ppgMotionScore = 0;
 
   // NN scorers removed (all returned null)
+
+  private unlockHandler = async () => {
+    if (this.audioUnlocked) return;
+    try {
+      const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      this.audioContext = new AudioContextClass();
+      await this.audioContext.resume();
+      this.audioUnlocked = true;
+      this.removeAudioUnlockListeners();
+    } catch { /* ignore */ }
+  };
+
+  private removeAudioUnlockListeners() {
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('touchstart', this.unlockHandler);
+      document.removeEventListener('click', this.unlockHandler);
+    }
+  }
 
   constructor() {
     this.setupAudio();
   }
 
   private setupAudio() {
-    const unlock = async () => {
-      if (this.audioUnlocked) return;
-      try {
-        const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        this.audioContext = new AudioContextClass();
-        await this.audioContext.resume();
-        this.audioUnlocked = true;
-        document.removeEventListener('touchstart', unlock);
-        document.removeEventListener('click', unlock);
-      } catch { /* ignore */ }
-    };
-    document.addEventListener('touchstart', unlock, { passive: true });
-    document.addEventListener('click', unlock, { passive: true });
+    if (typeof document === 'undefined') return;
+    document.addEventListener('touchstart', this.unlockHandler, { passive: true });
+    document.addEventListener('click', this.unlockHandler, { passive: true });
   }
 
   getDiagnostics(): HeartBeatProcessDiagnostics {
@@ -102,7 +114,7 @@ export class HeartBeatProcessor {
   }
 
   /** Alinea ensemble/detectores con el SQI central del PPG (evita doble escala). */
-  setPpgQualityMetrics(sqi: number, perfusionIndex?: number): void {
+  setPpgQualityMetrics(sqi: number, perfusionIndex?: number, motionScore?: number): void {
     if (Number.isFinite(sqi) && sqi >= 0) this.ppgSqi = sqi;
     if (
       typeof perfusionIndex === 'number' &&
@@ -111,11 +123,39 @@ export class HeartBeatProcessor {
     ) {
       this.ppgPerfusionIndex = perfusionIndex;
     }
+    if (typeof motionScore === 'number' && Number.isFinite(motionScore) && motionScore >= 0) {
+      this.ppgMotionScore = motionScore;
+    }
   }
 
   private ensembleInputSqi(localSqi: number): number {
     if (this.ppgSqi < 3) return localSqi;
     return clamp(Math.max(localSqi, this.ppgSqi * 0.65 + localSqi * 0.35), 0, 100);
+  }
+
+  /**
+   * Beat-window (W2 de Elgendi) adaptado al ritmo YA detectado: a baja HR se
+   * ensancha para que el umbral se asiente bajo el pico sistólico lento/ancho.
+   * Usa la mediana RR emitida; sin ritmo aún (<3 RR) devuelve el default → a HR
+   * alta queda en 667 ms (no cambia lo que ya anda bien).
+   */
+  private adaptiveBeatWindowMs(): number {
+    const rr = this.rrIntervals;
+    let medRr = 0;
+    if (rr.length >= 3) {
+      const sorted = [...rr].sort((a, b) => a - b);
+      medRr = sorted[Math.floor(sorted.length / 2)] ?? 0;
+    } else if (this.cachedPeriodicity.bpm > 0 && this.cachedPeriodicity.score >= 0.3) {
+      // Aún sin RR emitidos: usa la estimación espectral (autocorr) para que la
+      // ventana se ensanche desde el ARRANQUE a baja frecuencia (no solo al sostener).
+      medRr = 60000 / this.cachedPeriodicity.bpm;
+    }
+    if (medRr <= 0) return PEAK_DETECTION_DEFAULTS.beatWindowMs;
+    return clamp(
+      medRr * PEAK_DETECTION_DEFAULTS.beatWindowRrFactor,
+      PEAK_DETECTION_DEFAULTS.beatWindowMs,
+      PEAK_DETECTION_DEFAULTS.beatWindowMsMax,
+    );
   }
 
   private gateRangeMin(): number {
@@ -218,6 +258,7 @@ export class HeartBeatProcessor {
         samplingRateHz: sampleRate,
         sqi: ensSqi,
         perfusionIndex: this.ppgPerfusionIndex,
+        beatWindowMs: this.adaptiveBeatWindowMs(),
       });
       ensembleConf = ens.confidence;
 
@@ -241,7 +282,14 @@ export class HeartBeatProcessor {
         perfusionIndex: this.ppgPerfusionIndex,
       });
 
-      if (decision.emit) {
+      // Gate de movimiento: durante movimiento claro (IMU) la señal está
+      // corrupta → no emitir latidos (evita latidos erráticos por micro-movimiento).
+      const motionSuppressed =
+        this.ppgMotionScore > PEAK_DETECTION_DEFAULTS.peakEmitMotionSuppress;
+
+      if (decision.emit && motionSuppressed) {
+        emitReason = 'MOTION_SUPPRESSED';
+      } else if (decision.emit) {
         isPeak = true;
         emitReason = decision.reason;
         const wScore = decision.weightedScore ?? 0;
@@ -276,16 +324,16 @@ export class HeartBeatProcessor {
               this.smoothBPM = instantBpm;
             } else {
               const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
-              const trust = clamp(0.14 + wScore * 0.24, 0.14, 0.36);
+              const trust = clamp(0.18 + wScore * 0.32, 0.18, 0.50);
               // A menor desviación, más suavizado (alpha bajo)
               // A mayor desviación, más seguimiento (alpha alto)
-              const alpha = rel > 0.22 ? trust * 0.7 : rel > 0.12 ? trust : trust * 0.6;
+              const alpha = rel > 0.22 ? trust : rel > 0.12 ? trust * 0.75 : trust * 0.45;
               this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
             }
           }
         }
 
-        if (wScore >= 0.5 && this.rrIntervals.length >= 2) {
+        if (wScore >= 0.4 && this.rrIntervals.length >= 1) {
           this.vibrate();
           this.playBeep();
         }
@@ -313,13 +361,9 @@ export class HeartBeatProcessor {
     }
 
     const peakAgeMs = this.lastPeakTime > 0 ? now - this.lastPeakTime : Number.POSITIVE_INFINITY;
-    if (
-      !isPeak &&
-      peakAgeMs > this.BPM_PUBLISH_HOLD_MS &&
-      peakAgeMs > this.BPM_PUBLISH_HOLD_MS * 1.15
-    ) {
+    if (!isPeak && peakAgeMs > this.BPM_PUBLISH_HOLD_MS) {
       this.consecutivePeaks = 0;
-      if (peakAgeMs > this.BPM_PUBLISH_HOLD_MS * 3) {
+      if (peakAgeMs > this.BPM_PUBLISH_HOLD_MS * 2) {
         this.smoothBPM = 0;
       }
     }
@@ -444,9 +488,7 @@ export class HeartBeatProcessor {
 
     let rrFactor = 0;
     if (this.rrIntervals.length >= 3) {
-      const m = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
-      const v = this.rrIntervals.reduce((a, rr) => a + (rr - m) ** 2, 0) / this.rrIntervals.length;
-      const cv = Math.sqrt(v) / Math.max(1, m);
+      const cv = computeRrHrv(this.rrIntervals).cv;
       rrFactor = Math.max(0, 1 - cv * 2) * 24;
     }
 
@@ -486,7 +528,7 @@ export class HeartBeatProcessor {
   }
 
   private vibrate(): void {
-    try { if (navigator.vibrate) navigator.vibrate(55); } catch { /* ignore */ }
+    triggerHeartbeatHaptic().catch(() => undefined);
   }
 
   private async playBeep(): Promise<void> {
@@ -548,9 +590,15 @@ export class HeartBeatProcessor {
     this.fingerContactConfirmed = false;
     this.ppgSqi = 0;
     this.ppgPerfusionIndex = 0;
+    this.ppgMotionScore = 0;
   }
 
   dispose(): void {
-    if (this.audioContext) this.audioContext.close().catch(() => {});
+    this.removeAudioUnlockListeners();
+    if (this.audioContext) {
+      this.audioContext.close().catch(() => {
+        // Ignore audio context close failures
+      });
+    }
   }
 }

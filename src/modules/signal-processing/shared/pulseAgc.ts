@@ -75,7 +75,10 @@ export function applyPulseAgc(
       ? clamp((cfg.targetPeak / Math.max(rr * 0.55, cfg.minRobustRange * 0.4)) * periodGate * motionGate, cfg.minScale, cfg.maxScale)
       : cfg.minScale;
 
-  state.scale = state.scale * 0.40 + desired * 0.60;
+  // Adaptación LENTA de la ganancia (20%/frame, ~0,17 s): una ganancia que salta
+  // frame a frame se ve como onda inestable/ruidosa. Aún bloquea la amplitud en
+  // <1 s, pero sin el jitter de ganancia del 60%/frame anterior.
+  state.scale = state.scale * 0.80 + desired * 0.20;
 
   const out = filtered * state.scale;
   const cap = cfg.targetPeak * cfg.maxScale;

@@ -26,8 +26,8 @@ export interface BackpressureConfig {
 
 export const DEFAULT_BACKPRESSURE_CONFIG: BackpressureConfig = {
   enabled: true,
-  lowFpsThreshold: 28,    // Umbral reducido para evitar cambios de stride prematuros
-  highFpsThreshold: 48,   // Umbral de recuperación ajustado con lowFps
+  lowFpsThreshold: 25,    // Umbral reducido para evitar cambios de stride prematuros
+  highFpsThreshold: 28,   // Un escalón sobre lowFps para permitir recuperación
   sustainMs: 5000,        // Más tiempo sostenido antes de cambiar stride (menos oscilaciones)
   maxStride: 5,           // Stride máximo (1/25 de píxeles) para mantener precisión
 };
@@ -76,10 +76,18 @@ export function loadBackpressureConfig(): BackpressureConfig {
 }
 
 export function saveBackpressureConfig(cfg: BackpressureConfig): void {
-  try { localStorage.setItem(KEY, JSON.stringify(sanitizeBackpressureConfig(cfg))); } catch {}
+  try {
+    localStorage.setItem(KEY, JSON.stringify(sanitizeBackpressureConfig(cfg)));
+  } catch {
+    // Ignore error if localStorage is disabled
+  }
 }
 
 export function resetBackpressureConfig(): BackpressureConfig {
-  try { localStorage.removeItem(KEY); } catch {}
+  try {
+    localStorage.removeItem(KEY);
+  } catch {
+    // Ignore error if localStorage is disabled
+  }
   return { ...DEFAULT_BACKPRESSURE_CONFIG };
 }

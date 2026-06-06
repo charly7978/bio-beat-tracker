@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { playCompletionSound } from '@/utils/soundUtils';
+import { triggerSessionStartHaptic, triggerSessionEndHaptic } from '@/utils/haptics';
 import { inferCameraRuntimeHints } from '@/lib/device/cameraDeviceProfile';
 import { createDefaultVitalSignsResult } from '@/lib/vitals/defaultVitalSignsResult';
 import type { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
@@ -8,6 +9,7 @@ import {
   setActiveProfile as setAuditProfile,
 } from '@/lib/sanity/sanityAuditLog';
 import type { CameraViewHandle } from '@/components/CameraView';
+import type { ValidationFrame } from '@/lib/acquisition/MeasurementWindowValidator';
 
 interface UseMeasurementSessionInput {
   cameraRef: React.RefObject<CameraViewHandle>;
@@ -91,7 +93,9 @@ export function useMeasurementSession({
     normalPercent: number;
   } | null>(null);
   const [showResults, setLocalShowResults] = useState(false);
+  const [validationVerdict, setValidationVerdict] = useState<import('@/lib/acquisition/MeasurementWindowValidator').ValidationVerdict | null>(null);
 
+  const validationBufferRef = useRef<ValidationFrame[]>([]);
   const measurementTimerRef = useRef<number | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
@@ -113,54 +117,6 @@ export function useMeasurementSession({
     };
   }, []);
 
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && isMonitoring) {
-        requestWakeLock();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    const preventScroll = (e: Event) => e.preventDefault();
-    document.body.addEventListener('touchmove', preventScroll, { passive: false });
-    document.body.addEventListener('scroll', preventScroll, { passive: false });
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      document.body.removeEventListener('touchmove', preventScroll);
-      document.body.removeEventListener('scroll', preventScroll);
-      releaseWakeLock();
-    };
-  }, [isMonitoring]);
-
-  useEffect(() => {
-    if (isMonitoring) {
-      if (isMonitoring && monitoringStartedAtRef.current === 0) {
-        monitoringStartedAtRef.current = performance.now();
-      }
-    } else {
-      monitoringStartedAtRef.current = 0;
-    }
-  }, [isMonitoring]);
-
-  // Fullscreen
-  const enterFullScreen = useCallback(async () => {
-    if (isFullscreen) return;
-    try {
-      const docEl = document.documentElement as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> };
-      if (docEl.requestFullscreen) {
-        await docEl.requestFullscreen();
-      } else if (docEl.webkitRequestFullscreen) {
-        await docEl.webkitRequestFullscreen();
-      }
-      const orient = screen.orientation as ScreenOrientation & { lock?: (o: OrientationLockType) => Promise<void> };
-      if (orient?.lock) {
-        await orient.lock('portrait').catch(() => undefined);
-      }
-      setIsFullscreen(true);
-    } catch {
-      // Browser rejected fullscreen
-    }
-  }, [isFullscreen]);
-
   // Wake lock
   const requestWakeLock = useCallback(async () => {
     if ('wakeLock' in navigator && navigator.wakeLock) {
@@ -177,15 +133,64 @@ export function useMeasurementSession({
     }
   }, []);
 
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isMonitoring) {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    const preventScroll = (e: Event) => e.preventDefault();
+    document.body.addEventListener('touchmove', preventScroll, { passive: false });
+    document.body.addEventListener('scroll', preventScroll, { passive: false });
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.body.removeEventListener('touchmove', preventScroll);
+      document.body.removeEventListener('scroll', preventScroll);
+      releaseWakeLock();
+    };
+  }, [isMonitoring, requestWakeLock, releaseWakeLock]);
+
+  useEffect(() => {
+    if (isMonitoring) {
+      if (isMonitoring && monitoringStartedAtRef.current === 0) {
+        monitoringStartedAtRef.current = performance.now();
+      }
+    } else {
+      monitoringStartedAtRef.current = 0;
+    }
+  }, [isMonitoring]);
+
+  // Fullscreen
+  const enterFullScreen = useCallback(async () => {
+    if (isFullscreen) return;
+    // Ocultar splash INMEDIATAMENTE (primera instrucción, sin condiciones)
+    setIsFullscreen(true);
+    // Intento best-effort de fullscreen nativo + orientación
+    try {
+      const docEl = document.documentElement as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> };
+      if (docEl.requestFullscreen) await docEl.requestFullscreen();
+      else if (docEl.webkitRequestFullscreen) await docEl.webkitRequestFullscreen();
+    } catch { /* ignorado */ }
+    try {
+      const orient = screen.orientation as ScreenOrientation & { lock?: (o: OrientationLockType) => Promise<void> };
+      if (orient?.lock) await orient.lock('portrait').catch(() => undefined);
+    } catch { /* ignorado */ }
+  }, [isFullscreen]);
+
+
+
   // === INICIO DE MONITOREO ===
   const startMonitoring = useCallback(() => {
     if (isMonitoring) return;
 
-    if (navigator.vibrate) navigator.vibrate([200]);
+    triggerSessionStartHaptic().catch(() => undefined);
 
     enterFullScreen();
     setLocalShowResults(false);
     setLocalMeasurementSummary(null);
+    setValidationVerdict(null);
+    validationBufferRef.current = [];
     setElapsedTime(0);
     totalBeatsRef.current = 0;
     arrhythmiaBeatsRef.current = 0;
@@ -208,7 +213,7 @@ export function useMeasurementSession({
     startCalibration();
     resetFingerContactSession();
     setHeartBeatRuntimeHints(inferCameraRuntimeHints());
-  }, [isMonitoring, enterFullScreen, startProcessing, startCalibration, requestWakeLock, sanityProfileId, setHeartBeatRuntimeHints, totalBeatsRef, arrhythmiaBeatsRef, resetFingerContactSession, setVitalSigns]);
+  }, [isMonitoring, enterFullScreen, startProcessing, startCalibration, requestWakeLock, sanityProfileId, setHeartBeatRuntimeHints, totalBeatsRef, arrhythmiaBeatsRef, resetFingerContactSession]);
 
   // === CUANDO LA CÁMARA ESTÁ LISTA ===
   const handleStreamReady = useCallback((stream: MediaStream) => {
@@ -233,7 +238,7 @@ export function useMeasurementSession({
     if (!isMonitoring) return;
 
     playCompletionSound();
-    if (navigator.vibrate) navigator.vibrate([100, 50, 100, 50, 200]);
+    triggerSessionEndHaptic().catch(() => undefined);
 
     stopFrameLoop();
     if (measurementTimerRef.current) {
@@ -327,6 +332,8 @@ export function useMeasurementSession({
     isMonitoringRef.current = false;
     setLocalShowResults(false);
     setLocalMeasurementSummary(null);
+    setValidationVerdict(null);
+    validationBufferRef.current = [];
     setElapsedTime(0);
     setVitalSigns(createDefaultVitalSignsResult());
 
@@ -367,6 +374,6 @@ export function useMeasurementSession({
     handleReset,
     enterFullScreen,
     setLocalShowResults,
-    setLocalMeasurementSummary,
+    setLocalMeasurementSummary, validationVerdict,
   };
 }

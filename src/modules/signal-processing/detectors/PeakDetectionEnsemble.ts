@@ -3,6 +3,7 @@
  */
 import type { PeakDetectionResult } from '../../../types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
+import { VITAL_THRESHOLDS } from '../../../config/vitalThresholds';
 import { clamp } from '../../../utils/math';
 import { median } from '../../../utils/stats';
 import { isPhysiologicalRR } from '../../../utils/physio';
@@ -16,6 +17,8 @@ export interface PeakDetectionEnsembleInput {
   samplingRateHz: number;
   sqi?: number;
   perfusionIndex?: number;
+  /** Beat-window adaptativo (ms) según ritmo detectado; default Elgendi si se omite. */
+  beatWindowMs?: number;
   legacyPeakIndices?: number[];
 }
 
@@ -72,6 +75,7 @@ export class PeakDetectionEnsemble {
       sqi,
       minProminence: calibration.elgendiMinProminence,
       offsetWeight: calibration.elgendiOffsetWeight,
+      beatWindowMs: input.beatWindowMs,
     });
 
     const elTimeAt = (j: number): number => {
@@ -117,6 +121,20 @@ export class PeakDetectionEnsemble {
     }
     if (sortedIdx.length > 0) {
       confidence = clamp(confidence + 0.08, 0, 1);
+    }
+
+    // SQI por skewness (Elgendi 2016): penalización SUAVE de confianza. PPG limpio
+    // (skew alta) → factor 1; ruido simétrico/corrupción (skew baja/negativa) →
+    // factor hasta FLOOR. Reduce FP de ventanas no-pulsátiles sin bloquear latidos
+    // reales (un latido genuino tiene skewness positiva → nunca se penaliza).
+    const skew = (el.diagnostics as { signalSkewness?: number }).signalSkewness;
+    if (typeof skew === 'number' && Number.isFinite(skew)) {
+      const Q = VITAL_THRESHOLDS.QUALITY;
+      const skewFactor =
+        Q.SKEWNESS_SQI_FLOOR +
+        (1 - Q.SKEWNESS_SQI_FLOOR) *
+          clamp((skew - Q.SKEWNESS_SQI_LOW) / (Q.SKEWNESS_SQI_HIGH - Q.SKEWNESS_SQI_LOW), 0, 1);
+      confidence *= skewFactor;
     }
 
     const sqiVal = sqi ?? 0;

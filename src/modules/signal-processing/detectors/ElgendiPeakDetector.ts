@@ -7,6 +7,7 @@
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../../../config/vitalThresholds';
 import { clamp } from '../../../utils/math';
+import { skewness } from '../../../utils/stats';
 import {
   bandpassOffline,
   detrendLinear,
@@ -103,6 +104,11 @@ export class ElgendiPeakDetector {
     let x = bandpassOffline(detrendLinear(cleaned), fs);
     x = robustNormalizeZeroCenter(x);
 
+    // SQI por skewness (Elgendi 2016) sobre la señal filtrada — PPG limpio tiene
+    // skewness positiva; ruido/movimiento, ≈0 o negativa. Se reporta para que el
+    // ensemble lo use como penalización suave de confianza (anti falsos positivos).
+    const signalSkewness = skewness(x);
+
     const w1 = Math.max(3, Math.round((peakMs / 1000) * fs));
     const w2 = Math.max(w1 + 2, Math.round((beatMs / 1000) * fs));
 
@@ -159,6 +165,7 @@ export class ElgendiPeakDetector {
     const peaks = new Array<number>(maxPeaks);
     const peakTimes = new Array<number>(maxPeaks);
     const peakValues = new Array<number>(maxPeaks);
+    const peakProms = new Array<number>(maxPeaks);
     let pk = 0;
 
     for (let bi = 0; bi < blocks.length; bi++) {
@@ -190,7 +197,38 @@ export class ElgendiPeakDetector {
       peaks[pk] = best;
       peakTimes[pk] = ts[best] ?? ts[ts.length - 1];
       peakValues[pk] = sig[best] ?? 0;
+      peakProms[pk] = prom;
       pk++;
+    }
+
+    // Rechazo relativo de amplitud: la muesca dícrota y el ruido tienen menor
+    // prominencia que el pico sistólico. Se descartan los picos por debajo de
+    // una fracción de la prominencia mediana (validado para reducir falsos
+    // positivos sin perder latidos reales con modulación respiratoria).
+    if (pk >= 3) {
+      const promsSorted = peakProms.slice(0, pk).sort((a, b) => a - b);
+      const medProm = promsSorted[Math.floor(promsSorted.length / 2)] ?? 0;
+      const promFloor = medProm * PEAK_DETECTION_DEFAULTS.peakAmplitudeRejectFraction;
+      // Banda de amplitud: descarta picos demasiado bajos (dícrota/ruido) y
+      // demasiado altos (excursiones por micro-movimiento del dedo).
+      const promCeil = medProm * PEAK_DETECTION_DEFAULTS.peakAmplitudeRejectUpper;
+      if (medProm > 0) {
+        let w = 0;
+        for (let r = 0; r < pk; r++) {
+          if (peakProms[r] >= promFloor && peakProms[r] <= promCeil) {
+            peaks[w] = peaks[r];
+            peakTimes[w] = peakTimes[r];
+            peakValues[w] = peakValues[r];
+            w++;
+          } else {
+            rejectedCandidates.push({
+              index: peaks[r],
+              reason: peakProms[r] > promCeil ? 'HIGH_REL_AMPLITUDE' : 'LOW_REL_AMPLITUDE',
+            });
+          }
+        }
+        pk = w;
+      }
     }
 
     // Trim to actual count
@@ -244,6 +282,7 @@ export class ElgendiPeakDetector {
         rrCount,
         meanEnergy,
         thrOffset,
+        signalSkewness,
       },
       reason: pk > 0 ? 'OK' : 'NO_PEAKS',
       parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, beta, minProm, fs, w1, w2 },

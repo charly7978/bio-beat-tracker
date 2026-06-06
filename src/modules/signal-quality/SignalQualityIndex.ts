@@ -46,9 +46,10 @@ export class SignalQualityIndex {
       frameDropRatio,
       fpsEffective,
       timestampJitterMs,
+      skewness,
+      relativePower,
     } = metrics;
 
-    // PPG por cámara: PI en AC/DC suele ser 1e-4–1e-2; no anular todo el SQI por debajo de 0.1 %.
     if (perfusionIndex < 0.00008) return 0;
     if (saturationRatio > 0.8) return 5;
     const under = metrics.underexposureRatio ?? 0;
@@ -56,35 +57,51 @@ export class SignalQualityIndex {
 
     let score = 0;
 
-    // 1. Perfusión (32%) — curva ajustada: PI smartphone típico 0.001-0.002
-    const piScore = clamp((perfusionIndex - 0.00012) / 0.002, 0, 1) * 32;
+    const piScore = clamp((perfusionIndex - 0.00012) / 0.002, 0, 1) * 26;
     score += piScore;
 
-    // 2. SNR (24%) — `strength` del pipeline suele ser O(0.3–2)
     const snrVal = snr ?? 0;
-    const snrScore = clamp((snrVal - 0.12) / 1.35, 0, 1) * 24;
+    const snrScore = clamp((snrVal - 0.12) / 1.35, 0, 1) * 20;
     score += snrScore;
 
-    // 3. Periodicidad (22%) — autocorrelación en ventana corta rara vez supera 0.5 estable
     const pVal = periodicity ?? 0;
-    const pScore = clamp((pVal - 0.1) / 0.38, 0, 1) * 22;
+    const pScore = clamp((pVal - 0.1) / 0.38, 0, 1) * 18;
     score += pScore;
 
-    // 4. Penalizaciones acotadas (móvil: motion/jitter/drops son normales)
+    // Skewness SQI (Elgendi 2016 — mejor predictor individual)
+    if (skewness !== undefined) {
+      let skScore = 0;
+      if (skewness > VITAL_THRESHOLDS.QUALITY.SKEWNESS_SQI_HIGH) {
+        skScore = 14;
+      } else if (skewness > VITAL_THRESHOLDS.QUALITY.SKEWNESS_SQI_LOW) {
+        const t = (skewness - VITAL_THRESHOLDS.QUALITY.SKEWNESS_SQI_LOW) /
+          (VITAL_THRESHOLDS.QUALITY.SKEWNESS_SQI_HIGH - VITAL_THRESHOLDS.QUALITY.SKEWNESS_SQI_LOW);
+        skScore = VITAL_THRESHOLDS.QUALITY.SKEWNESS_SQI_FLOOR + (1 - VITAL_THRESHOLDS.QUALITY.SKEWNESS_SQI_FLOOR) * clamp(t, 0, 1);
+        skScore *= 14;
+      }
+      score += skScore;
+    }
+
+    // Relative power in cardiac band (0.5-4Hz)
+    if (relativePower !== undefined && relativePower > 0) {
+      const rpScore = clamp((relativePower - 0.15) / 0.55, 0, 1) * 10;
+      score += rpScore;
+    }
+
     const motion = motionScore ?? 0;
-    const motionPenalty = clamp((motion - 0.22) / 0.55, 0, 1) * 14;
-    const jitterPenalty = clamp((timestampJitterMs - 38) / 48, 0, 1) * 10;
-    const dropPenalty = Math.min(14, (frameDropRatio ?? 0) * 42);
-    const lowFpsPenalty = fpsEffective < 22 ? (22 - fpsEffective) * 3.5 : 0;
+    const motionPenalty = clamp((motion - 0.22) / 0.55, 0, 1) * 12;
+    const jitterPenalty = clamp((timestampJitterMs - 38) / 48, 0, 1) * 8;
+    const dropPenalty = Math.min(12, (frameDropRatio ?? 0) * 36);
+    const lowFpsPenalty = fpsEffective < 22 ? (22 - fpsEffective) * 3 : 0;
 
     const agree = metrics.detectorAgreement ?? 0;
-    const agreeBonus = agree > 0 ? clamp(agree, 0, 1) * 10 : 0;
+    const agreeBonus = agree > 0 ? clamp(agree, 0, 1) * 8 : 0;
 
     score = Math.max(0, score - motionPenalty - jitterPenalty - dropPenalty - lowFpsPenalty) + agreeBonus;
 
-    // 5. Bonus por consistencia (PI/SNR razonables en cámara)
-    if (perfusionIndex > 0.0018 && snrVal > 0.55) score += 10;
-    if (pVal > 0.22 && perfusionIndex > 0.0005) score += 6;
+    const bonus = (perfusionIndex > 0.0018 && snrVal > 0.55 ? 8 : 0) +
+                  (pVal > 0.22 && perfusionIndex > 0.0005 ? 6 : 0);
+    score += bonus;
 
     return Math.round(clamp(score, 0, 100));
   }
@@ -117,6 +134,12 @@ export class SignalQualityIndex {
       timestampJitterMs: base.timestampJitterMs ?? 0,
       elgendiConfidence: el,
       detectorAgreement: agreeRaw,
+      skewness: base.skewness,
+      kurtosis: base.kurtosis,
+      hjorthActivity: base.hjorthActivity,
+      hjorthMobility: base.hjorthMobility,
+      hjorthComplexity: base.hjorthComplexity,
+      relativePower: base.relativePower,
     };
 
     if (typeof base.sqi !== 'number' || base.sqi <= 0) {

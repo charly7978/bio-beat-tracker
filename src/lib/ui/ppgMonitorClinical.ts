@@ -2,7 +2,7 @@
  * Etiquetas y umbrales clínicos para el monitor PPG (solo presentación).
  */
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import { isPhysiologicalRR } from '@/utils/physio';
+import { isPhysiologicalRR, calculateHRV } from '@/utils/physio';
 
 export type ClinicalLevel = 'normal' | 'warn' | 'danger' | 'dim';
 
@@ -86,17 +86,6 @@ export function isSpo2InRange(spo2: number): boolean {
   return spo2 >= SPO2.MIN_VALID && spo2 <= SPO2.MAX_VALID;
 }
 
-/** Índice de irregularidad RR (CV %) — referencia flux-interval / FA PPG ~20%. */
-export function computeRrIrregularityPct(rrIntervals: number[]): number | null {
-  const valid = rrIntervals.filter((rr) => isPhysiologicalRR(rr));
-  if (valid.length < 2) return null;
-  const mean = valid.reduce((a, v) => a + v, 0) / valid.length;
-  if (mean <= 0) return null;
-  const variance = valid.reduce((a, v) => a + (v - mean) ** 2, 0) / valid.length;
-  const cvPct = (Math.sqrt(variance) / mean) * 100;
-  return Math.round(cvPct);
-}
-
 export interface RhythmPanelInfo {
   title: string;
   detail: string;
@@ -111,10 +100,16 @@ export function buildRhythmPanel(
   rrIntervals: number[],
   hrv?: { sdnn: number; rmssd: number },
 ): RhythmPanelInfo {
-  const irr = computeRrIrregularityPct(rrIntervals);
-  const calibrating = arrhythmiaStatus?.includes('CALIBRANDO');
-  const detected =
-    !calibrating && (arrhythmiaStatus?.includes('ARRITMIA') || (irr !== null && irr >= 20));
+  const hrvMetrics = calculateHRV(rrIntervals);
+  const irr = hrvMetrics.cv > 0 ? Math.round(hrvMetrics.cv * 100) : null;
+  // Calibrando o aprendiendo el ritmo (warm-up): el panel no alerta.
+  const calibrating =
+    arrhythmiaStatus?.includes('CALIBRANDO') || arrhythmiaStatus?.includes('APRENDIENDO');
+  // VEREDICTO ÚNICO = ArrhythmiaProcessor. El panel SOLO refleja su frase exacta
+  // 'ARRITMIA DETECTADA' (que pasa por warm-up, deadband y confirmación temporal).
+  // NO se detecta por CV-RR aquí (eso saltaba TODO el pipeline → falsos positivos).
+  // El CV-RR (irr) queda solo como referencia informativa.
+  const detected = !calibrating && !!arrhythmiaStatus?.includes('ARRITMIA DETECTADA');
 
   const hrvLine =
     hrv && hrv.sdnn > 0

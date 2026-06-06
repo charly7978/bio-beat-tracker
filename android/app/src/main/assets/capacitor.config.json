@@ -1,5 +1,11 @@
 {
 	"appId": "com.biobeat.tracker",
-	"appName": "bio-beat-tracker",
-	"webDir": "dist"
+	"appName": "Bio-Beat Tracker",
+	"webDir": "dist",
+	"android": {},
+	"plugins": {
+		"Camera": {
+			"saveToGallery": false
+		}
+	}
 }

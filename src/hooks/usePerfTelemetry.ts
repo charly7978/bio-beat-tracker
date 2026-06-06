@@ -14,7 +14,9 @@ export function getPerfConsent(): boolean {
 }
 
 export function setPerfConsent(value: boolean): void {
-  try { localStorage.setItem(CONSENT_KEY, value ? '1' : '0'); } catch {}
+  try { localStorage.setItem(CONSENT_KEY, value ? '1' : '0'); } catch {
+    // Ignore error if localStorage is disabled
+  }
 }
 
 function deviceInfo() {

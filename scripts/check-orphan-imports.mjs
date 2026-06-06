@@ -21,6 +21,7 @@ const ENTRYPOINTS = new Set([
   'src/vite-env.d.ts',
   'src/integrations/supabase/client.ts',
   'src/integrations/supabase/types.ts',
+  'src/workers/ppgSignal.worker.ts',
 ]);
 const TYPES_GLOB = /\.d\.ts$/;
 

@@ -1,0 +1,67 @@
+name: Aplicar mejoras y construir APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Aplicar parche con el codigo real
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f biobeatmejorasyapk.patch ] && git apply --check biobeatmejorasyapk.patch 2>/dev/null; then
+            git apply biobeatmejorasyapk.patch
+            rm -f .github/workflows/build-apk.yml
+            git rm -f biobeatmejorasyapk.patch ridethroughdedoimpecable.patch 2>/dev/null || true
+            git add -A
+            git commit -m "feat(ppg): aplica ride-through + biofeedback"
+            git push origin main
+          else
+            echo "Ya estaba aplicado. Continuo al build."
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias
+        run: npm install
+
+      - name: Build web
+        run: npm run build
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Instalar Android SDK packages
+        run: |
+          ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Capacitor sync
+        run: npx cap sync android
+
+      - name: Build APK debug
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Subir APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: bio-beat-tracker-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useCallback, useState, useLayoutEffect } from 'react';
+import React, { useEffect, useRef, useCallback, useState, useLayoutEffect, useImperativeHandle } from 'react';
 import { CircularBuffer } from '../utils/CircularBuffer';
+import { isNative } from '@/lib/device/platform';
 import { calculateHRV, isPhysiologicalRR } from '../utils/physio';
 import {
   DISPLAY_SMOOTH_ALPHAS,
@@ -21,6 +22,7 @@ import {
   drawTrendStrip,
   drawFooter,
 } from '@/lib/ui/ppgCanvasRenderer';
+import { realSignalStrength } from '@/lib/ui/waveHonesty';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
 
@@ -72,7 +74,12 @@ export interface PPGSignalMeterProps {
   };
 }
 
-const PPGSignalMeter = ({
+export interface PPGSignalMeterHandle {
+  pushSignal: (value: number, timestamp: number) => void;
+  clearBuffer: () => void;
+}
+
+const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProps>(({
   value,
   quality,
   isFingerDetected,
@@ -94,7 +101,7 @@ const PPGSignalMeter = ({
   contactState,
   acquisitionStatus,
   diagnostics,
-}: PPGSignalMeterProps) => {
+}, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const animationRef = useRef<number | null>(null);
@@ -112,6 +119,8 @@ const PPGSignalMeter = ({
   const lastPeakTimeRef = useRef(0);
   const lastPeakProcessedRef = useRef(0);
   const arrActiveUntilRef = useRef(0);
+  /** Latch: la onda se revela solo cuando la adquisición llega a READY (señal estable). */
+  const traceRevealedRef = useRef(false);
   const [showPulse, setShowPulse] = useState(false);
 
   const lastArrhythmiaCountRef = useRef(0);
@@ -131,6 +140,23 @@ const PPGSignalMeter = ({
   const displaySysRef = useRef(0);
   const displayDiaRef = useRef(0);
   const waveGainRef = useRef(4.2);
+
+  useImperativeHandle(ref, () => ({
+    pushSignal: (val: number, _ts: number) => {
+      if (!dataBufferRef.current) return;
+      const scaledValue = val * waveGainRef.current;
+      const now = Date.now();
+      const isArrhythmia = now < arrActiveUntilRef.current;
+      dataBufferRef.current.push({
+        time: now,
+        value: scaledValue,
+        isArrhythmia
+      });
+    },
+    clearBuffer: () => {
+      dataBufferRef.current?.clear();
+    }
+  }));
 
   const layoutRef = useRef<PpgLayout>({
     width: 0, height: 0,
@@ -250,7 +276,8 @@ const PPGSignalMeter = ({
     const container = containerRef.current;
     if (!canvas || !container) return;
     const rect = container.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    const maxDpr = isNative() ? 1.5 : 2.5;
+    const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
     const cssW = Math.max(320, Math.floor(rect.width));
     const cssH = Math.max(480, Math.floor(rect.height));
     canvas.width = Math.floor(cssW * dpr);
@@ -341,6 +368,25 @@ const PPGSignalMeter = ({
         lerpDisplayValue(displayDiaRef.current, targetDia, DISPLAY_SMOOTH_ALPHAS.bp),
       );
 
+      // La onda se muestra SIEMPRE, con altura honesta (signalStrength). El latch
+      // solo controla el indicador fino de progreso (barra), que desaparece al
+      // estabilizar (READY). No se oculta ni se limpia el trazo → onda continua.
+      const diagRec = p.diagnostics as
+        | { acquisitionStage?: string; sqm?: { periodicity?: number } }
+        | undefined;
+      const acqStage = diagRec?.acquisitionStage;
+      if (!fingerOn && !preserve) {
+        traceRevealedRef.current = false;
+      } else if (!traceRevealedRef.current && acqStage === 'READY') {
+        traceRevealedRef.current = true;
+      }
+      // Fuerza pulsátil real → comprime la altura de la onda (inerte → plana).
+      const periodicityNow =
+        typeof diagRec?.sqm?.periodicity === 'number' ? diagRec.sqm.periodicity : 0;
+      const signalStrengthNow = fingerOn
+        ? realSignalStrength(p.perfusionIndex ?? 0, periodicityNow)
+        : 0;
+
       const renderState: PpgRenderState = {
         layout: layoutRef.current,
         props: {
@@ -371,6 +417,8 @@ const PPGSignalMeter = ({
         pendingTrendArr: pendingTrendArrRef.current,
         lastPeakProcessedTime: lastPeakProcessedRef.current,
         arrActiveUntil: arrActiveUntilRef.current,
+        traceRevealed: traceRevealedRef.current,
+        signalStrength: signalStrengthNow,
       };
 
       drawBackground(ctx, layoutRef.current.width, layoutRef.current.height);
@@ -435,6 +483,6 @@ const PPGSignalMeter = ({
       />
     </div>
   );
-};
+});
 
 export default PPGSignalMeter;
