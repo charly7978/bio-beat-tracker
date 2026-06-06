@@ -47,11 +47,13 @@ export function stabilizeSample(state: ActiveStabilizerState, x: number): number
   state.baseline = state.baseline * (1 - C.BASELINE_ALPHA) + x * C.BASELINE_ALPHA;
   const detrended = x - state.baseline;
 
-  // 2) Denoise edge-preserving: alpha sube con |delta| → ruido (delta chico) se
-  //    suaviza; pico/flanco (delta grande) se sigue (no se recorta).
+  // 2) Denoise edge-preserving SIGMOIDAL: mapeo no lineal — ruido (ad ≪ midpoint)
+  //    recibe ALPHA_MIN (más suavizado que lineal); bordes (ad ≫ midpoint) reciben
+  //    alpha→1 (mejor seguimiento de flancos). Transición más nítida que lineal.
   const delta = detrended - state.ema;
   const ad = Math.abs(delta) / Math.max(1e-9, C.EDGE_THRESHOLD);
-  const alpha = Math.min(1, C.ALPHA_MIN + (1 - C.ALPHA_MIN) * ad);
+  const sigmoid = 1 / (1 + Math.exp(-6 * (ad - 0.5)));
+  const alpha = C.ALPHA_MIN + (1 - C.ALPHA_MIN) * sigmoid;
   state.ema = state.ema * (1 - alpha) + detrended * alpha;
   return state.ema;
 }

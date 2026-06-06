@@ -10,21 +10,22 @@ interface UseFrameLoopInput {
 }
 
 /**
- * Firma barata del contenido del frame = suma del canal verde sobre una grilla
- * dispersa (~1 de cada 16 px). Dos frames con píxeles idénticos dan idéntica
- * suma; cualquier cambio real del PPG (pulsación) altera la suma. Permite
- * descartar FRAMES DUPLICADOS, que aparecen cuando el dispositivo NO soporta
- * requestVideoFrameCallback y cae al fallback requestAnimationFrame (~60 fps):
- * la cámara entrega ~30 fps reales pero rAF dispara ~60, así que la mitad de los
- * frames son idénticos → valor repetido → onda escalonada ("legos") + sample-rate
- * mal estimado. Saltarlos universaliza el funcionamiento y ahorra CPU.
+ * Firma barata del contenido del frame = suma ponderada de los canales verde y
+ * rojo sobre una grilla dispersa (~1 de cada 16 px). Dos canales combinados
+ * reducen colisiones: un cambio en luminancia (afecta a ambos) se distingue de
+ * un cambio cromático puro. Permite descartar FRAMES DUPLICADOS (el dispositivo
+ * entrega ~30 fps reales pero rAF dispara ~60 → la mitad de los frames son
+ * idénticos → valor repetido → onda escalonada + sample-rate mal estimado).
  */
 function frameSignature(img: ImageData): number {
   const d = img.data;
   const n = d.length;
-  let sum = 0;
-  for (let i = 1; i < n; i += 64) sum += d[i]; // i=1 → canal verde; step 64 B = cada 16 px
-  return sum;
+  let sumG = 0, sumR = 0;
+  for (let i = 0; i < n; i += 64) {
+    sumR += d[i];       // canal rojo
+    sumG += d[i + 1];   // canal verde
+  }
+  return sumR * 1e4 + sumG;
 }
 
 export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: UseFrameLoopInput) {

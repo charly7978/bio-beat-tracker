@@ -49,5 +49,37 @@ export function pulsatilityBoost(
 ): number {
   if (maxPulsatility <= 1e-9) return 1;
   const norm = clamp(pulsatility / maxPulsatility, 0, 1);
-  return 1 + gain * norm;
+  // Mapeo sigmoidal: comprime los pesos bajos (tiles ruidosos) y expande los altos
+  // (mejores tiles). Transición más nítida que lineal → mejor SNR de fusión.
+  const s = 1 / (1 + Math.exp(-5 * (norm - 0.5)));
+  const s0 = 1 / (1 + Math.exp(2.5));
+  const sNorm = (s - s0) / (1 - 2 * s0);
+  return 1 + gain * sNorm;
+}
+
+/**
+ * Suavizado temporal de pesos por tile (EMA frame a frame). Evita cambios bruscos
+ * de contribución entre frames consecutivos que producirían artefactos audibles en
+ * la señal fusionada (chirridos/click). Se usa en el hot path de extractROI.
+ */
+export interface TileWeightSmoother {
+  weights: Float64Array;
+  alpha: number;
+}
+
+export function createWeightSmoother(numTiles: number, alpha = 0.35): TileWeightSmoother {
+  return { weights: new Float64Array(numTiles), alpha };
+}
+
+export function smoothTileWeights(
+  sm: TileWeightSmoother,
+  rawWeights: Float64Array | number[],
+): Float64Array {
+  const a = sm.alpha;
+  const ia = 1 - a;
+  const out = sm.weights;
+  for (let i = 0; i < out.length; i++) {
+    out[i] = out[i] * ia + (rawWeights[i] ?? 0) * a;
+  }
+  return out;
 }

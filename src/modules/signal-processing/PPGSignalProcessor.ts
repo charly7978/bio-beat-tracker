@@ -251,6 +251,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private trackedCentroid = { x: 0.5, y: 0.5 };
   private lastLocalCentroidX = 0.5;
   private lastLocalCentroidY = 0.5;
+  private centroidMotionEma = 0;
 
   // Acondicionador ACTIVO de señal (denoise edge-preserving + estabilización baseline).
   private readonly activeStabilizer = createActiveStabilizer();
@@ -287,6 +288,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   // Buffers deslizantes para la proyección del algoritmo POS (Plane-Orthogonal-to-Skin)
   private readonly xBuffer = new RingF32(30);
   private readonly yBuffer = new RingF32(30);
+  private smoothedPosAlpha = 0.5;
 
   constructor(
     public onSignalReady?: (signal: ProcessedSignal) => void,
@@ -1236,9 +1238,19 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
       centroidMotion = clamp(displacement * 30, 0, 1);
 
-      const alpha = 0.06;
-      this.trackedCentroid.x = clamp(this.trackedCentroid.x * (1 - alpha) + targetX * alpha, 0.15, 0.85);
-      this.trackedCentroid.y = clamp(this.trackedCentroid.y * (1 - alpha) + targetY * alpha, 0.15, 0.85);
+      // Alpha adaptativo por velocidad instantánea + outlier rejection:
+      // movimiento rápido → α alto (sigue); quieto → α bajo (suaviza).
+      // Saltos > 3× la media reciente se limitan para ignorar outliers.
+      this.centroidMotionEma = this.centroidMotionEma * 0.85 + displacement * 0.15;
+      const outlierLimit = Math.max(0.005, this.centroidMotionEma * 3);
+      const clampedDisp = Math.min(displacement, outlierLimit);
+      const alpha = clamp(0.02 + clampedDisp * 3.0, 0.02, 0.25);
+      this.trackedCentroid.x = clamp(
+        this.trackedCentroid.x + Math.sign(dx) * clampedDisp * alpha, 0.15, 0.85,
+      );
+      this.trackedCentroid.y = clamp(
+        this.trackedCentroid.y + Math.sign(dy) * clampedDisp * alpha, 0.15, 0.85,
+      );
     } else {
       const alphaDrift = 0.04;
       this.trackedCentroid.x = this.trackedCentroid.x * (1 - alphaDrift) + 0.5 * alphaDrift;
@@ -1379,7 +1391,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const bPulse = clampPulse(bNorm);
     const amp = 4400;
 
-    // Plane-Orthogonal-to-Skin (POS) Projection
+    // Plane-Orthogonal-to-Skin (POS) Projection — con alpha adaptativo suavizado.
+    // stdX/stdY estima el ángulo del plano piel; se suaviza con EMA y se pondera
+    // por confianza estadística (stdY grande → estimación fiable; stdY pequeño →
+    // se blend hacia el prior suavizado para evitar inestabilidad por división).
     const X = gPulse - bPulse;
     const Y = gPulse + bPulse - 2 * rPulse;
     this.xBuffer.push(X);
@@ -1387,7 +1402,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     const stdX = this.calculateStdDev(this.xBuffer);
     const stdY = this.calculateStdDev(this.yBuffer);
-    const posVal = stdY > 1e-6 ? X + (stdX / stdY) * Y : X;
+    const rawAlpha = stdY > 1e-9 ? stdX / stdY : this.smoothedPosAlpha;
+    const reliability = clamp(stdY / Math.max(1, stdX * 0.5 + stdY), 0, 1);
+    const blendedAlpha = rawAlpha * reliability + this.smoothedPosAlpha * (1 - reliability);
+    this.smoothedPosAlpha = this.smoothedPosAlpha * 0.9 + blendedAlpha * 0.1;
+    const posVal = X + this.smoothedPosAlpha * Y;
 
     // Source candidates (CHROM removed — amplifica ruido sin dedo)
     const sources: { [key: string]: number } = {
@@ -1642,6 +1661,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.sourceBuffers.POS.reset();
     this.xBuffer.reset();
     this.yBuffer.reset();
+    this.smoothedPosAlpha = 0.5;
     this.bandpassFilter.reset();
     this.morphBandpassFilter.reset();
     this.signalSplitter.reset();
@@ -1654,6 +1674,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.trackedCentroid = { x: 0.5, y: 0.5 };
     this.lastLocalCentroidX = 0.5;
     this.lastLocalCentroidY = 0.5;
+    this.centroidMotionEma = 0;
     for (const b of this.tileGreenBuffers) b.reset();
     this.tilePulsatilityCache.fill(0);
     this.tileMaxPulsatility = 0;
