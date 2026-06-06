@@ -6,6 +6,7 @@ import {
   ibiSegmentLabel,
   levelColor,
 } from './ppgMonitorClinical';
+import { drawWaveRibbon3D } from './ppg3dProjection';
 
 export const FONT_MONO = '"SF Mono", Consolas, "Roboto Mono", monospace';
 
@@ -372,6 +373,12 @@ export interface PpgRenderState {
   traceRevealed: boolean;
   /** Fuerza pulsátil real [0..1]: comprime la altura de la onda (objeto inerte → plana). */
   signalStrength: number;
+  /**
+   * Capa de presentación 3D (perspectiva pura en canvas 2D). Si `enabled`, la grilla
+   * se dibuja como piso en perspectiva y la onda como cinta extruida. La onda reusa
+   * las MISMAS coords honestas → misma forma/amplitud/tiempo que el modo 2D.
+   */
+  threeD?: { enabled: boolean; intensity?: number };
 }
 
 export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: number): void {
@@ -931,6 +938,14 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
+  // El halo de la punta se amortigua una vez por frame; ambos modos (2D/3D) lo leen.
+  state.sweepPulse *= CARDIAC_WAVE_CONFIG.SWEEP_PULSE_DECAY;
+
+  if (state.threeD?.enabled) {
+    // ── MODO 3D: onda como cinta extruida sobre el piso en perspectiva. ──
+    // Reusa las MISMAS coords honestas → forma, amplitud y tiempo idénticos al 2D.
+    drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
+  } else {
   // Background areas for arrhythmia
   let seg = 0;
   while (seg < coords.length) {
@@ -1044,7 +1059,6 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   }
 
   // Head Pulse
-  state.sweepPulse *= CARDIAC_WAVE_CONFIG.SWEEP_PULSE_DECAY;
   const head = coords[coords.length - 1];
   if (head) {
     const pulse = Math.max(state.sweepPulse, 0.04);
@@ -1173,8 +1187,9 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       ctx.fillText(label.text, midX, topY - 4);
     }
   }
+  } // ── fin MODO 2D ──
 
-  // Tachogram
+  // Tachogram (panel clínico: 2D en ambos modos)
   const tachoY = plot.y + plot.h - RR_TACHO_H + 4;
   ctx.fillStyle = 'rgba(8, 14, 26, 0.85)';
   ctx.fillRect(plot.x + 2, tachoY - 4, plot.w - 4, RR_TACHO_H);
