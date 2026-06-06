@@ -16,7 +16,6 @@ import {
 } from '../lib/device/cameraDeviceProfile';
 import { bpmFromEmittedRr, decidePeakEmit } from '../lib/measurement/peakEmitPolicy';
 import type { FingerPlacementMode } from '../types/signal';
-// ONNX modules removed (all returned null under useNN=false)
 
 export interface HeartBeatProcessDiagnostics {
   ensemble?: Record<string, unknown>;
@@ -67,8 +66,6 @@ export class HeartBeatProcessor {
   /** SQI auto-calculado por {@link calculateSQI} (ruta interna) */
   private internalSqi = 0;
 
-  // NN scorers removed (all returned null)
-
   private unlockHandler = async () => {
     if (this.audioUnlocked) return;
     try {
@@ -77,7 +74,9 @@ export class HeartBeatProcessor {
       await this.audioContext.resume();
       this.audioUnlocked = true;
       this.removeAudioUnlockListeners();
-    } catch { /* ignore */ }
+    } catch {
+      /* AudioContext unlock may fail in non-interactive contexts */
+    }
   };
 
   private removeAudioUnlockListeners() {
@@ -232,8 +231,6 @@ export class HeartBeatProcessor {
     this.internalSqi = this.calculateSQI(range, this.cachedPeriodicity.score);
     this.signalQualityIndex = this.internalSqi;
 
-    // NN SQI refiner removed (always returned null)
-
     let isPeak = false;
     let emitReason = 'WAITING';
     const sampleRate = this.estimateSampleRate();
@@ -318,8 +315,6 @@ export class HeartBeatProcessor {
             }
           }
         }
-
-        // NN peak scorer removed (always returned null)
 
         const instantBpm = bpmFromEmittedRr(this.rrIntervals);
         this.consecutivePeaks += 1;
@@ -520,10 +515,9 @@ export class HeartBeatProcessor {
     const peakSupport = Math.min(1, this.consecutivePeaks / 5);
     const ens = clamp(ensembleConf, 0, 1);
     const peakBoost = isPeak ? 0.12 : 0;
-    const nnBoost = 0;
 
     if (this.rrIntervals.length < 2) {
-      return clamp(sqiFactor * 0.22 + peakSupport * 0.22 + ens * 0.36 + peakBoost + nnBoost, 0, 0.85);
+      return clamp(sqiFactor * 0.22 + peakSupport * 0.22 + ens * 0.36 + peakBoost, 0, 0.85);
     }
 
     const mean = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
@@ -532,7 +526,7 @@ export class HeartBeatProcessor {
     const rrStability = clamp(1 - cv * 1.5, 0, 1);
 
     return clamp(
-      rrStability * 0.32 + peakSupport * 0.22 + sqiFactor * 0.2 + ens * 0.16 + peakBoost + nnBoost,
+      rrStability * 0.32 + peakSupport * 0.22 + sqiFactor * 0.2 + ens * 0.16 + peakBoost,
       0,
       1,
     );
@@ -560,7 +554,9 @@ export class HeartBeatProcessor {
       osc.start(t);
       osc.stop(t + 0.12);
       this.lastBeepTime = t0;
-    } catch { /* ignore */ }
+    } catch {
+      /* Audio beep may fail if AudioContext is in a closed state */
+    }
   }
 
   getRRIntervals(): number[] { return [...this.rrIntervals]; }

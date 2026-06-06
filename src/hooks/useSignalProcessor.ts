@@ -86,7 +86,9 @@ export const useSignalProcessor = () => {
           // 1) Hot path: callback síncrono (DSP, ringbuffers, refs en Index).
           const cb = realtimeCbRef.current;
           if (cb) {
-            try { cb(signal); } catch { /* silenciado */ }
+            try { cb(signal); } catch {
+              log.warn('Realtime callback threw — signal may be stale');
+            }
           }
 
           // 2) Snapshot UI throttleado a ~10 Hz para HUD/diagnóstico.
@@ -166,13 +168,15 @@ export const useSignalProcessor = () => {
                 motionListenerActive = true;
               }
             })
-            .catch(() => { /* ignorado */ });
+            .catch(() => { log.warn('DeviceMotion permission denied'); });
         } else {
           window.addEventListener('devicemotion', handleMotionEvent, { passive: true });
           motionListenerActive = true;
         }
       }
-    } catch { /* ignorado */ }
+    } catch {
+      log.warn('DeviceMotionEvent not supported on this device');
+    }
 
     return () => {
       if (motionListenerActive) {

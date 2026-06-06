@@ -1817,6 +1817,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   private startMotionListener(): void {
     if (this.motionListenerActive) return;
+    // No-op in Web Worker: motion arrives via postMessage
+    if (typeof window === 'undefined') return;
     try {
       if (typeof DeviceMotionEvent !== 'undefined') {
         const dme = DeviceMotionEvent as unknown as { requestPermission?: () => Promise<string> };
@@ -1828,17 +1830,18 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
                 this.motionListenerActive = true;
               }
             })
-            .catch(() => { /* Permission denied — ignore silently */ });
+            .catch(() => { log.warn('DeviceMotion permission denied'); });
         } else {
           window.addEventListener('devicemotion', this.handleMotionEvent, { passive: true });
           this.motionListenerActive = true;
         }
       }
-    } catch { /* DeviceMotion not supported — ignore silently */ }
+    } catch { log.debug('DeviceMotion not supported on this device'); }
   }
 
   private stopMotionListener(): void {
     if (!this.motionListenerActive) return;
+    if (typeof window === 'undefined') return;
     window.removeEventListener('devicemotion', this.handleMotionEvent);
     this.motionListenerActive = false;
     this.motionScore = 0;

@@ -46,6 +46,21 @@ function emit(level: LogLevel, scope: string, args: unknown[]) {
   fn(tag, ...args);
 }
 
+/** Lightweight one-shot warning without creating a logger instance. */
+export function logWarn(scope: string, ...args: unknown[]) {
+  emit('warn', scope, args);
+}
+
+/** Lightweight one-shot error without creating a logger instance. */
+export function logError(scope: string, ...args: unknown[]) {
+  emit('error', scope, args);
+}
+
+/** Lightweight one-shot debug without creating a logger instance. */
+export function logDebug(scope: string, ...args: unknown[]) {
+  emit('debug', scope, args);
+}
+
 export function createLogger(scope: string) {
   return {
     debug: (...a: unknown[]) => emit('debug', scope, a),

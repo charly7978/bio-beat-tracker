@@ -190,6 +190,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
         try {
           applied = track.getConstraints?.();
         } catch {
+          log.debug('getConstraints not available');
           applied = undefined;
         }
         return {
@@ -213,6 +214,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           focusMode: settings.focusMode,
         };
       } catch {
+        log.warn('Camera diagnostics failed');
         return { active: true, error: "caps_unavailable" };
       }
     },
@@ -277,10 +279,10 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
             await track.applyConstraints({
               advanced: [{ torch: false } as TorchCapableConstraint],
             });
-          } catch { /* try alternate syntax */ }
+          } catch { log.debug('Torch off (advanced) failed — trying direct'); }
           try {
             await track.applyConstraints({ torch: false } as MediaTrackConstraints);
-          } catch { /* torch off best-effort */ }
+          } catch { log.debug('Torch off (direct) failed — expected if unsupported'); }
           track.stop();
         }
         streamRef.current = null;
@@ -302,13 +304,13 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           await track.applyConstraints(constraints);
           const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
           if (settings.torch === true) return true;
-        } catch { /* siguiente método */ }
+        } catch { log.debug('Torch attempt failed — trying next syntax'); }
       }
       // Último intento: sin verificar settings, confiar en que applyConstraints funcionó
       try {
         await track.applyConstraints({ advanced: [{ torch: true } as TorchCapableConstraint] });
         return true;
-      } catch { /* torch no disponible */ }
+      } catch { log.debug('Torch not available on this device'); }
       log.warn("Torch no disponible en este dispositivo");
       return false;
     };
@@ -318,7 +320,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
         if (video.readyState >= 2 && video.videoWidth > 0) { resolve(); return; }
         const onMeta = async () => {
           video.removeEventListener("loadedmetadata", onMeta);
-          try { await video.play(); } catch { /* play() rejection is fine */ }
+          try { await video.play(); } catch { log.debug('Video play() rejected (autoplay policy)'); }
           resolve();
         };
         video.addEventListener("loadedmetadata", onMeta);

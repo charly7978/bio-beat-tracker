@@ -539,7 +539,10 @@ const Index = () => {
     try {
       const cfg = getBackpressureConfig();
       if (typeof cfg.forceStride === 'number' || !cfg.enabled) return;
-    } catch { return; }
+    } catch {
+      log.warn('getBackpressureConfig failed');
+      return;
+    }
     if (currentStride > prev) {
       import('@/hooks/use-toast').then(({ toast }) => toast({
         title: "⚡ Modo ahorro activado",

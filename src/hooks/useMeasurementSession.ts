@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { playCompletionSound } from '@/utils/soundUtils';
 import { triggerSessionStartHaptic, triggerSessionEndHaptic } from '@/utils/haptics';
+import { logWarn } from '@/utils/logger';
 import { inferCameraRuntimeHints } from '@/lib/device/cameraDeviceProfile';
 import { createDefaultVitalSignsResult } from '@/lib/vitals/defaultVitalSignsResult';
 import type { VitalSignsResult } from '@/modules/vital-signs/VitalSignsProcessor';
@@ -122,7 +123,9 @@ export function useMeasurementSession({
     if ('wakeLock' in navigator && navigator.wakeLock) {
       try {
         wakeLockRef.current = await navigator.wakeLock.request('screen');
-      } catch { /* ignore */ }
+      } catch {
+        logWarn('useMeasurementSession', 'WakeLock request failed');
+      }
     }
   }, []);
 
@@ -171,11 +174,15 @@ export function useMeasurementSession({
       const docEl = document.documentElement as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> };
       if (docEl.requestFullscreen) await docEl.requestFullscreen();
       else if (docEl.webkitRequestFullscreen) await docEl.webkitRequestFullscreen();
-    } catch { /* ignorado */ }
+    } catch {
+      logWarn('useMeasurementSession', 'Fullscreen request failed');
+    }
     try {
       const orient = screen.orientation as ScreenOrientation & { lock?: (o: OrientationLockType) => Promise<void> };
       if (orient?.lock) await orient.lock('portrait').catch(() => undefined);
-    } catch { /* ignorado */ }
+    } catch {
+      logWarn('useMeasurementSession', 'Screen orientation lock failed');
+    }
   }, [isFullscreen]);
 
 

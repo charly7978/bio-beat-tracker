@@ -1,4 +1,7 @@
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
+import { logWarn } from './logger';
+
+const HAPTICS_SCOPE = 'Haptics';
 
 /**
  * Activa una vibración háptica muy corta y sutil.
@@ -13,7 +16,7 @@ export async function triggerHeartbeatHaptic(): Promise<void> {
         navigator.vibrate(45);
       }
     } catch {
-      // Ignorar errores en navegadores que no admiten vibración
+      logWarn(HAPTICS_SCOPE, 'Vibrate API not available');
     }
   }
 }
@@ -31,7 +34,7 @@ export async function triggerArrhythmiaHaptic(): Promise<void> {
         navigator.vibrate([150, 100, 150]);
       }
     } catch {
-      // Ignorar
+      logWarn(HAPTICS_SCOPE, 'Vibrate fallback failed for arrhythmia');
     }
   }
 }
@@ -48,7 +51,7 @@ export async function triggerCalibrationCompleteHaptic(): Promise<void> {
         navigator.vibrate(100);
       }
     } catch {
-      // Ignorar
+      logWarn(HAPTICS_SCOPE, 'Vibrate fallback failed for calibration');
     }
   }
 }
@@ -65,7 +68,7 @@ export async function triggerSessionStartHaptic(): Promise<void> {
         navigator.vibrate(200);
       }
     } catch {
-      // Ignorar
+      logWarn(HAPTICS_SCOPE, 'Vibrate fallback failed for session start');
     }
   }
 }
@@ -82,7 +85,7 @@ export async function triggerSessionEndHaptic(): Promise<void> {
         navigator.vibrate([100, 50, 100, 50, 200]);
       }
     } catch {
-      // Ignorar
+      logWarn(HAPTICS_SCOPE, 'Vibrate fallback failed for session end');
     }
   }
 }

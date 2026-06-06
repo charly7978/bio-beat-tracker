@@ -61,7 +61,9 @@ export const useSaveMeasurement = () => {
           if (user) {
             await insertMeasurementAttempt(user.id, outcome, sq, diagnostics);
           }
-        } catch { /* ignore if offline */ }
+        } catch {
+          log.debug('Offline — measurement attempt skipped');
+        }
 
         log.warn('Medición no válida como final — solo intento registrado:', reasons.join(', '));
         toast({

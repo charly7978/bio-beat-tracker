@@ -1,6 +1,6 @@
 import { useRef, useCallback } from 'react';
 import type { CameraViewHandle } from '@/components/CameraView';
-import { ppgPerf } from '@/utils/logger';
+import { ppgPerf, logWarn } from '@/utils/logger';
 
 interface UseFrameLoopInput {
   cameraRef: React.RefObject<CameraViewHandle>;
@@ -65,7 +65,7 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
           processFrame(imageData, frameTimestampMs);
         }
       } catch {
-        /* drawImage / getImageData can throw if the video tears down mid-frame */
+        logWarn('useFrameLoop', 'drawImage/getImageData failed (video teardown)');
       }
       scheduleNext(video);
     };
