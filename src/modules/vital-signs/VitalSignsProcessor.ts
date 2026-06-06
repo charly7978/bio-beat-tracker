@@ -514,7 +514,7 @@ export class VitalSignsProcessor {
             ? "Beer–Lambert ratio-of-ratios con perfil de referencia vigente"
             : "Estimación ratio-of-ratios cámara+flash (no sustituye oxímetro certificado); calibre con oxímetro para uso clínico",
         signalQuality: { ...commonSQM },
-        diagnostics: { rValue: this.spo2Calculator.getRValueHistory().at(-1) },
+        diagnostics: { rValue: (() => { const h = this.spo2Calculator.getRValueHistory(); return h.length ? h[h.length - 1] : undefined; })() },
         calibration: spo2Calib
       },
       bloodPressure: {

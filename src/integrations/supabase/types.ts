@@ -65,6 +65,33 @@ export type Database = {
         }
         Relationships: []
       }
+      measurement_attempts: {
+        Row: {
+          created_at: string
+          diagnostics: Json
+          id: string
+          outcome: string
+          signal_quality: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          diagnostics?: Json
+          id?: string
+          outcome: string
+          signal_quality?: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          diagnostics?: Json
+          id?: string
+          outcome?: string
+          signal_quality?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
       measurements: {
         Row: {
           algorithm_version: string | null
@@ -156,33 +183,6 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
-      }
-      measurement_attempts: {
-        Row: {
-          created_at: string
-          diagnostics: Json
-          id: string
-          outcome: string
-          signal_quality: number
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          diagnostics?: Json
-          id?: string
-          outcome: string
-          signal_quality?: number
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          diagnostics?: Json
-          id?: string
-          outcome?: string
-          signal_quality?: number
-          user_id?: string
-        }
-        Relationships: []
       }
       perf_snapshots: {
         Row: {
