@@ -32,7 +32,7 @@ interface State {
 }
 
 export class CameraErrorBoundary extends Component<Props, State> {
-  private retryTimer: NodeJS.Timeout | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(props: Props) {
     super(props);
