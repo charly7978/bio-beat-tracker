@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, XCircle, Brain, Loader2, Sliders, User, Check } from "lucide-react";
+import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, XCircle, Brain, Loader2, Sliders, Cpu, User, Check } from "lucide-react";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
 import { CalibrationManager } from "@/modules/vital-signs/CalibrationManager";
 import { supabase } from "@/integrations/supabase/client";
@@ -238,7 +238,7 @@ const Index = () => {
     setDisclaimerAccepted(true);
   }, []);
 
-  const [activeTab, setActiveTab] = useState<'profile' | 'history' | 'account' | 'advanced'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'calibration' | 'history' | 'account'>('profile');
   const [history, setHistory] = useState<HistoricalMeasurement[]>([]);
   const [currentUser, setCurrentUser] = useState<ActiveUser | null>(null);
   const [email, setEmail] = useState("");
@@ -694,7 +694,11 @@ const Index = () => {
       maxWidth: '100vw',
       maxHeight: '100svh',
       overflow: 'hidden',
-      touchAction: 'none',
+      // pan-y permite el scroll vertical dentro de modales/paneles con overflow-y-auto
+      // (touchAction:'none' lo bloqueaba en todos los descendientes); overscroll-none
+      // evita el rebote/pull-to-refresh de la vista inmersiva.
+      touchAction: 'pan-y',
+      overscrollBehavior: 'none',
       userSelect: 'none',
       WebkitTouchCallout: 'none',
       WebkitUserSelect: 'none'
@@ -853,10 +857,15 @@ const Index = () => {
             />
           </div>
 
-          {/* STATUS BAR */}
-          <div className="absolute bottom-2 left-2 right-2 z-20 flex items-center gap-2 justify-center">
+          {/* STATUS BAR — sobre los botones INICIAR/RESET (h-12) y a la izquierda del toggle 3D */}
+          <div 
+            className="absolute left-2 right-16 z-20 flex items-center gap-2 justify-center"
+            style={{
+              bottom: 'calc(56px + env(safe-area-inset-bottom, 0px))'
+            }}
+          >
             <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${webgpuAvail === 'yes' ? 'bg-cyan-500/10 text-cyan-400' : 'bg-zinc-900/50 text-zinc-600'}`}>
-              <Sliders className="w-2 h-2" />GPU{webgpuAvail === 'yes' ? '' : '—'}
+              <Cpu className="w-2 h-2" />GPU{webgpuAvail === 'yes' ? '' : '—'}
             </span>
             <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${encryptionReady ? 'bg-amber-500/10 text-amber-400' : 'bg-zinc-900/50 text-zinc-600'}`}>
               <Shield className="w-2 h-2" />{encryptionReady ? 'ENC' : '—'}
@@ -1106,7 +1115,13 @@ const Index = () => {
                       onClick={() => setActiveTab('profile')}
                       className={`flex-1 py-2 text-center transition-colors border-b-2 ${activeTab === 'profile' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-zinc-500 hover:text-slate-300'}`}
                     >
-                      PERFIL Y CALIB.
+                      PERFIL
+                    </button>
+                    <button 
+                      onClick={() => setActiveTab('calibration')}
+                      className={`flex-1 py-2 text-center transition-colors border-b-2 ${activeTab === 'calibration' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-zinc-500 hover:text-slate-300'}`}
+                    >
+                      CALIBRACIÓN
                     </button>
                     <button 
                       onClick={() => setActiveTab('history')}
@@ -1126,7 +1141,7 @@ const Index = () => {
                 {/* Body */}
                 <div className="flex-1 overflow-y-auto p-4">
                   
-                  {/* TAB 1: PERFIL Y CALIBRACIÓN */}
+                  {/* TAB 1: PERFIL */}
                   {activeTab === 'profile' && (
                     <div className="space-y-4 animate-in fade-in duration-200">
                       {/* Sección 1: Perfil Fisiológico */}
@@ -1203,7 +1218,12 @@ const Index = () => {
                           </button>
                         </div>
                       </div>
+                    </div>
+                  )}
 
+                  {/* TAB 1b: CALIBRACIÓN */}
+                  {activeTab === 'calibration' && (
+                    <div className="space-y-4 animate-in fade-in duration-200">
                       {/* Sección 2: Calibración Cruzada */}
                       <div className="space-y-3">
                         <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] font-bold uppercase tracking-wider">

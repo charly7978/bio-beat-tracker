@@ -88,7 +88,7 @@ const C = {
   arr: '239, 68, 68',
   cyan: '0, 242, 255',
   horizon: '103, 232, 249',
-  gridMinor: '120, 200, 150',
+  gridMinor: '255, 255, 255', // líneas de grilla BLANCAS
 };
 
 export function makeProjector(state: PpgRenderState): Projector {
@@ -177,7 +177,7 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     const b = proj.floorPoint(halfX, z);
     const isMajor = rowIdx % 5 === 0;
     const fade = 0.3 + 0.7 * a.scale;
-    const alpha = (isMajor ? 0.42 : 0.18) * fade;
+    const alpha = (isMajor ? 0.55 : 0.25) * fade;
     ctx.strokeStyle = `rgba(${C.gridMinor}, ${alpha.toFixed(3)})`;
     ctx.lineWidth = isMajor ? 1.2 : 0.7;
     ctx.beginPath();
@@ -194,8 +194,8 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     const far = proj.floorPoint(xw, proj.zFar);
     const isMajor = k % 5 === 0;
     const g = ctx.createLinearGradient(near.x, near.y, far.x, far.y);
-    g.addColorStop(0, `rgba(${C.gridMinor}, ${isMajor ? 0.42 : 0.18})`);
-    g.addColorStop(1, `rgba(${C.gridMinor}, 0.03)`);
+    g.addColorStop(0, `rgba(${C.gridMinor}, ${isMajor ? 0.55 : 0.25})`);
+    g.addColorStop(1, `rgba(${C.gridMinor}, 0.05)`);
     ctx.strokeStyle = g;
     ctx.lineWidth = isMajor ? 1.1 : 0.65;
     ctx.beginPath();

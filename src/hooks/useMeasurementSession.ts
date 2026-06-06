@@ -144,9 +144,20 @@ export function useMeasurementSession({
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    const preventScroll = (e: Event) => e.preventDefault();
-    document.body.addEventListener('touchmove', preventScroll, { passive: false });
-    document.body.addEventListener('scroll', preventScroll, { passive: false });
+
+    const preventScroll = (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('.overflow-y-auto')) {
+        return;
+      }
+      e.preventDefault();
+    };
+
+    if (isMonitoring) {
+      document.body.addEventListener('touchmove', preventScroll, { passive: false });
+      document.body.addEventListener('scroll', preventScroll, { passive: false });
+    }
+
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       document.body.removeEventListener('touchmove', preventScroll);

@@ -83,6 +83,18 @@ export interface PPGSignalMeterHandle {
   clearBuffer: () => void;
 }
 
+function getSafeAreaBottom(): number {
+  if (typeof document === 'undefined') return 0;
+  const div = document.createElement('div');
+  div.style.paddingBottom = 'env(safe-area-inset-bottom, 0px)';
+  div.style.position = 'absolute';
+  div.style.visibility = 'hidden';
+  document.body.appendChild(div);
+  const offset = parseInt(window.getComputedStyle(div).paddingBottom, 10) || 0;
+  document.body.removeChild(div);
+  return offset;
+}
+
 const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProps>(({
   value,
   quality,
@@ -297,7 +309,8 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
 
     const lowerH = Math.max(68, Math.min(86, Math.round(cssH * 0.095)));
     const footerH = 46;
-    const buttonsH = 48;
+    const safeAreaBottom = getSafeAreaBottom();
+    const buttonsH = 48 + safeAreaBottom;
     const plotY = header.h + metricsH;
     const plotH = cssH - plotY - lowerH - footerH - buttonsH;
 
