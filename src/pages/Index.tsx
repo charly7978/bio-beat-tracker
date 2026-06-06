@@ -212,6 +212,7 @@ const Index = () => {
   // UI states
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showTelemedicine, setShowTelemedicine] = useState(false);
   const [webgpuAvail, setWebgpuAvail] = useState<'checking' | 'yes' | 'no'>('checking');
   const [healthAvail, setHealthAvail] = useState<'checking' | 'yes' | 'no'>('checking');
   const [encryptionReady, setEncryptionReady] = useState(false);
@@ -402,7 +403,10 @@ const Index = () => {
 
   // Check if encryption key exists (means crypto was initialized)
   useEffect(() => {
-    setEncryptionReady(localStorage.getItem('bb-crypto-key') !== null);
+    const check = () => setEncryptionReady(localStorage.getItem('bb-crypto-key') !== null);
+    check();
+    window.addEventListener('storage', check);
+    return () => window.removeEventListener('storage', check);
   }, []);
 
   // Run risk analysis on current vitals
@@ -777,12 +781,36 @@ const Index = () => {
         {/* TELEMEDICINA (atajo rápido) */}
         <button
           type="button"
-          onClick={() => { setActiveTab('advanced'); setShowSettings(true); }}
+          onClick={() => setShowTelemedicine(true)}
           aria-label="Telemedicina"
           className="absolute top-4 right-16 z-30 p-2.5 rounded-full bg-black/50 backdrop-blur-md border border-zinc-900 text-emerald-400/75 hover:text-emerald-400 hover:bg-black/80 hover:scale-105 active:scale-95 shadow-lg shadow-black/35 transition-all"
         >
           <Activity className="h-4 w-4" />
         </button>
+
+        {/* TELEMEDICINA DIALOG */}
+        {showTelemedicine && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in">
+            <div className="bg-black/95 border border-zinc-900/80 rounded-2xl max-w-sm w-[92%] shadow-2xl flex flex-col max-h-[80vh] animate-in zoom-in-95 duration-200">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-900">
+                <div className="flex items-center gap-2">
+                  <Activity className="w-5 h-5 text-emerald-400" />
+                  <h3 className="text-white text-sm font-bold">Telemedicina WebRTC</h3>
+                </div>
+                <button onClick={() => setShowTelemedicine(false)}
+                  className="p-1.5 rounded-full bg-zinc-950 hover:bg-zinc-900 text-zinc-400 hover:text-white transition-colors">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                <p className="text-zinc-500 text-[9px] leading-relaxed">
+                  Conexión P2P con STUN. Copia tu SDP y compártelo con el remoto.
+                </p>
+                <WebrtcCallWidget />
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="relative z-10 h-full">
           <div className="flex-1 h-full">
@@ -825,6 +853,24 @@ const Index = () => {
             />
           </div>
 
+          {/* STATUS BAR */}
+          <div className="absolute bottom-2 left-2 right-2 z-20 flex items-center gap-2 justify-center">
+            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${webgpuAvail === 'yes' ? 'bg-cyan-500/10 text-cyan-400' : 'bg-zinc-900/50 text-zinc-600'}`}>
+              <Sliders className="w-2 h-2" />GPU{webgpuAvail === 'yes' ? '' : '—'}
+            </span>
+            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${encryptionReady ? 'bg-amber-500/10 text-amber-400' : 'bg-zinc-900/50 text-zinc-600'}`}>
+              <Shield className="w-2 h-2" />{encryptionReady ? 'ENC' : '—'}
+            </span>
+            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${healthAvail === 'yes' ? 'bg-blue-500/10 text-blue-400' : 'bg-zinc-900/50 text-zinc-600'}`}>
+              <Activity className="w-2 h-2" />HC{healthAvail === 'yes' ? '' : '—'}
+            </span>
+            {riskResult && (
+              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${riskResult === 'IMMEDIATE' ? 'bg-red-500/10 text-red-400' : riskResult === 'SOON' ? 'bg-orange-500/10 text-orange-400' : riskResult === 'MONITOR' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
+                <Brain className="w-2 h-2" />{riskResult}
+              </span>
+            )}
+          </div>
+
           {/* RESUMEN ESTADÍSTICO POST-MEDICIÓN */}
           {session.showResults && session.measurementSummary && (() => {
             const { totalBeats, arrhythmiaBeats, normalPercent } = session.measurementSummary;
@@ -840,10 +886,10 @@ const Index = () => {
             
             return (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 animate-fade-in">
-                <div className="bg-black border border-slate-700/50 rounded-2xl max-w-sm w-[92%] shadow-2xl overflow-hidden">
+                <div className="bg-black border border-slate-700/50 rounded-2xl max-w-sm w-[92%] shadow-2xl flex flex-col max-h-[85vh]">
                   
                   {/* Header con estado */}
-                  <div className={`px-4 py-3 ${bgClass} border-b border-zinc-900`}>
+                  <div className={`flex-none px-4 py-3 ${bgClass} border-b border-zinc-900 rounded-t-2xl`}>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <StatusIcon className={`w-5 h-5 ${textClass}`} />
@@ -865,7 +911,7 @@ const Index = () => {
                   </div>
 
                   {/* Métricas principales */}
-                  <div className="p-4 space-y-2">
+                  <div className="flex-1 overflow-y-auto p-4 space-y-2">
                     
                     {/* BPM y SpO2 en fila */}
                     <div className="grid grid-cols-2 gap-2">
@@ -1073,12 +1119,6 @@ const Index = () => {
                       className={`flex-1 py-2 text-center transition-colors border-b-2 ${activeTab === 'account' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-zinc-500 hover:text-slate-300'}`}
                     >
                       NUBE / SYNC
-                    </button>
-                    <button 
-                      onClick={() => setActiveTab('advanced')}
-                      className={`flex-1 py-2 text-center transition-colors border-b-2 ${activeTab === 'advanced' ? 'border-purple-500 text-purple-400 bg-purple-500/5' : 'border-transparent text-zinc-500 hover:text-slate-300'}`}
-                    >
-                      AVANZADO
                     </button>
                   </div>
                 </div>
@@ -1412,107 +1452,6 @@ const Index = () => {
                           </div>
                         </form>
                       )}
-                    </div>
-                  )}
-
-                  {/* TAB 4: AVANZADO (AI/ML, Telemedicina, WebGPU, Seguridad, Plugins) */}
-                  {activeTab === 'advanced' && (
-                    <div className="space-y-4 animate-in fade-in duration-200">
-                      {/* AI/ML Risk Analysis */}
-                      <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3">
-                        <div className="flex items-center gap-1.5 text-purple-400 text-[10px] font-bold uppercase tracking-wider">
-                          <Brain className="w-3.5 h-3.5" />
-                          <span>AI / ML — Risk Analyzer</span>
-                        </div>
-                        <p className="text-zinc-500 text-[9px] leading-relaxed">
-                          Análisis de riesgo cardiovascular en dispositivo. Sin datos enviados al servidor.
-                        </p>
-                        <div className="flex items-center justify-between text-[10px]">
-                          <span className="text-zinc-500">Timeline de riesgo:</span>
-                          <span className={`font-bold ${riskResult === 'IMMEDIATE' ? 'text-red-400' : riskResult === 'SOON' ? 'text-orange-400' : riskResult === 'MONITOR' ? 'text-yellow-400' : 'text-emerald-400'}`}>
-                            {riskResult ?? '—'}
-                          </span>
-                        </div>
-                        <button onClick={() => {
-                          const riskEl = document.getElementById('risk-detail');
-                          if (riskEl) riskEl.classList.toggle('hidden');
-                        }}
-                          className="w-full py-1.5 rounded-lg bg-purple-600/20 border border-purple-900/40 text-purple-400 hover:bg-purple-600/30 font-bold text-[10px] transition-all">
-                          VER ANÁLISIS DE RIESGO
-                        </button>
-                        <div id="risk-detail" className="hidden text-[9px] text-zinc-500 space-y-1">
-                          <p>Basado en: pulso, SpO₂, presión arterial y arritmias.</p>
-                          <p>Recomendaciones: consulte la sección de resultados post-medición.</p>
-                        </div>
-                      </div>
-
-                      {/* WebRTC Telemedicina */}
-                      <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3">
-                        <div className="flex items-center gap-1.5 text-emerald-400 text-[10px] font-bold uppercase tracking-wider">
-                          <Activity className="w-3.5 h-3.5" />
-                          <span>Telemedicina — WebRTC P2P</span>
-                        </div>
-                        <p className="text-zinc-500 text-[9px] leading-relaxed">
-                          Conexión P2P con STUN. Copie su SDP local y compártalo manualmente con el remoto.
-                        </p>
-                        <WebrtcCallWidget />
-                      </div>
-
-                      {/* WebGPU Acceleration */}
-                      <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3">
-                        <div className="flex items-center gap-1.5 text-cyan-400 text-[10px] font-bold uppercase tracking-wider">
-                          <Sliders className="w-3.5 h-3.5" />
-                          <span>WebGPU — Aceleración por Hardware</span>
-                        </div>
-                        <div className="flex items-center justify-between text-[10px]">
-                          <span className="text-zinc-500">Disponible:</span>
-                          <span className={`font-bold ${webgpuAvail === 'yes' ? 'text-emerald-400' : webgpuAvail === 'no' ? 'text-red-400' : 'text-yellow-400'}`}>
-                            {webgpuAvail === 'checking' ? 'Verificando...' : webgpuAvail === 'yes' ? 'SÍ' : 'NO (fallback CPU)'}
-                          </span>
-                        </div>
-                        <p className="text-zinc-500 text-[9px] leading-relaxed">
-                          {webgpuAvail === 'yes'
-                            ? 'GPU disponible para aceleración de cómputo MLP en estimación de BP.'
-                            : 'WebGPU no disponible. El pipeline MLP usa CPU (dot product JS).'}
-                        </p>
-                      </div>
-
-                      {/* Zero Trust Security */}
-                      <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3">
-                        <div className="flex items-center gap-1.5 text-amber-400 text-[10px] font-bold uppercase tracking-wider">
-                          <Shield className="w-3.5 h-3.5" />
-                          <span>Cifrado — Almacenamiento Local</span>
-                        </div>
-                        <div className="flex items-center justify-between text-[10px]">
-                          <span className="text-zinc-500">Cifrado AES-256-GCM:</span>
-                          <span className={`font-bold ${encryptionReady ? 'text-emerald-400' : 'text-zinc-500'}`}>
-                            {encryptionReady ? 'ACTIVO' : 'Se activa al guardar'}
-                          </span>
-                        </div>
-                        <p className="text-zinc-500 text-[9px] leading-relaxed">
-                          Las mediciones locales se cifran con AES-256-GCM antes de escribirse en localStorage.
-                          Clave derivada del dispositivo (SHA-256).
-                        </p>
-                      </div>
-
-                      {/* Capacitor Plugins Avanzados */}
-                      <div className="bg-zinc-950/60 border border-zinc-900/50 rounded-xl p-3.5 space-y-3">
-                        <div className="flex items-center gap-1.5 text-blue-400 text-[10px] font-bold uppercase tracking-wider">
-                          <Activity className="w-3.5 h-3.5" />
-                          <span>Health Connect — Auto-guardado</span>
-                        </div>
-                        <div className="flex items-center justify-between text-[10px]">
-                          <span className="text-zinc-500">Disponible:</span>
-                          <span className={`font-bold ${healthAvail === 'yes' ? 'text-emerald-400' : healthAvail === 'no' ? 'text-zinc-500' : 'text-yellow-400'}`}>
-                            {healthAvail === 'checking' ? 'Verificando...' : healthAvail === 'yes' ? 'SÍ' : 'No disponible'}
-                          </span>
-                        </div>
-                        <p className="text-zinc-500 text-[9px] leading-relaxed">
-                          {healthAvail === 'yes'
-                            ? 'Health Connect detectado. Las mediciones se guardan automáticamente al finalizar.'
-                            : 'Solo disponible en Android 26+ con Health Connect instalado. En web/escritorio no aplica.'}
-                        </p>
-                      </div>
                     </div>
                   )}
 
