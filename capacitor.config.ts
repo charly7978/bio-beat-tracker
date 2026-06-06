@@ -20,10 +20,12 @@ const config: CapacitorConfig = {
     },
   },
   plugins: {
-    // Configuración de permisos de cámara para Android
-    Camera: {
-      saveToGallery: false,
-    },
+    Camera: { saveToGallery: false },
+    Health: { enabled: true },
+    BackgroundTask: { enabled: true },
+    Filesystem: { enabled: true },
+    Preferences: { enabled: true },
+    Network: { enabled: true },
   },
 };
 
