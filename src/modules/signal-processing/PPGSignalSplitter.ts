@@ -254,7 +254,7 @@ export class PPGSignalSplitter {
 
   private fs: number;
 
-  constructor(sampleRate = 30) {
+  constructor(sampleRate = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE) {
     this.fs = sampleRate;
 
     // Canal 1 — HR
