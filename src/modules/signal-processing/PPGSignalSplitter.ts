@@ -50,6 +50,12 @@
  *   2. Stateful: cada instancia mantiene estado entre frames
  *   3. Bajo acoplamiento: no conoce HeartBeatProcessor ni VitalSignsProcessor
  *   4. Adaptativo a fs: reconfigura filtros si cambia el sample rate
+ *   5. Sin ANC inter-canal: NO se usa el azul como referencia LMS. En PPG de
+ *      dedo con flash los 3 canales R/G/B están dominados por el MISMO pulso y
+ *      altamente correlacionados, así que un LMS con referencia azul converge a
+ *      cancelar el pulso real (AC→0) en vez de ruido. Cada canal se filtra de
+ *      forma independiente (la ANC con referencia azul es técnica de rPPG de
+ *      rostro y NO aplica al PPG de contacto).
  *
  * Referencias:
  *   - De Haan & Jeanne 2013 (CHROM/POS para rPPG)
@@ -208,62 +214,6 @@ class SimpleHPF {
   reset(): void { this.prev = 0; this.prevOut = 0; }
 }
 
-// ─── Filtro LMS Adaptativo (Normalized LMS) ──────────────────────────────────
-
-class LmsAdaptiveFilter {
-  private readonly weights: Float64Array;
-  private readonly buffer: Float64Array;
-  private readonly size: number;
-  private readonly mu: number;
-
-  constructor(size = 8, mu = 0.05) {
-    this.size = size;
-    this.mu = mu;
-    this.weights = new Float64Array(size);
-    this.buffer = new Float64Array(size);
-  }
-
-  filter(signal: number, noise: number): number {
-    if (!isFinite(signal) || !isFinite(noise)) return signal;
-
-    // Shift buffer
-    for (let i = this.size - 1; i > 0; i--) {
-      this.buffer[i] = this.buffer[i - 1];
-    }
-    this.buffer[0] = noise;
-
-    // Compute filter output y = w^T * x
-    let y = 0;
-    for (let i = 0; i < this.size; i++) {
-      y += this.weights[i] * this.buffer[i];
-    }
-
-    // Error e = signal - y
-    const e = signal - y;
-
-    // Compute norm squared of input vector
-    let normSq = 0;
-    for (let i = 0; i < this.size; i++) {
-      normSq += this.buffer[i] * this.buffer[i];
-    }
-
-    // Update weights: w = w + mu * e * x / (normSq + epsilon)
-    const step = this.mu * e / (normSq + 1e-6);
-    for (let i = 0; i < this.size; i++) {
-      this.weights[i] = clamp(this.weights[i] + step * this.buffer[i], -2.0, 2.0);
-    }
-
-    return isFinite(e) ? e : signal;
-  }
-
-  reset(): void {
-    this.weights.fill(0);
-    this.buffer.fill(0);
-  }
-}
-
-
-
 // ─── Clase principal ──────────────────────────────────────────────────────────
 
 export class PPGSignalSplitter {
@@ -272,7 +222,6 @@ export class PPGSignalSplitter {
   // === Canal 1: HR ===
   private readonly hrBP: BandpassFilter;         // Butterworth BP 0.5–4.5 Hz
   private readonly hrHampel: HampelOnlineState;  // Ventana 7, σ=3
-  private readonly lmsHr: LmsAdaptiveFilter;     // LMS filter for HR
 
   // === Canal 2: SpO2 ===
   private readonly spo2BpRed: BandpassFilter;    // BP 0.5–3.5 Hz canal rojo
@@ -283,14 +232,11 @@ export class PPGSignalSplitter {
   private readonly spo2DcBlue: DoubleEmaTracker;
   private readonly spo2HampelRed: HampelOnlineState;   // Ventana 5, σ=2.5
   private readonly spo2HampelGreen: HampelOnlineState; // Ventana 5, σ=2.5
-  private readonly lmsRed: LmsAdaptiveFilter;    // LMS filter for Red channel SpO2
-  private readonly lmsGreen: LmsAdaptiveFilter;  // LMS filter for Green channel SpO2
 
   // === Canal 3: Morfología/PA ===
   private readonly morphBessel: BesselFilter;    // Bessel BP 0.5–12 Hz
   private readonly morphDcMa: RunningMean;       // MA 180 samples (detrend)
   private readonly morphHampel: HampelOnlineState; // Ventana 9, σ=2.8
-  private readonly morphSg: { filter: (x: number) => number; reset: () => void }; // Savitzky-Golay for morphology
 
   // === Canal 4: Respiración ===
   // LP Butterworth construido con HPF y LPF separados para la banda respiratoria
@@ -304,7 +250,6 @@ export class PPGSignalSplitter {
   private readonly arrNotch: AdaptiveNotchState; // Notch adaptativo en 2×f_HR
   private readonly arrHampel: HampelOnlineState; // Ventana 11, σ=3.5
   private readonly arrMwi: RunningMean;          // Moving Window Integration 180 ms (~6 frames a 30fps)
-  private readonly lmsArr: LmsAdaptiveFilter;    // LMS filter for arrhythmia
 
   private fs: number;
 
@@ -314,7 +259,6 @@ export class PPGSignalSplitter {
     // Canal 1 — HR
     this.hrBP = new BandpassFilter(sampleRate, 4.5);
     this.hrHampel = createHampelState(7);
-    this.lmsHr = new LmsAdaptiveFilter(8, 0.05);
 
     // Canal 2 — SpO2
     const spo2HighCut = 3.5;
@@ -326,15 +270,11 @@ export class PPGSignalSplitter {
     this.spo2DcBlue = new DoubleEmaTracker(0.015);
     this.spo2HampelRed = createHampelState(5);
     this.spo2HampelGreen = createHampelState(5);
-    this.lmsRed = new LmsAdaptiveFilter(8, 0.05);
-    this.lmsGreen = new LmsAdaptiveFilter(8, 0.05);
 
     // Canal 3 — Morfología/PA (Bessel para fase lineal)
     this.morphBessel = new BesselFilter(sampleRate, 0.5, 12.0);
     this.morphDcMa = new RunningMean(180);
     this.morphHampel = createHampelState(7);
-    // Savitzky-Golay disabled for maximum speed
-    this.morphSg = { filter: (x) => x, reset: () => { /* no-op */ } };
     this.morphHPF = new SimpleHPF(0.5, sampleRate);
 
     // Canal 4 — Respiración (BP muy bajo: 0.08–0.55 Hz)
@@ -348,7 +288,6 @@ export class PPGSignalSplitter {
     this.arrHampel = createHampelState(11);
     // MWI: ventana ~180 ms a fs=30 Hz → 6 frames
     this.arrMwi = new RunningMean(Math.max(3, Math.round(sampleRate * 0.18)));
-    this.lmsArr = new LmsAdaptiveFilter(8, 0.05);
   }
 
   /**
@@ -366,10 +305,9 @@ export class PPGSignalSplitter {
 
     const acBlue = safeFilter(() => this.spo2BpBlue.filter(b));
 
-    // Canal 1: HR
+    // Canal 1: HR — Butterworth BP + Hampel, filtrado independiente (sin ANC).
     const rHampel = applyHampelOnline(this.hrHampel, r, 3.0);
-    let filteredHR = safeFilter(() => this.hrBP.filter(rHampel));
-    filteredHR = this.lmsHr.filter(filteredHR, acBlue);
+    const filteredHR = safeFilter(() => this.hrBP.filter(rHampel));
 
     // Canal 2: SpO2
     const dcRed = this.spo2DcRed.push(r);
@@ -377,17 +315,14 @@ export class PPGSignalSplitter {
     const dcBlue = this.spo2DcBlue.push(b);
     const rHampelSpo2 = applyHampelOnline(this.spo2HampelRed, r, 2.5);
     const gHampelSpo2 = applyHampelOnline(this.spo2HampelGreen, g, 2.5);
-    let acRed = safeFilter(() => this.spo2BpRed.filter(rHampelSpo2));
-    let acGreen = safeFilter(() => this.spo2BpGreen.filter(gHampelSpo2));
-    acRed = this.lmsRed.filter(acRed, acBlue);
-    acGreen = this.lmsGreen.filter(acGreen, acBlue);
+    const acRed = safeFilter(() => this.spo2BpRed.filter(rHampelSpo2));
+    const acGreen = safeFilter(() => this.spo2BpGreen.filter(gHampelSpo2));
 
     // Canal 3: Morfología/PA
     const morphDc = this.morphDcMa.push(r);
     const morphDetrended = r - morphDc;
     const morphHampeled = applyHampelOnline(this.morphHampel, morphDetrended, 2.8);
     let morphology = safeFilter(() => this.morphBessel.filter(morphHampeled));
-    morphology = this.morphSg.filter(morphology);
     morphology = this.morphHPF.filter(morphology);
 
     // Canal 4: Respiración
@@ -406,8 +341,7 @@ export class PPGSignalSplitter {
     const arrBpFiltered = safeFilter(() => this.arrBP.filter(r));
     const arrNotched = applyAdaptiveNotch(this.arrNotch, arrBpFiltered);
     const arrHampeled = applyHampelOnline(this.arrHampel, arrNotched, 3.5);
-    const arrClean = this.lmsArr.filter(arrHampeled, acBlue);
-    const arrhythmia = this.arrMwi.push(arrClean);
+    const arrhythmia = this.arrMwi.push(arrHampeled);
 
     return {
       filteredHR,
@@ -441,7 +375,6 @@ export class PPGSignalSplitter {
   reset(): void {
     this.hrBP.reset();
     resetHampelState(this.hrHampel);
-    this.lmsHr.reset();
     this.spo2BpRed.reset();
     this.spo2BpGreen.reset();
     this.spo2BpBlue.reset();
@@ -450,12 +383,9 @@ export class PPGSignalSplitter {
     this.spo2DcBlue.reset();
     resetHampelState(this.spo2HampelRed);
     resetHampelState(this.spo2HampelGreen);
-    this.lmsRed.reset();
-    this.lmsGreen.reset();
     this.morphBessel.reset();
     this.morphDcMa.reset();
     resetHampelState(this.morphHampel);
-    this.morphSg.reset();
     this.morphHPF.reset();
     this.respLP.reset();
     this.respHPF.reset();
@@ -464,7 +394,6 @@ export class PPGSignalSplitter {
     resetAdaptiveNotch(this.arrNotch);
     resetHampelState(this.arrHampel);
     this.arrMwi.reset();
-    this.lmsArr.reset();
   }
 }
 

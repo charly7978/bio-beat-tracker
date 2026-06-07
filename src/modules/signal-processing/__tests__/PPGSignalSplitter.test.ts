@@ -149,37 +149,32 @@ describe('PPGSignalSplitter', () => {
     });
   });
 
-  describe('Filtro Adaptativo LMS', () => {
-    it('atenúa el ruido de movimiento común utilizando la referencia del canal azul', () => {
+  describe('Sin ANC inter-canal (el azul NO se usa como referencia)', () => {
+    it('preserva el AC rojo aunque el azul esté correlacionado con el rojo', () => {
+      // En PPG de dedo R/G/B comparten el MISMO pulso (correlacionados). Un ANC
+      // con referencia azul (LMS) convergería a cancelar el pulso real → AC→0.
+      // Sin ANC, el AC pulsátil debe conservar amplitud genuina.
       const splitter = new PPGSignalSplitter(30);
-      const sigLength = 300;
-      const cleanSig = makePPGSignal(1.2, 30, sigLength, 150, 5);
-      const noise = makePPGSignal(2.5, 30, sigLength, 0, 5);
-      
-      const corruptedRed = cleanSig.map((v, i) => v + noise[i]);
-      const blueRef = noise;
-      
-      for (let i = 0; i < sigLength; i++) {
-        const out = splitter.process(corruptedRed[i], corruptedRed[i] * 0.8, blueRef[i]);
-        if (i > 250) {
-          expect(isFinite(out.filteredHR)).toBe(true);
-          expect(isFinite(out.spo2.acRed)).toBe(true);
-          expect(isFinite(out.arrhythmia)).toBe(true);
-        }
+      const sig = makePPGSignal(1.2, 30, 400, 150, 8);
+      const acRedTail: number[] = [];
+      for (let i = 0; i < 400; i++) {
+        const out = splitter.process(sig[i]!, sig[i]! * 0.8, sig[i]! * 0.7, 30);
+        if (i >= 300) acRedTail.push(out.spo2.acRed);
       }
+      expect(acRedTail.every(isFinite)).toBe(true);
+      // RMS claramente > 0: el pulso NO fue cancelado por una referencia azul.
+      expect(rms(acRedTail)).toBeGreaterThan(0.5);
     });
-  });
 
-  describe('Filtro Savitzky-Golay', () => {
-    it('suaviza la señal de morfología sin propagar errores o infinitos', () => {
+    it('el canal de arritmias conserva señal finita con entrada pulsátil', () => {
       const splitter = new PPGSignalSplitter(30);
-      const cleanSig = makePPGSignal(1.2, 30, 200, 150, 10);
-      const noisySig = cleanSig.map((v, i) => v + (i % 2 === 0 ? 0.8 : -0.8));
-      
-      for (let i = 0; i < 200; i++) {
-        const out = splitter.process(noisySig[i], noisySig[i] * 0.8, 150);
-        expect(isFinite(out.morphology)).toBe(true);
+      const sig = makePPGSignal(1.2, 30, 300, 150, 8);
+      const arrTail: number[] = [];
+      for (let i = 0; i < 300; i++) {
+        const out = splitter.process(sig[i]!, sig[i]! * 0.8, sig[i]! * 0.7, 72);
+        if (i >= 200) arrTail.push(out.arrhythmia);
       }
+      expect(arrTail.every(isFinite)).toBe(true);
     });
   });
 
