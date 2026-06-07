@@ -209,7 +209,14 @@ export class VitalSignsProcessor {
       morphologyFiltered?: number;
       respirationFiltered?: number;
       arrhythmiaFiltered?: number;
-      spo2Channels?: { acRed: number; dcRed: number; acGreen: number; dcGreen: number };
+      spo2Channels?: {
+        acRed: number;
+        dcRed: number;
+        acGreen: number;
+        dcGreen: number;
+        acBlue?: number;
+        dcBlue?: number;
+      };
     },
     faceBvp?: number,
     faceBpm?: number,
