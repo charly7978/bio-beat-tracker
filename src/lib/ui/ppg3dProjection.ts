@@ -162,7 +162,7 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   // Celda en unidades-mundo (= px en el borde cercano), MISMA medida en ancho (X)
   // y en profundidad (Z) → celdas cuadradas que se escorzan hacia el horizonte.
   // Menos columnas = celdas más grandes. Líneas mayores cada 5 (estilo papel ECG).
-  const TARGET_COLS = 9;
+  const TARGET_COLS = 7;
   const cellPx = proj.plotW / TARGET_COLS;
   const halfCols = Math.ceil(TARGET_COLS / 2);
   const halfX = halfCols * cellPx;
