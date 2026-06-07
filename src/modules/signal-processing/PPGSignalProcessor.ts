@@ -158,6 +158,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private readonly statScratch = new Float32Array(this.ACDC_WINDOW);
   private readonly sortedScratch = new Float32Array(this.ACDC_WINDOW);
   private readonly periodicityScratch = new Float32Array(DSP_CONSTANTS.BUFFER_SIZE);
+  // Scratch dedicados R/G/B para AC/DC: las 3 ventanas se necesitan vivas a la vez
+  // (DC de las 3 antes del early-return, luego AC de cada una). Asignados una vez.
+  private readonly acdcRedScratch = new Float32Array(this.ACDC_WINDOW);
+  private readonly acdcGreenScratch = new Float32Array(this.ACDC_WINDOW);
+  private readonly acdcBlueScratch = new Float32Array(this.ACDC_WINDOW);
 
   // LUTs de teselado: cachean Math.floor((px / roiSize) * cols) por píxel
   // del ROI. Se reconstruyen sólo cuando cambia el tamaño del ROI.
@@ -1537,20 +1542,35 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const windowSize = Math.min(this.ACDC_WINDOW, this.redBuffer.length);
     if (windowSize < 36) return;
 
-    const redW = this.redBuffer.tail(windowSize);
-    const greenW = this.greenBuffer.tail(windowSize);
-    const blueW = this.blueBuffer.tail(windowSize);
+    // Copia zero-alloc de la cola de cada canal a scratch reutilizable (mismo
+    // patrón que calculatePeriodicity). Antes se asignaban 3 number[] por llamada
+    // (~15 Hz con dedo) vía tail() → GC churn que provoca jitter/frames perdidos.
+    const redW = this.acdcRedScratch;
+    const greenW = this.acdcGreenScratch;
+    const blueW = this.acdcBlueScratch;
+    this.redBuffer.copyTailInto(redW, windowSize);
+    this.greenBuffer.copyTailInto(greenW, windowSize);
+    this.blueBuffer.copyTailInto(blueW, windowSize);
 
-    this.redDC = redW.reduce((a, b) => a + b, 0) / redW.length;
-    this.greenDC = greenW.reduce((a, b) => a + b, 0) / greenW.length;
-    this.blueDC = blueW.reduce((a, b) => a + b, 0) / blueW.length;
+    // DC = media de la ventana. Suma en el MISMO orden (oldest→newest) que el
+    // tail()+reduce previo → resultado numéricamente idéntico, sin alocar.
+    let rSum = 0, gSum = 0, bSum = 0;
+    for (let i = 0; i < windowSize; i++) {
+      rSum += redW[i];
+      gSum += greenW[i];
+      bSum += blueW[i];
+    }
+    this.redDC = rSum / windowSize;
+    this.greenDC = gSum / windowSize;
+    this.blueDC = bSum / windowSize;
 
     if (this.redDC < 5 || this.greenDC < 5) return;
 
     const sortedScratch = this.sortedScratch;
-    const computeAC = (window: number[], dc: number) => {
+    // `n` se pasa explícito: el scratch mide ACDC_WINDOW, no windowSize. Usar
+    // window.length leería datos viejos del resto del buffer.
+    const computeAC = (window: Float32Array, n: number, dc: number): number => {
       let sumSq = 0;
-      const n = window.length;
       for (let i = 0; i < n; i++) {
         const d = window[i] - dc;
         sumSq += d * d;
@@ -1566,9 +1586,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       return (rms * Math.sqrt(2) + p2p * 0.5) / 2;
     };
 
-    this.redAC = computeAC(redW, this.redDC);
-    this.greenAC = computeAC(greenW, this.greenDC);
-    this.blueAC = computeAC(blueW, this.blueDC);
+    this.redAC = computeAC(redW, windowSize, this.redDC);
+    this.greenAC = computeAC(greenW, windowSize, this.greenDC);
+    this.blueAC = computeAC(blueW, windowSize, this.blueDC);
 
     const redPI = this.redAC / this.redDC;
     const greenPI = this.greenAC / this.greenDC;
