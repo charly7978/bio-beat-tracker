@@ -25,6 +25,8 @@
  *   - Zverev, "Handbook of Filter Synthesis" (1967) // anti-sim-allow: reason="Filter design handbook citation" ref="PR-123"
  *   - Williams & Taylor, "Electronic Filter Design Handbook" (4th ed.) Ch. 11
  */
+import { DSP_CONSTANTS } from '../../../config/signalProcessing';
+
 export class BesselFilter {
   // Coeficientes del filtro pasa-altos (2 biquads en cascada)
   private hpfB: number[][];
@@ -48,7 +50,7 @@ export class BesselFilter {
    * @param lowCutHz    Frecuencia de corte del HPF (default 0.5 Hz)
    * @param highCutHz   Frecuencia de corte del LPF (default 12 Hz)
    */
-  constructor(sampleRate = 30, lowCutHz = 0.5, highCutHz = 12.0) {
+  constructor(sampleRate = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE, lowCutHz = 0.5, highCutHz = 12.0) {
     this.sampleRate = sampleRate;
     this.lowCutHz = lowCutHz;
     this.highCutHz = highCutHz;
