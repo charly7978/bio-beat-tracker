@@ -50,7 +50,7 @@ export class BesselFilter {
    * @param lowCutHz    Frecuencia de corte del HPF (default 0.5 Hz)
    * @param highCutHz   Frecuencia de corte del LPF (default 12 Hz)
    */
-  constructor(sampleRate = 30, lowCutHz = 0.5, highCutHz = 12.0) {
+  constructor(sampleRate = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE, lowCutHz = 0.5, highCutHz = 12.0) {
     this.sampleRate = sampleRate;
     this.lowCutHz = lowCutHz;
     this.highCutHz = highCutHz;
