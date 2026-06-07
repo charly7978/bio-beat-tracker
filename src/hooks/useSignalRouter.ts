@@ -186,6 +186,17 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     vitalSignsRef.current = vitalSigns;
   }, [vitalSigns]);
 
+  // Cleanup: cancela cualquier timer pendiente al desmontar para evitar
+  // setBeatMarker sobre un componente desmontado.
+  useEffect(() => {
+    return () => {
+      if (beatMarkerTimerRef.current) {
+        window.clearTimeout(beatMarkerTimerRef.current);
+        beatMarkerTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const applyLiveDisplaySmooth = useCallback((vitals: VitalSignsResult): VitalSignsResult => {
     const hr = vitals.heartRate.value ?? 0;
     const spo2 = typeof vitals.spo2.value === "number" ? vitals.spo2.value : 0;
