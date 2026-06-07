@@ -209,7 +209,14 @@ export class VitalSignsProcessor {
       morphologyFiltered?: number;
       respirationFiltered?: number;
       arrhythmiaFiltered?: number;
-      spo2Channels?: { acRed: number; dcRed: number; acGreen: number; dcGreen: number };
+      spo2Channels?: {
+        acRed: number;
+        dcRed: number;
+        acGreen: number;
+        dcGreen: number;
+        acBlue?: number;
+        dcBlue?: number;
+      };
     },
     faceBvp?: number,
     faceBpm?: number,
@@ -263,16 +270,22 @@ export class VitalSignsProcessor {
 
     // Canal 2 (SpO2 AC/DC): si disponible, actualiza rgbData con los canales limpios del splitter
     if (splitterChannels?.spo2Channels) {
-      const { acRed, dcRed, acGreen, dcGreen } = splitterChannels.spo2Channels;
+      const { acRed, dcRed, acGreen, dcGreen, acBlue, dcBlue } = splitterChannels.spo2Channels;
       if (dcRed > 0 && dcGreen > 0) {
-        // RGBData usa redAC/redDC/greenAC/greenDC (no acRed/dcRed)
+        // RGBData usa redAC/redDC/greenAC/greenDC (no acRed/dcRed). El canal AZUL
+        // del splitter (banda 0.5–3.5 Hz limpia + DEMA-DC) es usado por SpO2Calculator
+        // para la PI azul y como referencia espectral — fuente única vs. el rgbData
+        // pre-existente (que venía de la cámara sin filtrar).
+        const hasBlue =
+          typeof acBlue === 'number' && Number.isFinite(acBlue) &&
+          typeof dcBlue === 'number' && Number.isFinite(dcBlue) && dcBlue > 0;
         this.rgbData = {
           redAC: acRed,
           redDC: dcRed,
           greenAC: acGreen,
           greenDC: dcGreen,
-          blueAC: this.rgbData.blueAC,
-          blueDC: this.rgbData.blueDC,
+          blueAC: hasBlue ? acBlue : this.rgbData.blueAC,
+          blueDC: hasBlue ? dcBlue : this.rgbData.blueDC,
         };
       }
     }

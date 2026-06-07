@@ -74,9 +74,10 @@ export interface Projector {
 // === Calibración de la cámara virtual ===========================================
 const Z_NEAR = 1;
 const Z_FAR = 5.2; // compresión de profundidad (mayor = horizonte más comprimido)
-const HORIZON_FRAC = 0.14; // horizonte más alto → piso (grilla) más grande
-const NEAR_MARGIN_PX = 52; // sitio para el tacograma + etiquetas de tiempo del eje
-const MAX_LIFT_FRAC = 0.55; // altura máx. de la onda como fracción del piso visible
+// Grilla más GRANDE: horizonte subido (más piso visible) y margen inferior menor.
+const HORIZON_FRAC = 0.08; // horizonte más alto → piso (grilla) más grande
+const NEAR_MARGIN_PX = 30; // sitio para el tacograma + etiquetas de tiempo del eje
+const MAX_LIFT_FRAC = 0.62; // altura máx. de la onda como fracción del piso visible
 // Banda de profundidad que ocupa la cinta de onda (grosor 3D real del trazo).
 const WAVE_D_FRONT = 0.05;
 const WAVE_D_BACK = 0.17;
@@ -161,7 +162,7 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   // Celda en unidades-mundo (= px en el borde cercano), MISMA medida en ancho (X)
   // y en profundidad (Z) → celdas cuadradas que se escorzan hacia el horizonte.
   // Menos columnas = celdas más grandes. Líneas mayores cada 5 (estilo papel ECG).
-  const TARGET_COLS = 9;
+  const TARGET_COLS = 7;
   const cellPx = proj.plotW / TARGET_COLS;
   const halfCols = Math.ceil(TARGET_COLS / 2);
   const halfX = halfCols * cellPx;
