@@ -25,6 +25,8 @@
  *   - Zverev, "Handbook of Filter Synthesis" (1967) // anti-sim-allow: reason="Filter design handbook citation" ref="PR-123"
  *   - Williams & Taylor, "Electronic Filter Design Handbook" (4th ed.) Ch. 11
  */
+import { DSP_CONSTANTS } from '../../../config/signalProcessing';
+
 export class BesselFilter {
   // Coeficientes del filtro pasa-altos (2 biquads en cascada)
   private hpfB: number[][];
