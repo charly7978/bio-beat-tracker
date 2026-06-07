@@ -80,6 +80,7 @@ import {
   type AdaptiveNotchState,
 } from './shared/AdaptiveNotch';
 import { clamp } from '../../utils/math';
+import { DSP_CONSTANTS } from '../../config/signalProcessing';
 
 // ─── Tipos de salida ──────────────────────────────────────────────────────────
 
