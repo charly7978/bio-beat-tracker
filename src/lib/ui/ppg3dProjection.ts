@@ -320,30 +320,23 @@ export function drawWaveRibbon3D(
     }
   }
 
-  // 1b) Sombra roja de arritmia extendida desde el piso hacia el fondo (horizonte).
+  // 1b) Rayos rojos de arritmia desde el piso hacia la fuga (punto de fuga vpX, horizonY).
   if (revealed) {
-    let s = 0;
-    while (s < n) {
-      if (!coords[s].isArr) { s++; continue; }
-      let e = s;
-      while (e < n && coords[e].isArr) e++;
-      // Área rellena en el piso: desde la posición de arritmia hacia zFar.
+    for (let i = 0; i < n; i++) {
+      if (!coords[i].isArr) continue;
+      const p = Pfloor[i];
+      const dx = proj.vpX - p.x;
+      const dy = proj.horizonY - p.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 1) continue;
+      const nx = dx / dist, ny = dy / dist;
+      const fade = Math.min(1, (p.y - proj.horizonY) / (proj.nearY - proj.horizonY));
       ctx.beginPath();
-      ctx.moveTo(Pfloor[s].x, Pfloor[s].y);
-      for (let i = s; i < e; i++) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
-      for (let i = e - 1; i >= s; i--) {
-        const u = uOf(coords[i]);
-        const far = proj.project(u, 1, 0);
-        ctx.lineTo(far.x, far.y);
-      }
-      ctx.closePath();
-      const grad = ctx.createLinearGradient(0, Pfloor[s].y, 0, proj.nearY);
-      grad.addColorStop(0, `rgba(${C.arr}, 0)`);
-      grad.addColorStop(0.5, `rgba(${C.arr}, 0.20)`);
-      grad.addColorStop(1, `rgba(${C.arr}, 0.35)`);
-      ctx.fillStyle = grad;
-      ctx.fill();
-      s = e;
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.x + nx * dist, p.y + ny * dist);
+      ctx.strokeStyle = `rgba(${C.arr}, ${(0.08 + 0.12 * fade).toFixed(3)})`;
+      ctx.lineWidth = 1.5 + 1.5 * fade;
+      ctx.stroke();
     }
   }
 
