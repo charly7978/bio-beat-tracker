@@ -162,7 +162,7 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   // Celda en unidades-mundo (= px en el borde cercano), MISMA medida en ancho (X)
   // y en profundidad (Z) → celdas cuadradas que se escorzan hacia el horizonte.
   // Menos columnas = celdas más grandes. Líneas mayores cada 5 (estilo papel ECG).
-  const TARGET_COLS = 7;
+  const TARGET_COLS = 11;
   const cellPx = proj.plotW / TARGET_COLS;
   const halfCols = Math.ceil(TARGET_COLS / 2);
   const halfX = halfCols * cellPx;
@@ -299,14 +299,52 @@ export function drawWaveRibbon3D(
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
 
-  // 1) Sombra/huella en el piso (sólo si la traza está revelada).
+  // 1) Sombra/huella en el piso segmentada por arritmia (normal=verde, arr=rojo).
   if (revealed) {
-    ctx.beginPath();
-    ctx.moveTo(Pfloor[0].x, Pfloor[0].y);
-    for (let i = 1; i < n; i++) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
-    ctx.strokeStyle = `rgba(${C.signal}, 0.12)`;
-    ctx.lineWidth = 6;
-    ctx.stroke();
+    let s = 0;
+    while (s < n - 1) {
+      const isArr = coords[s].isArr;
+      let e = s;
+      while (e < n - 1 && coords[e].isArr === isArr) e++;
+      const col = isArr ? C.arr : C.signal;
+      ctx.beginPath();
+      ctx.moveTo(Pfloor[s].x, Pfloor[s].y);
+      for (let i = s; i < e; i++) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
+      ctx.strokeStyle = `rgba(${col}, ${isArr ? 0.35 : 0.12})`;
+      ctx.lineWidth = isArr ? 8 : 6;
+      ctx.shadowColor = `rgba(${col}, ${isArr ? 0.30 : 0.05})`;
+      ctx.shadowBlur = isArr ? 12 : 0;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      s = e;
+    }
+  }
+
+  // 1b) Sombra roja de arritmia extendida desde el piso hacia el fondo (horizonte).
+  if (revealed) {
+    let s = 0;
+    while (s < n) {
+      if (!coords[s].isArr) { s++; continue; }
+      let e = s;
+      while (e < n && coords[e].isArr) e++;
+      // Área rellena en el piso: desde la posición de arritmia hacia zFar.
+      ctx.beginPath();
+      ctx.moveTo(Pfloor[s].x, Pfloor[s].y);
+      for (let i = s; i < e; i++) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
+      for (let i = e - 1; i >= s; i--) {
+        const u = uOf(coords[i]);
+        const far = proj.project(u, 1, 0);
+        ctx.lineTo(far.x, far.y);
+      }
+      ctx.closePath();
+      const grad = ctx.createLinearGradient(0, Pfloor[s].y, 0, proj.nearY);
+      grad.addColorStop(0, `rgba(${C.arr}, 0)`);
+      grad.addColorStop(0.5, `rgba(${C.arr}, 0.20)`);
+      grad.addColorStop(1, `rgba(${C.arr}, 0.35)`);
+      ctx.fillStyle = grad;
+      ctx.fill();
+      s = e;
+    }
   }
 
   // 2) Cara superior de la cinta (entre cresta frontal y trasera) → grosor 3D.
@@ -343,7 +381,7 @@ export function drawWaveRibbon3D(
     for (let i = s; i < e; i++) ctx.lineTo(Pf[i].x, Pf[i].y);
     for (let i = e - 1; i >= s; i--) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
     ctx.closePath();
-    ctx.fillStyle = `rgba(${C.arr}, 0.22)`;
+    ctx.fillStyle = `rgba(${C.arr}, 0.50)`;
     ctx.fill();
     s = e;
   }
