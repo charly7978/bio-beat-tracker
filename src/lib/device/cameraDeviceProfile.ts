@@ -1,9 +1,4 @@
-/**
- * Perfil de cámara en runtime.
- * TCL suele entregar flash + AE estables; el resto usa modo tolerante por defecto.
- */
 export interface CameraRuntimeHints {
-  /** false solo en TCL (u otra cámara “probada”) */
   constrained: boolean;
   tclLike: boolean;
   motorolaLike: boolean;
@@ -16,6 +11,12 @@ export interface CameraRuntimeHints {
   instantLostToNoContact: number;
   bufferResetAfterNoContact: number;
   gateRangeScale: number;
+  /** Factor de suavizado de exposición para optimizeForFinger (0-1). */
+  exposureTrackAlpha: number;
+  /** ISO base preferido con flash activo. */
+  torchIsoTarget: number;
+  /** Exposición compensación base con flash. */
+  torchExpComp: number;
 }
 
 const TCL_UA = /\bTCL\b|TCL[_\s-]|T671|6156|LE7|LF7/i;
@@ -38,6 +39,9 @@ const TOLERANT_DEFAULT: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 't
   instantLostToNoContact: 48,
   bufferResetAfterNoContact: 80,
   gateRangeScale: 0.65,
+  exposureTrackAlpha: 0.15,
+  torchIsoTarget: 140,
+  torchExpComp: -0.35,
 };
 
 const STRICT_TCL: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 'torchReliable' | 'constrained'> = {
@@ -49,6 +53,9 @@ const STRICT_TCL: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 'torchRe
   instantLostToNoContact: 6,
   bufferResetAfterNoContact: 8,
   gateRangeScale: 0.85,
+  exposureTrackAlpha: 0.25,
+  torchIsoTarget: 100,
+  torchExpComp: -0.5,
 };
 
 export function inferCameraRuntimeHints(
@@ -79,11 +86,20 @@ export function inferCameraRuntimeHints(
     };
   }
 
+  const iso = typeof cameraDiag?.iso === 'number' ? cameraDiag.iso as number : 0;
+  const expComp = typeof cameraDiag?.exposureCompensation === 'number' ? cameraDiag.exposureCompensation as number : 0;
+
   return {
     constrained,
     tclLike,
     motorolaLike,
     torchReliable,
     ...profile,
+    torchIsoTarget: iso > 0 ? Math.round(clampValue(iso * 1.0, 50, 800)) : profile.torchIsoTarget,
+    torchExpComp: expComp !== 0 ? clampValue(expComp - 0.3, -2, 2) : profile.torchExpComp,
   };
+}
+
+function clampValue(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
 }

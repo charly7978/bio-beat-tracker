@@ -9,12 +9,6 @@ const log = createLogger("CameraView");
 export interface CameraViewHandle {
   getVideoElement: () => HTMLVideoElement | null;
   getDiagnostics: () => Record<string, unknown>;
-  /**
-   * Optimiza ACTIVAMENTE el hardware para el dedo ya colocado: bloquea foco cercano
-   * y balance de blancos (anti-deriva), y AJUSTA la exposición/ISO según el nivel
-   * REAL del rojo medido (`redLevel` 0–255) hacia la ventana óptima (sin saturar ni
-   * quedar oscuro). Una sola vez en STABLE_CONTACT (timing seguro vs deriva del AE).
-   */
   optimizeForFinger: (redLevel: number) => void;
 }
 
@@ -35,17 +29,31 @@ type AdvancedConstraint = MediaTrackConstraintSet & {
   focusMode?: string;
   focusDistance?: number;
   frameRate?: number;
+  colorTemperature?: number;
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+  sharpness?: number;
+  pan?: number;
+  tilt?: number;
+  zoom?: number;
 };
 type ExtendedCapabilities = MediaTrackCapabilities & {
   torch?: boolean;
   exposureMode?: string[];
-  exposureCompensation?: { min?: number; max?: number };
+  exposureCompensation?: { min?: number; max?: number; step?: number };
   exposureTime?: { min?: number; max?: number };
   whiteBalanceMode?: string[];
-  iso?: { min?: number; max?: number };
+  colorTemperature?: { min?: number; max?: number };
+  iso?: { min?: number; max?: number; step?: number };
   focusMode?: string[];
   focusDistance?: { min?: number; max?: number };
   frameRate?: { min?: number; max?: number };
+  brightness?: { min?: number; max?: number };
+  contrast?: { min?: number; max?: number };
+  saturation?: { min?: number; max?: number };
+  sharpness?: { min?: number; max?: number };
+  zoom?: { min?: number; max?: number };
 };
 type ExtendedSettings = MediaTrackSettings & {
   torch?: boolean;
@@ -55,6 +63,16 @@ type ExtendedSettings = MediaTrackSettings & {
   iso?: number;
   exposureCompensation?: number;
   exposureTime?: number;
+  colorTemperature?: number;
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+  sharpness?: number;
+  deviceId?: string;
+  groupId?: string;
+  pan?: number;
+  tilt?: number;
+  zoom?: number;
 };
 
 async function requestCameraPermission(): Promise<boolean> {
@@ -62,10 +80,10 @@ async function requestCameraPermission(): Promise<boolean> {
   try {
     const result = await Camera.requestPermissions({ permissions: ['camera'] });
     const granted = result.camera === 'granted';
-    if (!granted) log.warn("Permiso de cámara denegado por el usuario en diálogo nativo");
+    if (!granted) log.warn("Camera permission denied");
     return granted;
   } catch (err) {
-    log.error("Error al solicitar permiso nativo de cámara", err);
+    log.error("Camera permission request failed", err);
     return false;
   }
 }
@@ -90,99 +108,155 @@ function classifyCameraError(err: unknown): CameraErrorType {
   return 'unknown';
 }
 
-async function stabilizeTrack(track: MediaStreamTrack): Promise<void> {
-  const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
-  const constraints: AdvancedConstraint[] = [];
+const whiteBalancePriority = ['manual', 'continuous', 'none'] as const;
+const exposurePriority = ['manual', 'continuous', 'none'] as const;
+const focusPriority = ['manual', 'continuous', 'none'] as const;
 
-  if (caps.frameRate) {
-    const maxFps = caps.frameRate.max ?? 30;
-    const targetFps = Math.min(30, maxFps);
-    constraints.push({ frameRate: targetFps });
+function pickBestMode(
+  supported: string[] | undefined,
+  priority: readonly string[],
+): string | null {
+  if (!supported || supported.length === 0) return null;
+  for (const mode of priority) {
+    if (supported.includes(mode)) return mode;
   }
+  return supported[0] ?? null;
+}
 
-  // Exposición y WB en CONTINUO durante la COLOCACIÓN del dedo: el AE/AWB deben
-  // ADAPTARSE al dedo que baja, no congelarse sobre la escena vacía (flash sin
-  // dedo). El bloqueo anti-deriva se DIFIERE a optimizeForFinger(), que congela
-  // exposición/WB ya sobre la escena REAL del dedo en STABLE_CONTACT (ver doc de
-  // optimizeForFinger). Congelar acá la escena vacía retrasaba la convergencia
-  // (~25-30 s) porque el frame del dedo quedaba mal expuesto hasta STABLE_CONTACT.
-  if (caps.exposureMode?.includes("continuous")) {
-    constraints.push({ exposureMode: "continuous" });
-  }
-
-  if (caps.whiteBalanceMode?.includes("continuous")) {
-    constraints.push({ whiteBalanceMode: "continuous" });
-  }
-
-  // Foco cercano fijo desde el inicio: el dedo siempre está pegado al lente, así
-  // que el foco manual a mínima distancia es estable y correcto (no introduce
-  // deriva ni "hunting"). Es lo único que conviene fijar antes del dedo.
-  if (caps.focusMode?.includes("manual")) {
-    constraints.push({ focusMode: "manual", focusDistance: 0 });
-  } else if (caps.focusMode?.includes("continuous")) {
-    constraints.push({ focusMode: "continuous" });
-  }
-
-  if (constraints.length > 0) {
+async function applyAdvanced(track: MediaStreamTrack, constraints: AdvancedConstraint[]): Promise<void> {
+  if (constraints.length === 0) return;
+  try {
+    await track.applyConstraints({ advanced: constraints });
+  } catch {
+    const flat: MediaTrackConstraintSet = {};
+    for (const c of constraints) Object.assign(flat, c);
     try {
-      await track.applyConstraints({ advanced: constraints });
-    } catch (e) {
-      log.warn("No se pudieron estabilizar parámetros de cámara", e);
+      await track.applyConstraints(flat);
+    } catch {
+      // best-effort
     }
   }
 }
 
-async function applyTorchDependentParams(track: MediaStreamTrack, torchOn: boolean): Promise<void> {
-  const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
-  const constraints: AdvancedConstraint[] = [];
+const DEFAULT_TARGET_RED = 180;
+const RED_TARGET_MIN = 150;
+const RED_TARGET_MAX = 200;
+const RED_SATURATION = 252;
 
-  if (torchOn) {
-    if (caps.iso) {
-      const minISO = caps.iso.min ?? 50;
-      const maxISO = caps.iso.max ?? 400;
-      const targetISO = Math.max(minISO, Math.min(maxISO, 140));
-      constraints.push({ iso: targetISO });
-    }
-    if (caps.exposureCompensation) {
-      const minExp = caps.exposureCompensation.min ?? -2;
-      const maxExp = caps.exposureCompensation.max ?? 2;
-      const targetExp = Math.max(minExp, Math.min(maxExp, -0.35));
-      constraints.push({ exposureCompensation: targetExp });
-    }
-  } else {
-    if (caps.iso) {
-      const minISO = caps.iso.min ?? 50;
-      const maxISO = caps.iso.max ?? 800;
-      const targetISO = Math.max(minISO, Math.min(maxISO, 400));
-      constraints.push({ iso: targetISO });
-    }
-    if (caps.exposureCompensation) {
-      const minExp = caps.exposureCompensation.min ?? -2;
-      const maxExp = caps.exposureCompensation.max ?? 2;
-      const targetExp = Math.max(minExp, Math.min(maxExp, 0));
-      constraints.push({ exposureCompensation: targetExp });
+async function stabilizeTrack(track: MediaStreamTrack): Promise<void> {
+  const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
+
+  const wbMode = pickBestMode(caps.whiteBalanceMode, whiteBalancePriority);
+  const expMode = pickBestMode(caps.exposureMode, exposurePriority);
+  const focMode = pickBestMode(caps.focusMode, focusPriority);
+
+  const env: AdvancedConstraint = {};
+
+  if (caps.frameRate) {
+    const maxFps = caps.frameRate.max ?? 30;
+    env.frameRate = Math.min(30, maxFps);
+  }
+
+  if (focMode === 'manual' && typeof caps.focusDistance?.min === 'number') {
+    env.focusMode = 'manual';
+    env.focusDistance = caps.focusDistance.min;
+  } else if (focMode === 'continuous') {
+    env.focusMode = 'continuous';
+  }
+
+  if (expMode === 'continuous') {
+    env.exposureMode = 'continuous';
+  } else if (expMode === 'manual' && caps.iso) {
+    const minI = caps.iso.min ?? 50;
+    const maxI = caps.iso.max ?? 800;
+    env.iso = Math.round(Math.max(minI, Math.min(maxI, 160)));
+    if (caps.exposureTime) {
+      env.exposureTime = Math.round(
+        Math.max(caps.exposureTime.min ?? 1000, Math.min(caps.exposureTime.max ?? 100000, 16666)),
+      );
     }
   }
 
-  if (constraints.length > 0) {
-    try {
-      await track.applyConstraints({ advanced: constraints });
-    } catch (e) {
-      log.warn("No se pudieron aplicar parámetros post-torch", e);
+  if (wbMode === 'continuous') {
+    env.whiteBalanceMode = 'continuous';
+  }
+
+  await applyAdvanced(track, [env]);
+}
+
+async function configureForTorch(track: MediaStreamTrack, torchOn: boolean): Promise<void> {
+  const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
+  const c: AdvancedConstraint[] = [];
+
+  if (torchOn) {
+    if (caps.iso) {
+      const base = caps.iso.min ?? 50;
+      const cap = caps.iso.max ?? 800;
+      c.push({ iso: Math.round(Math.max(base, Math.min(cap, 120))) });
     }
+    if (caps.exposureCompensation) {
+      const lo = caps.exposureCompensation.min ?? -2;
+      const hi = caps.exposureCompensation.max ?? 2;
+      c.push({ exposureCompensation: Math.max(lo, Math.min(hi, -0.35)) });
+    }
+    if (caps.exposureTime && typeof caps.exposureTime.max === 'number') {
+      const etLo = caps.exposureTime.min ?? 1000;
+      const etHi = caps.exposureTime.max ?? 100000;
+      c.push({ exposureTime: Math.round(Math.max(etLo, Math.min(etHi, 20000))) });
+    }
+  } else {
+    if (caps.iso) {
+      const base = caps.iso.min ?? 50;
+      const cap = caps.iso.max ?? 800;
+      c.push({ iso: Math.round(Math.max(base, Math.min(cap, 400))) });
+    }
+    if (caps.exposureCompensation) {
+      const lo = caps.exposureCompensation.min ?? -2;
+      const hi = caps.exposureCompensation.max ?? 2;
+      c.push({ exposureCompensation: Math.max(lo, Math.min(hi, 0)) });
+    }
+  }
+
+  await applyAdvanced(track, c);
+}
+
+async function activateTorch(track: MediaStreamTrack): Promise<boolean> {
+  const attempts: MediaTrackConstraints[] = [
+    { advanced: [{ torch: true } as TorchCapableConstraint] },
+    { torch: true } as TorchCapableConstraint,
+    { advanced: [{ torch: 'on' }] },
+    { advanced: [{ torchMode: 'torch' }] },
+  ];
+  for (const constraints of attempts) {
+    try {
+      await track.applyConstraints(constraints);
+      const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
+      if (settings.torch === true) return true;
+    } catch {
+      // try next
+    }
+  }
+  try {
+    await track.applyConstraints({ advanced: [{ torch: true } as TorchCapableConstraint] });
+    await new Promise(r => setTimeout(r, 300));
+    const s = (track.getSettings?.() ?? {}) as ExtendedSettings;
+    if (s.torch === true) return true;
+    return true;
+  } catch {
+    log.warn("Torch not available");
+    return false;
   }
 }
 
 const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
-  { onStreamReady, isMonitoring},
-  ref
+  { onStreamReady, isMonitoring },
+  ref,
 ) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-
   const streamRef = useRef<MediaStream | null>(null);
-
   const isStartingRef = useRef(false);
-
+  const torchActiveRef = useRef(false);
+  const fingerOptimizedRef = useRef(false);
 
   useImperativeHandle(ref, () => ({
     getVideoElement: () => videoRef.current,
@@ -193,13 +267,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
         const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
         const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
         let applied: MediaTrackConstraints | undefined;
-        const torchVerified = settings.torch === true;
-        try {
-          applied = track.getConstraints?.();
-        } catch {
-          log.debug('getConstraints not available');
-          applied = undefined;
-        }
+        try { applied = track.getConstraints?.(); } catch { applied = undefined; }
         return {
           active: true,
           label: track.label,
@@ -208,17 +276,28 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           userAgent: navigator.userAgent,
           supportedConstraints: Object.keys(navigator.mediaDevices.getSupportedConstraints()),
           capabilities: caps,
-          settings: settings,
+          settings,
           appliedConstraints: applied,
           torchSupported: !!caps.torch,
           torchActive: settings.torch === true,
-          torchApplyVerified: torchVerified,
+          torchApplyVerified: settings.torch === true,
           fpsRequested: 30,
           fpsEffective: settings.frameRate || 0,
           resolution: { width: settings.width || 0, height: settings.height || 0 },
           exposureMode: settings.exposureMode,
+          exposureCompensation: settings.exposureCompensation,
+          exposureTime: settings.exposureTime,
           whiteBalanceMode: settings.whiteBalanceMode,
+          colorTemperature: settings.colorTemperature,
           focusMode: settings.focusMode,
+          iso: settings.iso,
+          brightness: settings.brightness,
+          contrast: settings.contrast,
+          saturation: settings.saturation,
+          sharpness: settings.sharpness,
+          zoom: settings.zoom,
+          deviceId: settings.deviceId,
+          fingerOptimized: fingerOptimizedRef.current,
         };
       } catch {
         log.warn('Camera diagnostics failed');
@@ -228,6 +307,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
     optimizeForFinger: (redLevel: number) => {
       const track = streamRef.current?.getVideoTracks?.()[0];
       if (!track) return;
+      fingerOptimizedRef.current = true;
       void (async () => {
         try {
           const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
@@ -235,16 +315,22 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           const constraints: AdvancedConstraint[] = [];
 
           if (caps.focusMode?.includes("manual")) {
-            const near = typeof caps.focusDistance?.min === "number" ? caps.focusDistance.min : 0;
-            constraints.push({ focusMode: "manual", focusDistance: near });
+            constraints.push({ focusMode: "manual", focusDistance: caps.focusDistance?.min ?? 0 });
           }
+
           if (caps.whiteBalanceMode?.includes("manual")) {
             constraints.push({ whiteBalanceMode: "manual" });
+            if (caps.colorTemperature) {
+              const ct = Math.round(
+                Math.max(caps.colorTemperature.min ?? 2500, Math.min(caps.colorTemperature.max ?? 8000, 6600)),
+              );
+              constraints.push({ colorTemperature: ct });
+            }
           }
+
           if (caps.exposureMode?.includes("manual") && redLevel > 0) {
             constraints.push({ exposureMode: "manual" });
-            const TARGET = 180;
-            const ratio = clamp(TARGET / redLevel, 0.45, 2.2);
+            const ratio = clamp(RED_TARGET_MAX / redLevel, 0.45, 2.2);
             if (caps.iso && typeof caps.iso.max === "number") {
               const isoMin = caps.iso.min ?? 25;
               const isoMax = caps.iso.max ?? 800;
@@ -258,18 +344,15 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
                 exposureCompensation: clamp(curEv + clamp(Math.log2(ratio), -1, 1), evMin, evMax),
               });
             } else if (caps.exposureTime && typeof settings.exposureTime === "number") {
-              const etMin = caps.exposureTime.min ?? settings.exposureTime;
-              const etMax = caps.exposureTime.max ?? settings.exposureTime;
-              constraints.push({ exposureTime: clamp(settings.exposureTime * ratio, etMin, etMax) });
+              const etMin = caps.exposureTime.min ?? 1000;
+              const etMax = caps.exposureTime.max ?? 100000;
+              constraints.push({ exposureTime: clamp(Math.round(settings.exposureTime * ratio), etMin, etMax) });
             }
           }
 
-          if (constraints.length > 0) {
-            await track.applyConstraints({ advanced: constraints });
-            log.info(`Cámara optimizada al dedo (red=${redLevel.toFixed(0)}, ${constraints.length} ajustes)`);
-          }
+          await applyAdvanced(track, constraints);
         } catch (e) {
-          log.warn("optimizeForFinger falló (best-effort)", e);
+          log.warn("optimizeForFinger best-effort", e);
         }
       })();
     },
@@ -282,52 +365,24 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
       const stream = streamRef.current;
       if (stream) {
         for (const track of stream.getVideoTracks()) {
-          try {
-            await track.applyConstraints({
-              advanced: [{ torch: false } as TorchCapableConstraint],
-            });
-          } catch { log.debug('Torch off (advanced) failed — trying direct'); }
-          try {
-            await track.applyConstraints({ torch: false } as MediaTrackConstraints);
-          } catch { log.debug('Torch off (direct) failed — expected if unsupported'); }
+          try { await track.applyConstraints({ advanced: [{ torch: false } as TorchCapableConstraint] }); } catch { /* ignore */ }
+          try { await track.applyConstraints({ torch: false } as MediaTrackConstraints); } catch { /* ignore */ }
           track.stop();
         }
         streamRef.current = null;
       }
       if (videoRef.current) videoRef.current.srcObject = null;
-
+      torchActiveRef.current = false;
+      fingerOptimizedRef.current = false;
       isStartingRef.current = false;
-    };
-
-    const activateTorch = async (track: MediaStreamTrack): Promise<boolean> => {
-      const attempts = [
-        { advanced: [{ torch: true } as TorchCapableConstraint] },
-        { torch: true } as TorchCapableConstraint,
-        { advanced: [{ torch: 'on' }] },
-        { advanced: [{ torchMode: 'torch' }] },
-      ] as MediaTrackConstraints[];
-      for (const constraints of attempts) {
-        try {
-          await track.applyConstraints(constraints);
-          const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
-          if (settings.torch === true) return true;
-        } catch { log.debug('Torch attempt failed — trying next syntax'); }
-      }
-      // Último intento: sin verificar settings, confiar en que applyConstraints funcionó
-      try {
-        await track.applyConstraints({ advanced: [{ torch: true } as TorchCapableConstraint] });
-        return true;
-      } catch { log.debug('Torch not available on this device'); }
-      log.warn("Torch no disponible en este dispositivo");
-      return false;
     };
 
     const waitForVideo = (video: HTMLVideoElement): Promise<void> => {
       return new Promise(resolve => {
         if (video.readyState >= 2 && video.videoWidth > 0) { resolve(); return; }
-        const onMeta = async () => {
+        const onMeta = () => {
           video.removeEventListener("loadedmetadata", onMeta);
-          try { await video.play(); } catch { log.debug('Video play() rejected (autoplay policy)'); }
+          video.play().catch(() => {});
           resolve();
         };
         video.addEventListener("loadedmetadata", onMeta);
@@ -341,96 +396,104 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
       await stopCamera();
       if (!mountedRef.current) { isStartingRef.current = false; return; }
 
-      // 1. Solicitar permiso nativo en APK antes de getUserMedia
       const permitted = await requestCameraPermission();
       if (!permitted) {
-        log.error("Permiso de cámara denegado");
         window.dispatchEvent(new CustomEvent('camera-error', {
-          detail: { type: 'permission_denied', message: 'Permiso de cámara denegado' },
+          detail: { type: 'permission_denied', message: 'Camera permission denied' },
         }));
         isStartingRef.current = false;
         return;
       }
 
-      try {
-        // 2. Cámara Trasera (Dedo + PPG)
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 640, max: 960 },
-            height: { ideal: 480, max: 720 },
-            frameRate: { ideal: 30, min: 15, max: 30 },
-          },
-        });
+      // Constraint tiers — most specific first, fall back progressively
+      const tiers: MediaStreamConstraints['video'][] = [
+        {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 640, max: 960 },
+          height: { ideal: 480, max: 720 },
+          frameRate: { ideal: 30, min: 20, max: 30 },
+        },
+        {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 320, max: 640 },
+          height: { ideal: 240, max: 480 },
+          frameRate: { ideal: 30, min: 15, max: 30 },
+        },
+        {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280, max: 1920 },
+          height: { ideal: 720, max: 1080 },
+          frameRate: { ideal: 30, min: 15, max: 30 },
+        },
+        {
+          facingMode: { ideal: "environment" },
+          frameRate: { ideal: 30, min: 10 },
+        },
+        {
+          facingMode: { ideal: "environment" },
+        },
+      ];
 
-        if (!mountedRef.current) {
-          stream.getTracks().forEach(t => t.stop());
-          isStartingRef.current = false;
-          return;
+      let stream: MediaStream | null = null;
+      let lastError: unknown = null;
+
+      for (const video of tiers) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: false, video });
+          break;
+        } catch (err) {
+          lastError = err;
+          stream = null;
         }
-
-        streamRef.current = stream;
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await waitForVideo(videoRef.current);
-        }
-
-        const track = stream.getVideoTracks()[0];
-        if (track) {
-          await stabilizeTrack(track);
-          let torchOn = await activateTorch(track);
-          if (!torchOn) {
-            await new Promise(r => setTimeout(r, 400));
-            torchOn = await activateTorch(track);
-          }
-          if (torchOn) log.info("Flash activado");
-          else log.warn("Flash no confirmado — se usará perfil de cámara tolerante");
-          await applyTorchDependentParams(track, torchOn);
-        }
-
-        log.info(`Cámara trasera lista ${videoRef.current?.videoWidth ?? "?"}x${videoRef.current?.videoHeight ?? "?"}`);
-
-        onStreamReady?.(stream);
-
-
-      } catch (err) {
-        const errType = classifyCameraError(err);
-        log.error(`Error al inicializar cámara trasera (${errType})`, err);
-
-        // Reintentar con constraints relajados si es OverconstrainedError
-        if (errType === 'overconstrained' && mountedRef.current) {
-          log.warn("Reintentando con constraints relajados...");
-          try {
-            const fallbackStream = await navigator.mediaDevices.getUserMedia({
-              audio: false,
-              video: { facingMode: { ideal: "environment" } },
-            });
-            if (mountedRef.current) {
-              streamRef.current = fallbackStream;
-              if (videoRef.current) {
-                videoRef.current.srcObject = fallbackStream;
-                await waitForVideo(videoRef.current);
-              }
-              const track = fallbackStream.getVideoTracks()[0];
-              if (track) await stabilizeTrack(track);
-              log.info("Cámara iniciada con constraints relajados");
-              onStreamReady?.(fallbackStream);
-              isStartingRef.current = false;
-              return;
-            }
-          } catch (fallbackErr) {
-            log.error("Reintento con constraints relajados también falló", fallbackErr);
-          }
-        }
-
-        window.dispatchEvent(new CustomEvent('camera-error', {
-          detail: { type: errType, message: (err as Error)?.message || 'Error desconocido' },
-        }));
-      } finally {
-        isStartingRef.current = false;
       }
+
+      if (!stream) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      if (!stream) {
+        const errType = classifyCameraError(lastError);
+        log.error("Could not start camera", lastError);
+        window.dispatchEvent(new CustomEvent('camera-error', {
+          detail: { type: errType, message: 'All constraint tiers failed' },
+        }));
+        isStartingRef.current = false;
+        return;
+      }
+
+      if (!mountedRef.current) {
+        stream.getTracks().forEach(t => t.stop());
+        isStartingRef.current = false;
+        return;
+      }
+
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await waitForVideo(videoRef.current);
+      }
+
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        await stabilizeTrack(track);
+        let torchOn = await activateTorch(track);
+        if (!torchOn) {
+          await new Promise(r => setTimeout(r, 500));
+          torchOn = await activateTorch(track);
+        }
+        torchActiveRef.current = torchOn;
+        if (torchOn) {
+          await configureForTorch(track, true);
+        }
+      }
+
+      onStreamReady?.(stream);
+      isStartingRef.current = false;
     };
 
     if (isMonitoring) {
@@ -446,25 +509,22 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
   }, [isMonitoring, onStreamReady]);
 
   return (
-    <>
-      {/* Cámara trasera principal (fondo completo) */}
-      <video
-        ref={videoRef}
-        playsInline
-        muted
-        autoPlay
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          objectFit: "cover",
-          imageRendering: "pixelated",
-          opacity: 1,
-          pointerEvents: "none",
-        }}
-      />
-    </>
+    <video
+      ref={videoRef}
+      playsInline
+      muted
+      autoPlay
+      style={{
+        position: "absolute",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        objectFit: "cover",
+        imageRendering: "pixelated",
+        opacity: 1,
+        pointerEvents: "none",
+      }}
+    />
   );
 });
 
