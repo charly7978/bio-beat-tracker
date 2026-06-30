@@ -12,7 +12,7 @@
 import type { PeakDetectionResult } from '@/types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '@/config/signalProcessing';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import { rrMedianMs, scorePeakCandidate } from './peakScoring';
+import { rrMedianMs, scorePeakCandidate, PEAK_SCORE_THRESHOLDS } from './peakScoring';
 
 export interface PeakEmitDecision {
   emit: boolean;
@@ -102,6 +102,10 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     const weightedScore =
       ens.peakScores?.[i] ??
       scorePeakCandidate({ elConf, ensConf: ens.confidence, sqi, perfusionIndex });
+
+    // Enforce minimum score threshold to eliminate false positives from noise/distortion
+    const minScoreReq = stallReacquire ? PEAK_SCORE_THRESHOLDS.minScore * 0.8 : PEAK_SCORE_THRESHOLDS.minScore;
+    if (weightedScore < minScoreReq) continue;
 
     // Emite el pico genuino más reciente fuera del refractario.
     if (bestT === 0 || t > bestT || (t === bestT && weightedScore > bestScore)) {
