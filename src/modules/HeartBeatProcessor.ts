@@ -155,6 +155,17 @@ export class HeartBeatProcessor {
       // ventana se ensanche desde el ARRANQUE a baja frecuencia (no solo al sostener).
       medRr = 60000 / this.cachedPeriodicity.bpm;
     }
+
+    if (this.smoothBPM > 0) {
+      const stableRr = 60000 / this.smoothBPM;
+      if (medRr > 0) {
+        // Prevents adaptive window length from collapsing under noise transients
+        medRr = clamp(medRr, stableRr * 0.8, stableRr * 1.2);
+      } else {
+        medRr = stableRr;
+      }
+    }
+
     if (medRr <= 0) return PEAK_DETECTION_DEFAULTS.beatWindowMs;
     return clamp(
       medRr * PEAK_DETECTION_DEFAULTS.beatWindowRrFactor,
@@ -286,6 +297,7 @@ export class HeartBeatProcessor {
         recentRrMs: this.rrIntervals,
         sqi: ensSqi,
         perfusionIndex: this.ppgPerfusionIndex,
+        stableBpm: this.smoothBPM,
       });
 
       // Gate de movimiento: durante movimiento claro (IMU) la señal está

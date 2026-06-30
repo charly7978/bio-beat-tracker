@@ -13,6 +13,7 @@ import type { PeakDetectionResult } from '@/types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '@/config/signalProcessing';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import { rrMedianMs, scorePeakCandidate, PEAK_SCORE_THRESHOLDS } from './peakScoring';
+import { clamp } from '@/utils/math';
 
 export interface PeakEmitDecision {
   emit: boolean;
@@ -37,6 +38,7 @@ export interface PeakEmitPolicyInput {
   recentRrMs?: number[];
   sqi?: number;
   perfusionIndex?: number;
+  stableBpm?: number;
 }
 
 export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
@@ -53,6 +55,7 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     recentRrMs = [],
     sqi = 0,
     perfusionIndex = 0,
+    stableBpm = 0,
   } = input;
 
   const stallReacquire =
@@ -69,7 +72,17 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
 
   // Guard "latido imposiblemente temprano" (anti-dícrota a HR baja / doble conteo):
   // sólo por el lado bajo del RR → no recorta HR altas ni bloquea arritmias.
-  const prevRrMed = rrMedianMs(recentRrMs);
+  let prevRrMed = rrMedianMs(recentRrMs);
+  if (stableBpm > 0) {
+    const stableRr = 60000 / stableBpm;
+    if (prevRrMed > 0) {
+      // Anchoring prevRrMed: prevents noise and artifacts from pulling the median RR
+      // down into high-frequency loop cascades. Allows up to 20% physiological deviation.
+      prevRrMed = clamp(prevRrMed, stableRr * 0.8, stableRr * 1.2);
+    } else {
+      prevRrMed = stableRr;
+    }
+  }
   const minRrAbs =
     prevRrMed > 0 ? prevRrMed * PEAK_DETECTION_DEFAULTS.peakEmitMinRrFrac : 0;
 
