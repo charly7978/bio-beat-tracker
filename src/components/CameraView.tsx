@@ -218,26 +218,23 @@ async function configureForTorch(track: MediaStreamTrack, torchOn: boolean): Pro
 }
 
 async function activateTorch(track: MediaStreamTrack): Promise<boolean> {
+  const torchTrue = [{ torch: true } as TorchCapableConstraint];
   const attempts: MediaTrackConstraints[] = [
-    { advanced: [{ torch: true } as TorchCapableConstraint] },
+    { advanced: torchTrue },
     { torch: true } as TorchCapableConstraint,
-    { advanced: [{ torch: 'on' }] },
-    { advanced: [{ torchMode: 'torch' }] },
   ];
   for (const constraints of attempts) {
     try {
       await track.applyConstraints(constraints);
-      const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
-      if (settings.torch === true) return true;
+      const s = (track.getSettings?.() ?? {}) as ExtendedSettings;
+      if (s.torch === true) return true;
     } catch {
-      // try next
+      // try next syntax
     }
   }
   try {
-    await track.applyConstraints({ advanced: [{ torch: true } as TorchCapableConstraint] });
+    await track.applyConstraints({ advanced: torchTrue });
     await new Promise(r => setTimeout(r, 300));
-    const s = (track.getSettings?.() ?? {}) as ExtendedSettings;
-    if (s.torch === true) return true;
     return true;
   } catch {
     log.warn("Torch not available");
