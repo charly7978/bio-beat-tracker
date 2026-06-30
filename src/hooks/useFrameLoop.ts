@@ -35,6 +35,7 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
   const lastFrameSigRef = useRef<number>(-1);
   const duplicateStreakRef = useRef<number>(0);
   const lastRafTsRef = useRef<number>(0);
+  const loopIdRef = useRef<number>(0);
 
   const startFrameLoop = useCallback(() => {
     if (isProcessingRef.current) return;
@@ -46,8 +47,11 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
     duplicateStreakRef.current = 0;
     lastRafTsRef.current = 0;
 
+    loopIdRef.current += 1;
+    const currentLoopId = loopIdRef.current;
+
     const captureOneFrame = (frameTimestampMs?: number) => {
-      if (!isProcessingRef.current) return;
+      if (!isProcessingRef.current || loopIdRef.current !== currentLoopId) return;
       const video = cameraRef.current?.getVideoElement();
       if (!video || video.readyState < 2 || video.videoWidth === 0) {
         frameLoopRef.current = requestAnimationFrame(captureOneFrame);
@@ -72,12 +76,13 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
     };
 
     const scheduleNext = (video: HTMLVideoElement) => {
-      if (!isProcessingRef.current) return;
+      if (!isProcessingRef.current || loopIdRef.current !== currentLoopId) return;
       const vAny = video as HTMLVideoElement & {
         requestVideoFrameCallback?: (cb: (now: number, metadata: VideoFrameCallbackMetadata) => void) => number;
       };
       if (typeof vAny.requestVideoFrameCallback === 'function') {
         videoFrameLoopRef.current = vAny.requestVideoFrameCallback((now, metadata) => {
+          if (loopIdRef.current !== currentLoopId) return;
           ppgPerf.markFrame(metadata);
           const ts =
             typeof now === 'number' && Number.isFinite(now)
@@ -87,7 +92,7 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
         });
       } else {
         const tick = (ts: number) => {
-          if (!isProcessingRef.current) return;
+          if (!isProcessingRef.current || loopIdRef.current !== currentLoopId) return;
           if (ts - lastRafTsRef.current < 28) {
             frameLoopRef.current = requestAnimationFrame(tick);
             return;
@@ -105,6 +110,7 @@ export function useFrameLoop({ cameraRef, canvasRef, ctxRef, processFrame }: Use
 
   const stopFrameLoop = useCallback(() => {
     isProcessingRef.current = false;
+    loopIdRef.current += 1; // Invalidate any pending callbacks immediately upon stopping
     const video = cameraRef.current?.getVideoElement() as (HTMLVideoElement & { cancelVideoFrameCallback?: (handle: number) => void }) | null;
     if (videoFrameLoopRef.current !== null && typeof video?.cancelVideoFrameCallback === 'function') {
       video.cancelVideoFrameCallback(videoFrameLoopRef.current);
