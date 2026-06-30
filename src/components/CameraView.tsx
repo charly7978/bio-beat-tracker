@@ -138,10 +138,7 @@ async function applyAdvanced(track: MediaStreamTrack, constraints: AdvancedConst
   }
 }
 
-const DEFAULT_TARGET_RED = 180;
-const RED_TARGET_MIN = 150;
 const RED_TARGET_MAX = 200;
-const RED_SATURATION = 252;
 
 async function stabilizeTrack(track: MediaStreamTrack): Promise<void> {
   const caps = (track.getCapabilities?.() ?? {}) as ExtendedCapabilities;
@@ -382,7 +379,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
         if (video.readyState >= 2 && video.videoWidth > 0) { resolve(); return; }
         const onMeta = () => {
           video.removeEventListener("loadedmetadata", onMeta);
-          video.play().catch(() => {});
+          video.play().catch(() => undefined);
           resolve();
         };
         video.addEventListener("loadedmetadata", onMeta);
