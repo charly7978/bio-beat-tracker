@@ -16,7 +16,6 @@ import {
   drawBackground,
   drawHeader,
   drawMetricsBar,
-  drawECGGrid,
   drawPressureGauge,
   drawSignal,
   drawAcquisitionOverlay,
@@ -24,11 +23,9 @@ import {
   drawFooter,
 } from '@/lib/ui/ppgCanvasRenderer';
 import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
-import { usePpg3dSettings } from '@/store/ppg3dSettings';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
-import { Ppg3DToggle } from './Ppg3DToggle';
 
 export interface PPGSignalMeterProps {
   value: number;
@@ -404,7 +401,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         ? realSignalStrength(p.perfusionIndex ?? 0, periodicityNow)
         : 0;
 
-      const threeDState = usePpg3dSettings.getState();
 
       const renderState: PpgRenderState = {
         layout: layoutRef.current,
@@ -438,18 +434,13 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         arrActiveUntil: arrActiveUntilRef.current,
         traceRevealed: traceRevealedRef.current,
         signalStrength: signalStrengthNow,
-        threeD: { enabled: threeDState.enabled, intensity: threeDState.intensity },
       };
 
       drawBackground(ctx, layoutRef.current.width, layoutRef.current.height);
       drawHeader(ctx, renderState);
       drawMetricsBar(ctx, renderState);
-      if (threeDState.enabled) {
-        drawGrid3D(ctx, renderState);
-        drawPressureGauge(ctx, renderState);
-      } else {
-        drawECGGrid(ctx, renderState);
-      }
+      drawGrid3D(ctx, renderState);
+      drawPressureGauge(ctx, renderState);
       drawSignal(ctx, renderState);
       drawAcquisitionOverlay(ctx, renderState);
       drawTrendStrip(ctx, renderState);
@@ -501,7 +492,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         className="absolute inset-0 w-full h-full"
       />
       <PulseIndicator showPulse={showPulse} />
-      <Ppg3DToggle />
       <ActionButtons
         isMonitoring={isMonitoring}
         onStartMeasurement={onStartMeasurement}
