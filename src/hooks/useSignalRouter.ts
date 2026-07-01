@@ -520,9 +520,9 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       const elapsed = nowT - lastPeakTimestampRef.current;
       const ampScale = lastPeakAmplitudeRef.current;
       
-      const maxPeak = 10.0 * ampScale;
-      const minPeak = -4.0 * ampScale;
-      const peakRange = maxPeak - minPeak; // 14.0 * ampScale
+      const maxPeak = 8.0 * ampScale;
+      const minPeak = -3.2 * ampScale;
+      const peakRange = maxPeak - minPeak; // 11.2 * ampScale
 
       // EEG-style heartbeat spike:
       // 0ms: reached maximum peak (+10.0 * scale) at the exact moment of peak detection

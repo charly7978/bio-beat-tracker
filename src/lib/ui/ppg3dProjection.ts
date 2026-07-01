@@ -107,7 +107,8 @@ export function makeProjector(state: PpgRenderState): Projector {
 
   const project = (u: number, d: number, h: number): ProjPoint => {
     const s = scaleAt(d);
-    const x = vpX + (u - 0.5) * plot.w * s;
+    // Ensanchar horizontalmente de manera sutil la visualización (factor 1.12) sin alterar la perspectiva 3D vertical
+    const x = vpX + (u - 0.5) * plot.w * 1.12 * s;
     const groundY = horizonY + floorSpanY * s; // s=1 → nearY ; s→0 → horizonY
     const y = groundY - h * maxLift * s;
     return { x, y, scale: s };
@@ -115,7 +116,8 @@ export function makeProjector(state: PpgRenderState): Projector {
 
   const floorPoint = (xWorld: number, zWorld: number): ProjPoint => {
     const s = Z_NEAR / zWorld;
-    return { x: vpX + xWorld * s, y: horizonY + floorSpanY * s, scale: s };
+    // Aplicamos el mismo factor de ensanchado (1.12) para mantener la grilla y la onda perfectamente sincronizadas
+    return { x: vpX + xWorld * 1.12 * s, y: horizonY + floorSpanY * s, scale: s };
   };
 
   return {
