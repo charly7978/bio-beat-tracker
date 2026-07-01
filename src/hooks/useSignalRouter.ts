@@ -481,17 +481,15 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     if (hasUsableContact && lastPeakTimestampRef.current > 0) {
       const elapsed = nowT - lastPeakTimestampRef.current;
       // EEG-style heartbeat spike:
-      // 0ms - 50ms: Violent rise from 0 to +10.0
-      // 50ms - 110ms: Violent drop from +10.0 to -4.0 (below baseline)
-      // 110ms - 220ms: Return from -4.0 to 0.0
-      // > 220ms: Rest at 0.0
-      if (elapsed >= 0 && elapsed < 50) {
-        eegValue = (elapsed / 50) * 10.0;
-      } else if (elapsed >= 50 && elapsed < 110) {
-        const t = (elapsed - 50) / 60;
+      // 0ms: reached maximum peak (+10.0) at the exact moment of peak detection (coinciding with vibration and beep)
+      // 0ms - 60ms: instant descent from +10.0 to negative peak -4.0 (below baseline)
+      // 60ms - 170ms: return from -4.0 to 0.0
+      // > 170ms: rest at 0.0
+      if (elapsed >= 0 && elapsed < 60) {
+        const t = elapsed / 60;
         eegValue = 10.0 - t * 14.0;
-      } else if (elapsed >= 110 && elapsed < 220) {
-        const t = (elapsed - 110) / 110;
+      } else if (elapsed >= 60 && elapsed < 170) {
+        const t = (elapsed - 60) / 110;
         eegValue = -4.0 + t * 4.0;
       } else {
         eegValue = 0.0;
