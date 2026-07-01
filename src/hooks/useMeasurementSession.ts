@@ -301,7 +301,7 @@ export function useMeasurementSession({
       });
       healthBridge.checkAvailability().then(avail => {
         if (avail) healthBridge.saveVitals(dataToSave);
-      }).catch(() => {});
+      }).catch(error => console.error('Error checking healthBridge availability:', error));
     }
 
     setIsCameraOn(false);

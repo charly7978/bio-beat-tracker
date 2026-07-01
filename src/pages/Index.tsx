@@ -208,7 +208,7 @@ const Index = () => {
       router.setVitalSigns(lastValidResults);
       session.setLocalShowResults(true);
     }
-  }, [lastValidResults, session.isMonitoring]);
+  }, [lastValidResults, session.isMonitoring, session, router]);
 
   // UI states
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
@@ -419,14 +419,13 @@ const Index = () => {
 
   // Run risk analysis on current vitals
   useEffect(() => {
-    const vs = lastValidResults;
-    if (vs && (vs.heartRate.value || vs.spo2.value)) {
+    if (lastValidResults && (lastValidResults.heartRate.value || lastValidResults.spo2.value)) {
       import('@/lib/ml/riskAnalyzer').then(({ healthRiskAnalyzer }) => {
-        const risk = healthRiskAnalyzer.analyze(vs);
+        const risk = healthRiskAnalyzer.analyze(lastValidResults);
         setRiskResult(risk.timeline);
-      }).catch(() => {});
+      }).catch(error => console.error('Error analyzing risk:', error));
     }
-  }, [lastValidResults?.heartRate.value, lastValidResults?.spo2.value]);
+  }, [lastValidResults]);
 
   // Cargar datos antropométricos desde CalibrationManager al montar
   useEffect(() => {

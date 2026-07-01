@@ -75,10 +75,11 @@ export function WebrtcCallWidget() {
   }, [remoteInput]);
 
   const copySdp = useCallback(() => {
+    if (!localSdp) return;
     navigator.clipboard.writeText(localSdp).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    }).catch(() => {});
+    }).catch(error => console.error('Error copying to clipboard:', error));
   }, [localSdp]);
 
   const isIdle = state === 'new' || state === 'closed';
