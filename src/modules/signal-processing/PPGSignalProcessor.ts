@@ -802,41 +802,44 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         this.contactState = 'UNSTABLE_CONTACT';
       }
     } else {
-      this.instantLostStreak++;
-      const decay = hints.constrained ? 1 : 3;
-      this.fingerConfidenceCount = Math.max(0, this.fingerConfidenceCount - decay);
-      this.fingerLostCount++;
-      this.stableContactCount = Math.max(0, this.stableContactCount - (hints.constrained ? 1 : 2));
+        this.instantLostStreak++;
+        const decay = hints.constrained ? 1 : 2;
+        this.fingerConfidenceCount = Math.max(0, this.fingerConfidenceCount - decay);
+        this.fingerLostCount++;
+        this.stableContactCount = Math.max(0, this.stableContactCount - (hints.constrained ? 1 : 1));
 
-      const rawSnap = this.rawRgbSnapshotFromRoi(roi);
-      const smoothSnap = this.rgbSnapshotFromSmoothed();
-      const flashOpen =
-        !this.fingerDetected &&
-        (isOpenFlashWithoutContact(rawSnap) || isOpenFlashWithoutContact(smoothSnap));
+        const rawSnap = this.rawRgbSnapshotFromRoi(roi);
+        const smoothSnap = this.rgbSnapshotFromSmoothed();
+        const flashOpen =
+          !this.fingerDetected &&
+          (isOpenFlashWithoutContact(rawSnap) || isOpenFlashWithoutContact(smoothSnap));
 
-      if (flashOpen) {
-        this.setNoContact(true);
-      } else if (this.fingerDetected) {
-        if (this.instantLostStreak <= hints.instantLostToUnstable) {
+        if (flashOpen) {
+          this.setNoContact(true);
+        } else if (this.fingerDetected) {
+          if (this.instantLostStreak <= hints.instantLostToUnstable) {
+            this.contactState = 'UNSTABLE_CONTACT';
+          } else if (this.instantLostStreak <= hints.instantLostToNoContact) {
+            if (this.isLiveFingerFrame(roi)) {
+              this.contactState = 'UNSTABLE_CONTACT';
+            } else {
+              this.contactState = 'NO_CONTACT';
+              this.noContactHardStreak++;
+              if (this.noContactHardStreak >= hints.bufferResetAfterNoContact) {
+                this.setNoContact(true);
+              }
+            }
+          } else {
+            this.setNoContact(true);
+          }
+        } else if (this.instantLostStreak <= hints.instantLostToNoContact && this.isLiveFingerFrame(roi)) {
           this.contactState = 'UNSTABLE_CONTACT';
         } else if (this.instantLostStreak <= hints.instantLostToNoContact) {
           this.contactState = 'NO_CONTACT';
-          this.noContactHardStreak++;
-          if (this.noContactHardStreak >= hints.bufferResetAfterNoContact) {
-            this.setNoContact(true);
-          }
         } else {
           this.setNoContact(true);
         }
-      } else if (this.instantLostStreak <= hints.instantLostToUnstable && this.isLiveFingerFrame(roi)) {
-        this.contactState = 'UNSTABLE_CONTACT';
-      } else if (this.instantLostStreak <= hints.instantLostToNoContact) {
-        this.contactState = 'NO_CONTACT';
-      } else {
-        this.setNoContact(true);
       }
-    }
-
     if (previousState === 'NO_CONTACT' && this.contactState !== 'NO_CONTACT') {
       // Siempre resetear al salir de NO_CONTACT: si el gap fue corto (p. ej.
       // dedo se pierde 1-2 frames y se recoloca), los filtros llevan estado
