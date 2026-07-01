@@ -7,7 +7,6 @@ import {
   lerpDisplayValue,
 } from '@/lib/measurement/displaySmoothing';
 import {
-  TARGET_FPS,
   BUFFER_SIZE,
   TREND_WINDOW_MS,
   TREND_MAX_POINTS,
@@ -339,9 +338,9 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     if (isRunningRef.current) return;
     isRunningRef.current = true;
 
-    const frameTime = 1000 / TARGET_FPS;
-    let lastRenderTime = 0;
-
+    // Sin throttle manual: renderizamos en CADA rAF. El throttle con Date.now()
+    // + rAF (~60Hz) generaba frames "saltados" cuando el reloj y el vsync se
+    // desincronizaban (parpadeo visible en la onda). rAF ya limita al refresh.
     const render = () => {
       if (!isRunningRef.current) return;
       const canvas = canvasRef.current;
@@ -356,11 +355,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         return;
       }
       const now = Date.now();
-      if (now - lastRenderTime < frameTime) {
-        animationRef.current = requestAnimationFrame(render);
-        return;
-      }
-      lastRenderTime = now;
 
       const p = propsRef.current;
       const fingerOn = p.isFingerDetected;
