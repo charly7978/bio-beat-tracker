@@ -163,6 +163,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const beatMarkerTimerRef = useRef<number | null>(null);
   const lastPeakTimestampRef = useRef<number>(0);
   const lastPeakAmplitudeRef = useRef<number>(1.0);
+  const runningPeakAverageRef = useRef<number>(0);
 
   // Sanity checker
   const [sanityProfileId, setSanityProfileId] = useState<string>(() => getActiveProfileId());
@@ -256,6 +257,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastDiagPushRef.current = 0;
     lastPeakTimestampRef.current = 0;
     lastPeakAmplitudeRef.current = 1.0;
+    runningPeakAverageRef.current = 0;
     ppgMeterRef?.current?.clearBuffer();
 
   }, [processHeartBeat, ppgMeterRef]);
@@ -282,6 +284,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     arrhythmiaDetectedRef.current = false;
     lastPeakTimestampRef.current = 0;
     lastPeakAmplitudeRef.current = 1.0;
+    runningPeakAverageRef.current = 0;
     ppgMeterRef?.current?.clearBuffer();
 
   }, [ppgMeterRef]);
@@ -474,15 +477,27 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     if (hasUsableContact && heartBeatResult.isPeak) {
       lastPeakTimestampRef.current = nowT;
-      // Capture actual filtered amplitude of this peak, clamping to safe range
-      const rawAmp = Math.abs(heartBeatResult.filteredValue);
-      // Normalize relative to typical amplitude (~1.3 is baseline)
-      lastPeakAmplitudeRef.current = Math.max(0.4, Math.min(2.5, rawAmp / 1.3));
+      // Measure raw peak amplitude of unnormalized filtered signal (hbInput)
+      const currentPeakAmp = Math.abs(hbInput);
+      if (runningPeakAverageRef.current === 0) {
+        runningPeakAverageRef.current = currentPeakAmp;
+      } else {
+        // Slow Exponential Moving Average to track general baseline scale of this device/placement
+        runningPeakAverageRef.current = runningPeakAverageRef.current * 0.85 + currentPeakAmp * 0.15;
+      }
+      // Relative scale of this heartbeat compared to recent average
+      let ampScale = 1.0;
+      if (runningPeakAverageRef.current > 1e-5) {
+        ampScale = currentPeakAmp / runningPeakAverageRef.current;
+      }
+      // Clamp to visually appealing range (e.g. 0.5 to 1.6) to guarantee no excessive clipping
+      lastPeakAmplitudeRef.current = Math.max(0.5, Math.min(1.6, ampScale));
     }
 
     if (!hasUsableContact) {
       lastPeakTimestampRef.current = 0;
       lastPeakAmplitudeRef.current = 1.0;
+      runningPeakAverageRef.current = 0;
     }
 
     let eegValue = 0;
