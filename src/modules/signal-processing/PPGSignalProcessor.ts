@@ -4,6 +4,9 @@ import { PPGSignalSplitter } from './PPGSignalSplitter';
 import { createLogger, ppgPerf } from '../../utils/logger';
 import { clamp } from '../../utils/math';
 import { RingF32 } from '../../utils/RingBuffer';
+import { SignalResampler } from './shared/SignalResampler';
+import { MovingAverageDetrending } from './shared/MovingAverageDetrending';
+import { ButterworthBandpass } from './shared/ButterworthFilter';
 import {
   DEFAULT_BACKPRESSURE_CONFIG,
   sanitizeBackpressureConfig,
@@ -95,6 +98,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private bandpassFilter: BandpassFilter;
   private morphBandpassFilter: BandpassFilter;
   private readonly signalSplitter = new PPGSignalSplitter(30);
+  private readonly resampler = new SignalResampler(30, 'cubic');
+  private readonly greenDetrending = new MovingAverageDetrending(45);
+  private readonly greenButterworth = new ButterworthBandpass(4, 0.75, 3.33, 30);
   /** BPM estimado para el notch adaptativo del canal 5 (arritmias) */
   private lastKnownBpm = 0;
   private placementMode: FingerPlacementMode = 'hybrid';
@@ -465,278 +471,288 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           message: `RECHAZADO: ${rejectionStatus}`,
         }),
       });
-      // No retornamos aquí para permitir que los buffers sigan llenándose, pero la UI sabrá que no es válido
       return;
     }
 
-    // Tenemos contacto (UNSTABLE o STABLE)
-    this.updateChannelBaselines(roi.rawRed, roi.rawGreen, roi.rawBlue, motionArtifact);
-
-    const zlo = getZlo();
-    const zloAdjR = zlo.calibrated ? Math.max(0, roi.rawRed - zlo.r) : roi.rawRed;
-    const zloAdjG = zlo.calibrated ? Math.max(0, roi.rawGreen - zlo.g) : roi.rawGreen;
-    const zloAdjB = zlo.calibrated ? Math.max(0, roi.rawBlue - zlo.b) : roi.rawBlue;
-    this.redBuffer.push(zloAdjR);
-    this.greenBuffer.push(zloAdjG);
-    this.blueBuffer.push(zloAdjB);
-
-    this.updateSignalMotion(roi.rawRed, roi.centroidMotion);
-
-    // ACDC: más frecuente con dedo para que PI/SQI no queden en 0 varios segundos
-    if (this.redBuffer.length >= 36 && this.frameCount % 2 === 0) {
-      this.calculateACDCPrecise();
-    }
-    const acPi = this.calculatePerfusionIndex();
-    const pulsePi = this.estimatePulsePiFromRoi();
-    this.cachedPI = Math.max(acPi, pulsePi);
-
-    const placementInstant = classifyFingerPlacement({
-      coverageRatio: this.smoothedCoverage || roi.coverageRatio,
-      roiRedCv: this.lastRoiRedCv,
-      perfusionIndex: this.cachedPI,
-    });
-    const smoothedPlacement = smoothPlacementMode(
-      this.placementMode,
-      placementInstant,
-      this.placementStreak,
-    );
-    this.placementMode = smoothedPlacement.mode;
-    this.placementStreak = smoothedPlacement.streak;
-
-    this.reconcileStableContact();
-
-    // Multi-source extraction
-    const pulseSource = this.extractBestPulseSignal(
+    // Push the raw sample to the resampler
+    this.resampler.push(
+      timestamp,
       roi.rawRed,
       roi.rawGreen,
       roi.rawBlue,
-      motionArtifact,
-      this.placementMode,
-    );
-    const morphSource = this.extractMorphologySignal(
-      roi.rawRed,
-      roi.rawGreen,
-      roi.rawBlue,
-      this.placementMode,
+      roi.coverageRatio,
+      roi.fingerScore,
+      roi.fingerTileCount,
+      roi.centroidMotion
     );
 
-    this.rawBuffer.push(pulseSource.value);
+    // Retrieve all resampled samples at 30 Hz
+    const pendingSamples = this.resampler.getPendingSamples();
 
-    const endFilt = ppgPerf.start('bandpass');
-    // ACONDICIONAMIENTO ACTIVO en vivo: estabiliza la línea base (quita deriva) y
-    // hace denoise que PRESERVA los picos sistólicos, ANTES del bandpass → la señal
-    // que se mide y se muestra es genuinamente más limpia y firme (no recorta el pulso).
-    const stabilizedInput = stabilizeSample(this.activeStabilizer, pulseSource.value);
-    const filtered = this.bandpassFilter.filter(stabilizedInput);
-    const morphFiltered = this.morphBandpassFilter.filter(morphSource);
-    const enhanced = applyPulseAgc(
-      this.pulseAgcState,
-      filtered,
-      this.cachedPeriodicity > 0 ? this.cachedPeriodicity : this.periodicityEma,
-      this.motionScore,
-      DEFAULT_PULSE_AGC,
-      this.contactState === 'STABLE_CONTACT',
-    );
-    endFilt();
-    this.filteredBuffer.push(enhanced);
+    for (const sample of pendingSamples) {
+      const currentTs = sample.time;
 
-    // === BANCO DE FILTROS POR CANAL VITAL (PPGSignalSplitter) ===
-    // Cada signo vital recibe la señal pre-procesada con los requisitos DSP de su canal.
-    const splitOut = this.signalSplitter.process(
-      roi.rawRed,
-      roi.rawGreen,
-      roi.rawBlue,
-      this.lastKnownBpm,
-    );
+      this.updateChannelBaselines(sample.r, sample.g, sample.b, motionArtifact);
 
-    const endSqi = ppgPerf.start('sqi');
-    this.periodicitySkip++;
-    if (this.periodicitySkip >= 4 || this.filteredBuffer.length < 90) {
-      this.periodicitySkip = 0;
-      const pInstant = this.calculatePeriodicity();
-      this.periodicityEma =
-        this.periodicityEma <= 0
-          ? pInstant
-          : this.periodicityEma * 0.72 + pInstant * 0.28;
-    }
-    this.cachedPeriodicity = this.periodicityEma;
+      const zlo = getZlo();
+      const zloAdjR = zlo.calibrated ? Math.max(0, sample.r - zlo.r) : sample.r;
+      const zloAdjG = zlo.calibrated ? Math.max(0, sample.g - zlo.g) : sample.g;
+      const zloAdjB = zlo.calibrated ? Math.max(0, sample.b - zlo.b) : sample.b;
+      this.redBuffer.push(zloAdjR);
+      this.greenBuffer.push(zloAdjG);
+      this.blueBuffer.push(zloAdjB);
 
-    this.sqiMetricsCounter++;
-    if (this.sqiMetricsCounter >= 8 && this.filteredBuffer.length >= 60) {
-      this.sqiMetricsCounter = 0;
-      const fLen = this.filteredBuffer.length;
-      const fTail = this.filteredBuffer.tail(fLen);
-      if (fTail.length >= 30) {
-        const n = fTail.length;
-        let s1 = 0, s2 = 0, s3 = 0, s4 = 0;
-        for (let i = 0; i < n; i++) {
-          const v = fTail[i];
-          s1 += v;
-          s2 += v * v;
-          s3 += v * v * v;
-          s4 += v * v * v * v;
-        }
-        const mean = s1 / n;
-        const var_ = s2 / n - mean * mean;
-        const std = Math.sqrt(var_);
-        if (std > 1e-8) {
-          this.cachedSkewness = (s3 / n - 3 * mean * (s2 / n) + 2 * mean * mean * mean) / (std * std * std);
-          this.cachedKurtosis = (s4 / n - 4 * mean * (s3 / n) + 6 * mean * mean * (s2 / n) - 3 * mean * mean * mean * mean) / (var_ * var_);
-          this.cachedRelativePower = this.cachedPeriodicity;
+      this.updateSignalMotion(sample.r, sample.centroidMotion);
+
+      if (this.redBuffer.length >= 36 && this.frameCount % 2 === 0) {
+        this.calculateACDCPrecise();
+      }
+      const acPi = this.calculatePerfusionIndex();
+      const pulsePi = this.estimatePulsePiFromRoi();
+      this.cachedPI = Math.max(acPi, pulsePi);
+
+      const placementInstant = classifyFingerPlacement({
+        coverageRatio: this.smoothedCoverage || sample.coverage,
+        roiRedCv: this.lastRoiRedCv,
+        perfusionIndex: this.cachedPI,
+      });
+      const smoothedPlacement = smoothPlacementMode(
+        this.placementMode,
+        placementInstant,
+        this.placementStreak,
+      );
+      this.placementMode = smoothedPlacement.mode;
+      this.placementStreak = smoothedPlacement.streak;
+
+      this.reconcileStableContact();
+
+      // Multi-source extraction
+      const pulseSource = this.extractBestPulseSignal(
+        sample.r,
+        sample.g,
+        sample.b,
+        motionArtifact,
+        this.placementMode,
+      );
+      const morphSource = this.extractMorphologySignal(
+        sample.r,
+        sample.g,
+        sample.b,
+        this.placementMode,
+      );
+
+      this.rawBuffer.push(pulseSource.value);
+
+      const endFilt = ppgPerf.start('bandpass');
+      
+      // Cascaded Filter Flow: Detrending -> Butterworth Bandpass
+      const greenDetrended = this.greenDetrending.filter(sample.g);
+      const greenFiltered = this.greenButterworth.filter(greenDetrended);
+
+      // AGC to normalize amplitude for peak detection
+      const enhanced = applyPulseAgc(
+        this.pulseAgcState,
+        greenFiltered,
+        this.cachedPeriodicity > 0 ? this.cachedPeriodicity : this.periodicityEma,
+        this.motionScore,
+        DEFAULT_PULSE_AGC,
+        this.contactState === 'STABLE_CONTACT',
+      );
+      endFilt();
+      this.filteredBuffer.push(enhanced);
+
+      // === BANCO DE FILTROS POR CANAL VITAL (PPGSignalSplitter) ===
+      const splitOut = this.signalSplitter.process(
+        sample.r,
+        sample.g,
+        sample.b,
+        this.lastKnownBpm,
+      );
+
+      const endSqi = ppgPerf.start('sqi');
+      this.periodicitySkip++;
+      if (this.periodicitySkip >= 4 || this.filteredBuffer.length < 90) {
+        this.periodicitySkip = 0;
+        const pInstant = this.calculatePeriodicity();
+        this.periodicityEma =
+          this.periodicityEma <= 0
+            ? pInstant
+            : this.periodicityEma * 0.72 + pInstant * 0.28;
+      }
+      this.cachedPeriodicity = this.periodicityEma;
+
+      this.sqiMetricsCounter++;
+      if (this.sqiMetricsCounter >= 8 && this.filteredBuffer.length >= 60) {
+        this.sqiMetricsCounter = 0;
+        const fLen = this.filteredBuffer.length;
+        const fTail = this.filteredBuffer.tail(fLen);
+        if (fTail.length >= 30) {
+          const n = fTail.length;
+          let s1 = 0, s2 = 0, s3 = 0, s4 = 0;
+          for (let i = 0; i < n; i++) {
+            const v = fTail[i];
+            s1 += v;
+            s2 += v * v;
+            s3 += v * v * v;
+            s4 += v * v * v * v;
+          }
+          const mean = s1 / n;
+          const var_ = s2 / n - mean * mean;
+          const std = Math.sqrt(var_);
+          if (std > 1e-8) {
+            this.cachedSkewness = (s3 / n - 3 * mean * (s2 / n) + 2 * mean * mean * mean) / (std * std * std);
+            this.cachedKurtosis = (s4 / n - 4 * mean * (s3 / n) + 6 * mean * mean * (s2 / n) - 3 * mean * mean * mean * mean) / (var_ * var_);
+            this.cachedRelativePower = this.cachedPeriodicity;
+          }
         }
       }
-    }
 
-    const snapPerf = ppgPerf.snapshot();
-    const metrics: SignalQualityMetrics = {
-      sqi: 0,
-      perfusionIndex: this.cachedPI,
-      snr: pulseSource.strength,
-      periodicity: this.cachedPeriodicity,
-      motionScore: this.motionScore,
-      saturationRatio: roi.rawRed > 250 ? 1 : 0,
-      underexposureRatio: this.underexposureEma,
-      frameDropRatio: snapPerf.droppedEstimate / Math.max(1, this.frameCount),
-      fpsEffective: this.estimatedSampleRate,
-      timestampJitterMs: snapPerf.jitterMs,
-      skewness: this.cachedSkewness,
-      relativePower: this.cachedRelativePower,
-    };
+      const snapPerf = ppgPerf.snapshot();
+      const metrics: SignalQualityMetrics = {
+        sqi: 0,
+        perfusionIndex: this.cachedPI,
+        snr: pulseSource.strength,
+        periodicity: this.cachedPeriodicity,
+        motionScore: this.motionScore,
+        saturationRatio: sample.r > 250 ? 1 : 0,
+        underexposureRatio: this.underexposureEma,
+        frameDropRatio: snapPerf.droppedEstimate / Math.max(1, this.frameCount),
+        fpsEffective: this.estimatedSampleRate,
+        timestampJitterMs: snapPerf.jitterMs,
+        skewness: this.cachedSkewness,
+        relativePower: this.cachedRelativePower,
+      };
 
-    this.cachedSqi = SignalQualityIndex.calculate(metrics);
-    this.signalQuality = this.cachedSqi;
+      this.cachedSqi = SignalQualityIndex.calculate(metrics);
+      this.signalQuality = this.cachedSqi;
 
-    const rejectionScale =
-      rejectionStatus === 'MOTION_ARTIFACT'
-        ? 0.78
-        : rejectionStatus && rejectionStatus !== 'WARMUP'
-          ? 0.45
-          : 1;
-    this.displaySqiEma = SignalQualityIndex.smoothDisplayedSqi(
-      this.displaySqiEma,
-      this.signalQuality,
-      this.contactState,
-      rejectionScale,
-    );
-    endSqi();
-
-    const perfusionIndex = this.cachedPI;
-    const snapHb = this.rgbSnapshotFromSmoothed();
-    const hemoglobinScene =
-      hasFingerHemoglobinSignature(snapHb) && !isOpenFlashWithoutContact(snapHb);
-    const ensembleScene = this.lastEnsembleScore > VITAL_THRESHOLDS.FINGER.ENSEMBLE_FINGER_THRESHOLD;
-    const fingerUi =
-      this.fingerDetected &&
-      liveFinger &&
-      (hemoglobinScene || ensembleScene) &&
-      (this.lastInstantFinger || this.contactState === 'STABLE_CONTACT');
-
-    // Post-motion hold-off: despues de que el motion cesa, el BPF 4° orden aun
-    // tiene ringing (~0.5s). Suprimimos la salida durante ese tiempo.
-    if (motionArtifact) {
-      this.postMotionSuppression = 20; // ~670ms a 30fps
-    } else if (this.postMotionSuppression > 0) {
-      this.postMotionSuppression--;
-    }
-
-    const signalPathActive =
-      (fingerUi ||
-      (this.lastInstantFinger &&
-        (hemoglobinScene || ensembleScene) &&
-        this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.85)) &&
-      !motionArtifact &&
-      this.postMotionSuppression <= 0;
-    const displayQuality = signalPathActive
-      ? fingerUi
-        ? this.displaySqiEma
-        : Math.round(this.displaySqiEma * 0.55)
-      : 0;
-    const rawSqiOut = signalPathActive ? this.signalQuality : 0;
-
-    this.stepAcquisition(fingerUi);
-
-    const now = timestamp;
-    if (now - this.lastLogTime >= 2000) {
-      this.lastLogTime = now;
-      const snap = ppgPerf.snapshot();
-      log.info(
-        `[${pulseSource.label}] Filt=${enhanced.toFixed(3)} agc=${this.pulseAgcState.scale.toFixed(2)} Q=${displayQuality} raw=${this.signalQuality} ` +
-        `PI=${perfusionIndex.toFixed(4)} P=${this.cachedPeriodicity.toFixed(2)} Contact=${this.contactState} ` +
-        `FPS=${snap.fps.toFixed(1)} jitter=${snap.jitterMs.toFixed(1)}ms ` +
-        `roi=${(snap.stages.roi?.p95 ?? 0).toFixed(2)}ms ` +
-        `filt=${(snap.stages.bandpass?.p95 ?? 0).toFixed(2)}ms ` +
-        `sqi=${(snap.stages.sqi?.p95 ?? 0).toFixed(2)}ms ` +
-        `dropEst=${snap.droppedEstimate}`
+      const rejectionScale =
+        rejectionStatus === 'MOTION_ARTIFACT'
+          ? 0.78
+          : rejectionStatus && rejectionStatus !== 'WARMUP'
+            ? 0.45
+            : 1;
+      this.displaySqiEma = SignalQualityIndex.smoothDisplayedSqi(
+        this.displaySqiEma,
+        this.signalQuality,
+        this.contactState,
+        rejectionScale,
       );
-    }
+      endSqi();
 
-    const displayStatus = SignalQualityIndex.resolveDiagnosticDisplayStatus(
-      this.diagStatusState,
-      {
-        rejectionStatus,
-        rawSqi: rawSqiOut,
-        pi: perfusionIndex,
+      const perfusionIndex = this.cachedPI;
+      const snapHb = this.rgbSnapshotFromSmoothed();
+      const hemoglobinScene =
+        hasFingerHemoglobinSignature(snapHb) && !isOpenFlashWithoutContact(snapHb);
+      const ensembleScene = this.lastEnsembleScore > VITAL_THRESHOLDS.FINGER.ENSEMBLE_FINGER_THRESHOLD;
+      const fingerUi =
+        this.fingerDetected &&
+        liveFinger &&
+        (hemoglobinScene || ensembleScene) &&
+        (this.lastInstantFinger || this.contactState === 'STABLE_CONTACT');
+
+      if (motionArtifact) {
+        this.postMotionSuppression = 20; // ~670ms a 30fps
+      } else if (this.postMotionSuppression > 0) {
+        this.postMotionSuppression--;
+      }
+
+      const signalPathActive =
+        (fingerUi ||
+        (this.lastInstantFinger &&
+          (hemoglobinScene || ensembleScene) &&
+          this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.85)) &&
+        !motionArtifact &&
+        this.postMotionSuppression <= 0;
+      const displayQuality = signalPathActive
+        ? fingerUi
+          ? this.displaySqiEma
+          : Math.round(this.displaySqiEma * 0.55)
+        : 0;
+      const rawSqiOut = signalPathActive ? this.signalQuality : 0;
+
+      this.stepAcquisition(fingerUi);
+
+      const now = currentTs;
+      if (now - this.lastLogTime >= 2000) {
+        this.lastLogTime = now;
+        const snap = ppgPerf.snapshot();
+        log.info(
+          `[${pulseSource.label}] Filt=${enhanced.toFixed(3)} agc=${this.pulseAgcState.scale.toFixed(2)} Q=${displayQuality} raw=${this.signalQuality} ` +
+          `PI=${perfusionIndex.toFixed(4)} P=${this.cachedPeriodicity.toFixed(2)} Contact=${this.contactState} ` +
+          `FPS=${snap.fps.toFixed(1)} jitter=${snap.jitterMs.toFixed(1)}ms ` +
+          `roi=${(snap.stages.roi?.p95 ?? 0).toFixed(2)}ms ` +
+          `filt=${(snap.stages.bandpass?.p95 ?? 0).toFixed(2)}ms ` +
+          `sqi=${(snap.stages.sqi?.p95 ?? 0).toFixed(2)}ms ` +
+          `dropEst=${snap.droppedEstimate}`
+        );
+      }
+
+      const displayStatus = SignalQualityIndex.resolveDiagnosticDisplayStatus(
+        this.diagStatusState,
+        {
+          rejectionStatus,
+          rawSqi: rawSqiOut,
+          pi: perfusionIndex,
+          fingerDetected: fingerUi,
+          contactState: this.contactState,
+        },
+      );
+
+      this.updateAccelRespEstimate(currentTs);
+
+      this.onSignalReady({
+        timestamp: currentTs,
+        rawValue: signalPathActive ? sample.g : 0,
+        filteredValue: signalPathActive ? enhanced : 0,
+        morphologyValue: signalPathActive ? splitOut.morphology : 0,
+        morphologyFiltered: signalPathActive ? splitOut.morphology : 0,
+        respirationFiltered: signalPathActive ? splitOut.respiration : 0,
+        arrhythmiaFiltered: signalPathActive ? splitOut.arrhythmia : 0,
+        spo2Channels: signalPathActive ? splitOut.spo2 : undefined,
+        placementMode: this.placementMode,
+        quality: displayQuality,
         fingerDetected: fingerUi,
         contactState: this.contactState,
-      },
-    );
-
-    // Refresca (throttled) la estimación respiratoria del acelerómetro antes de emitir.
-    this.updateAccelRespEstimate(timestamp);
-
-    this.onSignalReady({
-      timestamp,
-      rawValue: signalPathActive ? pulseSource.value : 0,
-      filteredValue: signalPathActive ? enhanced : 0,
-      morphologyValue: signalPathActive ? morphFiltered : 0,
-      // Canales del banco de filtros especializado por signo vital
-      morphologyFiltered: signalPathActive ? splitOut.morphology : 0,
-      respirationFiltered: signalPathActive ? splitOut.respiration : 0,
-      arrhythmiaFiltered: signalPathActive ? splitOut.arrhythmia : 0,
-      spo2Channels: signalPathActive ? splitOut.spo2 : undefined,
-      placementMode: this.placementMode,
-      quality: displayQuality,
-      fingerDetected: fingerUi,
-      contactState: this.contactState,
-      motionArtifact,
-      roi: this.signalRoiFromMetrics(roi),
-      perfusionIndex,
-      rawRed: roi.rawRed,
-      rawGreen: roi.rawGreen,
-      rawBlue: roi.rawBlue,
-      accelRespiration: this.accelRespEstimate ?? undefined,
-      diagnostics: {
-        ...this.buildFingerDiagnostics(roi, motionArtifact, displayStatus, {
-          message:
-            `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
-            `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
-            `C:${(roi.coverageRatio * 100).toFixed(0)}% ${this.placementMode} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
-          placementMode: this.placementMode,
-          placementHint: placementHintText(this.placementMode, perfusionIndex),
-          hasPulsatility:
-            fingerUi &&
-            (SignalQualityIndex.isClinicallyValid(rawSqiOut, perfusionIndex) ||
-              SignalQualityIndex.isAdequateForLiveVitals(rawSqiOut, perfusionIndex)),
-          pulsatilityValue:
-            this.contactState === 'STABLE_CONTACT'
-              ? Math.max(perfusionIndex, pulseSource.strength * 0.02)
-              : 0,
-        }),
-        sqm: {
-          sqi: rawSqiOut,
-          perfusionIndex: perfusionIndex,
-          snr: pulseSource.strength,
-          periodicity: this.cachedPeriodicity,
-          // Movimiento efectivo = max(IMU, micro-movimiento del dedo desde la señal).
-          motionScore: Math.max(this.motionScore, this.signalMotionScore),
-          saturationRatio: (roi.rawRed > 250 ? 1 : 0),
-          underexposureRatio: this.underexposureEma,
-          fpsEffective: this.estimatedSampleRate,
-          frameDropRatio: ppgPerf.snapshot().droppedEstimate / Math.max(1, this.frameCount),
-          timestampJitterMs: ppgPerf.snapshot().jitterMs,
-        } as SignalQualityMetrics,
-      },
-    });
+        motionArtifact,
+        roi: this.signalRoiFromMetrics(roi),
+        perfusionIndex,
+        rawRed: sample.r,
+        rawGreen: sample.g,
+        rawBlue: sample.b,
+        accelRespiration: this.accelRespEstimate ?? undefined,
+        diagnostics: {
+          ...this.buildFingerDiagnostics(roi, motionArtifact, displayStatus, {
+            message:
+              `${pulseSource.label}:${pulseSource.strength.toFixed(1)} ` +
+              `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
+              `C:${(sample.coverage * 100).toFixed(0)}% ${this.placementMode} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
+            placementMode: this.placementMode,
+            placementHint: placementHintText(this.placementMode, perfusionIndex),
+            hasPulsatility:
+              fingerUi &&
+              (SignalQualityIndex.isClinicallyValid(rawSqiOut, perfusionIndex) ||
+                SignalQualityIndex.isAdequateForLiveVitals(rawSqiOut, perfusionIndex)),
+            pulsatilityValue:
+              this.contactState === 'STABLE_CONTACT'
+                ? Math.max(perfusionIndex, pulseSource.strength * 0.02)
+                : 0,
+          }),
+          sqm: {
+            sqi: rawSqiOut,
+            perfusionIndex: perfusionIndex,
+            snr: pulseSource.strength,
+            periodicity: this.cachedPeriodicity,
+            motionScore: Math.max(this.motionScore, this.signalMotionScore),
+            saturationRatio: (sample.r > 250 ? 1 : 0),
+            underexposureRatio: this.underexposureEma,
+            fpsEffective: this.estimatedSampleRate,
+            frameDropRatio: ppgPerf.snapshot().droppedEstimate / Math.max(1, this.frameCount),
+            timestampJitterMs: ppgPerf.snapshot().jitterMs,
+          } as SignalQualityMetrics,
+        },
+      });
+    }
   }
 
   private getFingerConfirmFrames(): number {
@@ -1693,6 +1709,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.bandpassFilter.reset();
     this.morphBandpassFilter.reset();
     this.signalSplitter.reset();
+    this.resampler.reset();
+    this.greenDetrending.reset();
+    this.greenButterworth.reset();
     this.lastKnownBpm = 0;
     resetPulseAgc(this.pulseAgcState);
     this.roiRedPulseRing.reset();
