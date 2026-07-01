@@ -127,7 +127,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     contactState, acquisitionStatus, diagnostics,
   });
 
-  const sweepPulseRef = useRef(0);
   const lastPeakTimeRef = useRef(0);
   const lastPeakProcessedRef = useRef(0);
   const arrActiveUntilRef = useRef(0);
@@ -419,7 +418,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         beatHistory: beatHistoryRef.current,
         amplitudeStats: amplitudeStatsRef.current,
         waveGain: waveGainRef.current,
-        sweepPulse: sweepPulseRef.current,
         ibiDisplay: ibiDisplayRef.current,
         buffer: dataBufferRef.current,
         lastArrhythmiaCount: lastArrhythmiaCountRef.current,
@@ -440,7 +438,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       drawTrendStrip(ctx, renderState);
       drawFooter(ctx, renderState);
 
-      sweepPulseRef.current = renderState.sweepPulse;
       lastPeakProcessedRef.current = renderState.lastPeakProcessedTime;
       arrActiveUntilRef.current = renderState.arrActiveUntil;
       lastArrhythmiaCountRef.current = renderState.lastArrhythmiaCount;
