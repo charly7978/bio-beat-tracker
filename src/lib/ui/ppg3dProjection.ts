@@ -85,7 +85,6 @@ const WAVE_D_BACK = 0.17;
 // Paleta local (evita import de valores desde el renderer → sin ciclo en runtime).
 const C = {
   signal: '34, 197, 94', // verde ECG
-  signalBright: '74, 222, 128',
   arr: '239, 68, 68',
   cyan: '0, 242, 255',
   horizon: '103, 232, 249',
@@ -337,119 +336,25 @@ export function drawWaveRibbon3D(
     }
   }
 
-  // 2) Cara superior de la cinta (entre cresta frontal y trasera) → grosor 3D.
-  if (revealed) {
+  // 2) Trazo único de la cresta frontal (onda limpia, sin rellenos ni brillos)
+  const drawCrest = (s0: number, e0: number) => {
     ctx.beginPath();
-    ctx.moveTo(Pf[0].x, Pf[0].y);
-    for (let i = 1; i < n; i++) ctx.lineTo(Pf[i].x, Pf[i].y);
-    for (let i = n - 1; i >= 0; i--) ctx.lineTo(Pb[i].x, Pb[i].y);
-    ctx.closePath();
-    ctx.fillStyle = `rgba(${C.signalBright}, 0.16)`;
-    ctx.fill();
-  }
-
-  // 3) Cara frontal (pared vertical de la cresta al piso) con degradado.
-  const wallGrad = ctx.createLinearGradient(0, proj.horizonY, 0, proj.nearY);
-  wallGrad.addColorStop(0, `rgba(${C.signal}, ${revealed ? 0.34 : 0.12})`);
-  wallGrad.addColorStop(1, `rgba(${C.signal}, 0.02)`);
-  ctx.beginPath();
-  ctx.moveTo(Pfloor[0].x, Pfloor[0].y);
-  for (let i = 0; i < n; i++) ctx.lineTo(Pf[i].x, Pf[i].y);
-  for (let i = n - 1; i >= 0; i--) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
-  ctx.closePath();
-  ctx.fillStyle = wallGrad;
-  ctx.fill();
-
-  // 3b) Sobre-pintado rojo translúcido en segmentos de arritmia.
-  let s = 0;
-  while (s < n) {
-    if (!coords[s].isArr) { s++; continue; }
-    let e = s;
-    while (e < n && coords[e].isArr) e++;
-    ctx.beginPath();
-    ctx.moveTo(Pfloor[s].x, Pfloor[s].y);
-    for (let i = s; i < e; i++) ctx.lineTo(Pf[i].x, Pf[i].y);
-    for (let i = e - 1; i >= s; i--) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
-    ctx.closePath();
-    ctx.fillStyle = `rgba(${C.arr}, 0.50)`;
-    ctx.fill();
-    s = e;
-  }
-
-  // 4) Cresta trasera (tenue, da volumen).
-  if (revealed) {
-    ctx.beginPath();
-    ctx.moveTo(Pb[0].x, Pb[0].y);
-    for (let i = 1; i < n; i++) ctx.lineTo(Pb[i].x, Pb[i].y);
-    ctx.strokeStyle = `rgba(${C.signal}, 0.28)`;
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-
-  // 5) Cresta frontal: la onda honesta con efecto de iluminación animada (estilo 2D)
-  const drawDirectCrestSegment = (startIdx: number, endIdx: number) => {
-    ctx.beginPath();
-    ctx.moveTo(Pf[startIdx].x, Pf[startIdx].y);
-    for (let k = startIdx + 1; k < endIdx; k++) {
-      ctx.lineTo(Pf[k].x, Pf[k].y);
-    }
+    ctx.moveTo(Pf[s0].x, Pf[s0].y);
+    for (let k = s0 + 1; k < e0; k++) ctx.lineTo(Pf[k].x, Pf[k].y);
   };
 
-  const recentCut = Math.max(0, n - Math.floor(n * 0.35));
-  const leadingCut = Math.max(0, n - Math.floor(n * 0.10));
-
-  // 5a) Trazo base (toda la línea)
-  s = 0;
-  while (s < n - 1) {
-    const isArr = coords[s].isArr;
-    let segEnd = s;
-    while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-    drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
+  let seg = 0;
+  while (seg < n - 1) {
+    const isArr = coords[seg].isArr;
+    let end = seg;
+    while (end < n - 1 && coords[end].isArr === isArr) end++;
+    drawCrest(seg, end + 1 > n ? end : end + 1);
     ctx.strokeStyle = revealed
-      ? (isArr ? `rgba(${C.arr}, 0.4)` : `rgba(${C.signal}, 0.45)`)
-      : 'rgba(148, 163, 184, 0.25)';
-    ctx.lineWidth = 2.0;
-    ctx.shadowBlur = 0;
+      ? (isArr ? `rgba(${C.arr}, 0.65)` : `rgba(${C.signal}, 0.7)`)
+      : 'rgba(148, 163, 184, 0.35)';
+    ctx.lineWidth = 1.8;
     ctx.stroke();
-    s = segEnd;
-  }
-
-  if (revealed) {
-    // 5b) Trazo base (último 35%)
-    s = Math.max(recentCut, 0);
-    while (s < n - 1) {
-      const isArr = coords[s].isArr;
-      let segEnd = s;
-      while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-      drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
-      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.65)` : `rgba(${C.signal}, 0.68)`;
-      ctx.lineWidth = 1.6;
-      ctx.stroke();
-      s = segEnd;
-    }
-
-    // 5c) Trazo líder de punta (último 10%)
-    s = Math.max(leadingCut, 0);
-    while (s < n - 1) {
-      const isArr = coords[s].isArr;
-      let segEnd = s;
-      while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-      drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
-      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.85)` : '#4ade80';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-      s = segEnd;
-    }
-  } else {
-    // Trazo de punta tenue sin brillo cuando se está estabilizando
-    s = Math.max(leadingCut, 0);
-    if (s < n - 1) {
-      drawDirectCrestSegment(s, n);
-      ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)';
-      ctx.lineWidth = 2.0;
-      ctx.shadowBlur = 0;
-      ctx.stroke();
-    }
+    seg = end;
   }
 
   // 6) Marcadores fiduciales con VALORES en tiempo real: picos máximos (SYS),
