@@ -456,7 +456,11 @@ export class VitalSignsProcessor {
     };
 
     const hrMinSqi = VITAL_THRESHOLDS.QUALITY.MIN_FOR_HR;
-    const hrOk = this.lastBPM > 0 && sqi >= hrMinSqi;
+    const hrOk =
+      this.lastBPM > 0 &&
+      sqi >= Math.max(hrMinSqi + 6, 16) &&
+      this.validPulseCount >= 3 &&
+      this.lastPpgPerfusionIndex >= 0.00012;
     const bpUiReady =
       vitalUiGate || (this.validPulseCount >= 2 && sqi >= 12);
 

@@ -92,6 +92,18 @@ describe('HeartBeatProcessor', () => {
     expect(lastSqi).toBeLessThanOrEqual(100);
   });
 
+  it('does not publish BPM when external quality is too low', () => {
+    const { filtered, times } = makeSignal(72, 30, 8, 0, 300);
+    hbp.setFingerContactConfirmed(true);
+    hbp.setPpgQualityMetrics(2, 0.0001, 2.2);
+    let lastResult: ReturnType<typeof hbp.processSignal> | null = null;
+    for (let i = 0; i < filtered.length; i++) {
+      lastResult = hbp.processSignal(filtered[i], times[i]);
+    }
+    expect(lastResult!.bpm).toBe(0);
+    expect(lastResult!.confidence).toBeLessThanOrEqual(0.35);
+  });
+
   it('exposes internalSqi and externalSqi in processSignal output', () => {
     hbp.setPpgQualityMetrics(80, 0.005, 0);
     const { filtered, times } = makeSignal(72, 30, 8, 0, 300);

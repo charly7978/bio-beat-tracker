@@ -393,10 +393,8 @@ export class HeartBeatProcessor {
 
     const rrBpm = bpmFromEmittedRr(this.rrIntervals);
     let publishBpm = 0;
-    if (
-      this.fingerContactConfirmed &&
-      peakAgeMs < this.BPM_PUBLISH_HOLD_MS
-    ) {
+    const canPublish = this.canPublishBpm(peakAgeMs);
+    if (canPublish) {
       if (this.smoothBPM > 0 && rrBpm > 0) {
         const agree = Math.abs(this.smoothBPM - rrBpm) / Math.max(1, rrBpm) < 0.08;
         publishBpm = Math.round(agree ? this.smoothBPM : rrBpm);
@@ -407,7 +405,7 @@ export class HeartBeatProcessor {
       }
     }
 
-    const confidence = this.calculateConfidence(ensembleConf, isPeak);
+    const confidence = publishBpm > 0 ? this.calculateConfidence(ensembleConf, isPeak) : Math.min(this.calculateConfidence(ensembleConf, isPeak), 0.25);
 
     return {
       bpm: publishBpm,
@@ -526,6 +524,22 @@ export class HeartBeatProcessor {
       sqi = clamp(sqi + agree * 10, 0, 100);
     }
     return sqi;
+  }
+
+  private canPublishBpm(peakAgeMs: number): boolean {
+    const hrMinSqi = VITAL_THRESHOLDS.QUALITY.MIN_FOR_HR;
+    const hasEnoughRr = this.rrIntervals.length >= 3;
+    const externalQualityOk = this.ppgSqi >= 12;
+    const internalQualityOk = this.signalQualityIndex >= hrMinSqi * 1.8;
+    const motionOk = this.ppgMotionScore <= 1.2 || this.signalQualityIndex >= 45;
+    const ageOk = peakAgeMs < this.BPM_PUBLISH_HOLD_MS;
+    return (
+      this.fingerContactConfirmed &&
+      ageOk &&
+      hasEnoughRr &&
+      motionOk &&
+      (externalQualityOk || internalQualityOk)
+    );
   }
 
   private calculateConfidence(ensembleConf: number, isPeak: boolean): number {
