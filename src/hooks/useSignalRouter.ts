@@ -164,6 +164,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const lastPeakTimestampRef = useRef<number>(0);
   const lastPeakAmplitudeRef = useRef<number>(1.0);
   const runningPeakAverageRef = useRef<number>(0);
+  const recentAmplitudesRef = useRef<number[]>([]);
 
   // Sanity checker
   const [sanityProfileId, setSanityProfileId] = useState<string>(() => getActiveProfileId());
@@ -258,6 +259,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastPeakTimestampRef.current = 0;
     lastPeakAmplitudeRef.current = 1.0;
     runningPeakAverageRef.current = 0;
+    recentAmplitudesRef.current = [];
     ppgMeterRef?.current?.clearBuffer();
 
   }, [processHeartBeat, ppgMeterRef]);
@@ -285,6 +287,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastPeakTimestampRef.current = 0;
     lastPeakAmplitudeRef.current = 1.0;
     runningPeakAverageRef.current = 0;
+    recentAmplitudesRef.current = [];
     ppgMeterRef?.current?.clearBuffer();
 
   }, [ppgMeterRef]);
@@ -361,6 +364,17 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       }
     } else {
       lastHbInputRef.current = 0;
+    }
+
+    // Keep sliding window of unnormalized absolute amplitudes (10 frames ~ 330ms)
+    // to find the true peak crest robust to phase / frame timing offsets.
+    if (hasUsableContact) {
+      recentAmplitudesRef.current.push(Math.abs(hbInput));
+      if (recentAmplitudesRef.current.length > 10) {
+        recentAmplitudesRef.current.shift();
+      }
+    } else {
+      recentAmplitudesRef.current = [];
     }
 
     const heartBeatResult = processHeartBeat.processSignal(
@@ -477,8 +491,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     if (hasUsableContact && heartBeatResult.isPeak) {
       lastPeakTimestampRef.current = nowT;
-      // Measure raw peak amplitude of unnormalized filtered signal (hbInput)
-      const currentPeakAmp = Math.abs(hbInput);
+      // Find the true peak crest in our sliding window to avoid sub-millisecond phase offsets
+      const currentPeakAmp = Math.max(...recentAmplitudesRef.current, 0.001);
       if (runningPeakAverageRef.current === 0) {
         runningPeakAverageRef.current = currentPeakAmp;
       } else {
@@ -490,14 +504,15 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       if (runningPeakAverageRef.current > 1e-5) {
         ampScale = currentPeakAmp / runningPeakAverageRef.current;
       }
-      // Clamp to visually appealing range (e.g. 0.5 to 1.6) to guarantee no excessive clipping
-      lastPeakAmplitudeRef.current = Math.max(0.5, Math.min(1.6, ampScale));
+      // Clamp to visually appealing range (0.75 to 1.25) to prevent overly tall spikes while preserving clear variation
+      lastPeakAmplitudeRef.current = Math.max(0.75, Math.min(1.25, ampScale));
     }
 
     if (!hasUsableContact) {
       lastPeakTimestampRef.current = 0;
       lastPeakAmplitudeRef.current = 1.0;
       runningPeakAverageRef.current = 0;
+      recentAmplitudesRef.current = [];
     }
 
     let eegValue = 0;
