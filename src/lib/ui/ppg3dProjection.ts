@@ -391,17 +391,54 @@ export function drawWaveRibbon3D(
     ctx.stroke();
   }
 
-  // 5) Cresta frontal: la onda honesta con suavizado por curvas cuadráticas
-  //    entre puntos medios. NO altera picos (los máximos/mínimos siguen siendo
-  //    los mismos puntos, se pasan como puntos de control), pero elimina el
-  //    aspecto poligonal/"robótico" del `lineTo` recto.
+  // ─────────────────────────────────────────────────────────────────────────
+  // PRECOMPUTOS PARA RENDER ADAPTATIVO
+  // ─────────────────────────────────────────────────────────────────────────
   //
-  //    IMPORTANTE: usamos SIEMPRE el mismo trazado (misma silueta) para:
-  //      - la sombra base (silueta desplazada y difuminada),
-  //      - el glow tenue de fondo,
-  //      - el brillo del tramo reciente,
-  //      - la cresta nítida en primer plano.
-  //    Esto garantiza que la sombra respete al 100% la silueta de la onda.
+  // 1) Amplitud local por muestra (buffer corto ±AMP_WIN): permite modular la
+  //    sombra por latido según su amplitud real, y estimar reactividad del
+  //    borde líder sin introducir latencia (no desplaza en el tiempo, solo
+  //    lee muestras ya proyectadas).
+  //
+  // 2) Mediana de pendientes vecinas → umbral adaptativo para el suavizado
+  //    por curva. Debajo del umbral: quadraticCurveTo entre puntos medios
+  //    (elimina micro-oscilaciones "robóticas"). Por encima: lineTo directo
+  //    al vértice (preserva EXACTAMENTE el pico whip base→+→−→base).
+  const AMP_WIN = 8;
+  const localAmp = new Float32Array(n);
+  let globalAmp = 0;
+  for (let i = 0; i < n; i++) {
+    const a = i - AMP_WIN > 0 ? i - AMP_WIN : 0;
+    const b = i + AMP_WIN < n - 1 ? i + AMP_WIN : n - 1;
+    let mn = Infinity, mx = -Infinity;
+    for (let j = a; j <= b; j++) {
+      const v = coords[j].val;
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    const amp = mx - mn;
+    localAmp[i] = amp;
+    if (amp > globalAmp) globalAmp = amp;
+  }
+  const safeAmp = globalAmp > 1e-3 ? globalAmp : 1;
+
+  // Pendientes en px pantalla; usamos scratch reusable de tamaño n-1.
+  const slopes = new Float32Array(n > 1 ? n - 1 : 1);
+  for (let i = 1; i < n; i++) slopes[i - 1] = Math.abs(Pf[i].y - Pf[i - 1].y);
+  // Mediana en scratch (in-place quickselect ligero → sort del subarray).
+  const slopesSorted = slopes.slice().sort();
+  const slopeMedian = slopesSorted[slopesSorted.length >> 1] || 0.5;
+  // Umbral: 2.4× la mediana con piso de 1.1 px (evita disparos en ruido puro).
+  const sharpThreshold = Math.max(1.1, slopeMedian * 2.4);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TRAZADOR ADAPTATIVO (suavizado por curva + preservación de whip)
+  // ─────────────────────────────────────────────────────────────────────────
+  // Regla: si la pendiente entre Pf[k] y Pf[k+1] supera `sharpThreshold`,
+  // consideramos que estamos en un flanco de latido (subida/bajada whip) y
+  // trazamos con lineTo al vértice exacto (silueta 100% nítida en el pico).
+  // En zonas suaves, usamos el clásico quadraticCurveTo con puntos medios,
+  // que barre las micro-oscilaciones de cámara sin desplazar los máximos.
   const traceCrestPath = (startIdx: number, endIdx: number) => {
     if (endIdx - startIdx < 2) {
       if (endIdx > startIdx) {
@@ -412,9 +449,18 @@ export function drawWaveRibbon3D(
     }
     ctx.moveTo(Pf[startIdx].x, Pf[startIdx].y);
     for (let k = startIdx; k < endIdx - 1; k++) {
-      const xc = (Pf[k].x + Pf[k + 1].x) * 0.5;
-      const yc = (Pf[k].y + Pf[k + 1].y) * 0.5;
-      ctx.quadraticCurveTo(Pf[k].x, Pf[k].y, xc, yc);
+      const sl = slopes[k] || 0;
+      if (sl > sharpThreshold) {
+        // Zona whip: vértice EXACTO, sin suavizado.
+        ctx.lineTo(Pf[k].x, Pf[k].y);
+        ctx.lineTo(Pf[k + 1].x, Pf[k + 1].y);
+      } else {
+        // Zona suave: curva entre puntos medios usando el vértice como
+        // punto de control → elimina micro-jitter sin desplazar el vértice.
+        const xc = (Pf[k].x + Pf[k + 1].x) * 0.5;
+        const yc = (Pf[k].y + Pf[k + 1].y) * 0.5;
+        ctx.quadraticCurveTo(Pf[k].x, Pf[k].y, xc, yc);
+      }
     }
     ctx.lineTo(Pf[endIdx - 1].x, Pf[endIdx - 1].y);
   };
@@ -432,29 +478,36 @@ export function drawWaveRibbon3D(
     }
   };
 
-  // 5a) SOMBRA SILUETA — una única pasada bajo la onda que sigue exactamente su
-  //     contorno (misma curva), con un desplazamiento sutil hacia abajo/derecha
-  //     y un blur amplio. Esto reemplaza los múltiples `shadowBlur` por trazo
-  //     (que causaban parpadeo y sombras "de contorno" no orgánicas).
+  // 5a) SOMBRA SILUETA ADAPTATIVA POR LATIDO
+  //     Para cada segmento homogéneo, medimos su amplitud local máxima y
+  //     modulamos (offset Y, blur, alpha, ancho) proporcionalmente. Latidos
+  //     grandes proyectan sombras más profundas y difusas; tramos planos
+  //     tienen sombra corta y compacta. Se usa el MISMO `traceCrestPath`,
+  //     de modo que la silueta de la sombra es idéntica a la de la onda.
   if (revealed) {
-    ctx.save();
-    ctx.translate(1.2, 2.4);
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-    ctx.shadowBlur = 14;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
     forEachSegment((s0, e0) => {
+      let peakAmp = 0;
+      for (let i = s0; i < e0; i++) if (localAmp[i] > peakAmp) peakAmp = localAmp[i];
+      const norm = peakAmp / safeAmp; // 0..1
+      const offY = 1.4 + norm * 2.8;   // 1.4 → 4.2 px
+      const blur = 7 + norm * 13;      // 7 → 20 px
+      const alpha = 0.42 + norm * 0.38; // 0.42 → 0.80
+      const width = 2.6 + norm * 1.0;  // 2.6 → 3.6 px
+      ctx.save();
+      ctx.translate(0.8, offY);
+      ctx.shadowColor = `rgba(0, 0, 0, ${alpha.toFixed(3)})`;
+      ctx.shadowBlur = blur;
       ctx.beginPath();
       traceCrestPath(s0, e0);
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
-      ctx.lineWidth = 3.2;
+      ctx.strokeStyle = `rgba(0, 0, 0, ${(alpha * 0.9).toFixed(3)})`;
+      ctx.lineWidth = width;
       ctx.stroke();
+      ctx.restore();
     });
-    ctx.restore();
   }
 
-  // 5b) Glow base tenue (toda la línea) — un solo pase, sin `shadowBlur` por
-  //     segmento; el aura la aporta la sombra silueta anterior.
+  // 5b) Glow base tenue (toda la línea) — un solo pase, sin `shadowBlur`
+  //     acumulativo; el aura la aporta la sombra adaptativa anterior.
   forEachSegment((s0, e0, isArr) => {
     ctx.beginPath();
     traceCrestPath(s0, e0);
@@ -480,14 +533,23 @@ export function drawWaveRibbon3D(
       ctx.stroke();
     });
 
-    // 5d) Cabeza líder (últ. 10%) — brillo cyan/blanco muy sutil.
+    // 5d) Cabeza líder (últ. 10%) con ANCHO REACTIVO a la pendiente local:
+    //     cuando llega un flanco whip real (pendiente >> mediana), el trazo
+    //     se ensancha ligeramente → la onda "reacciona" visualmente al
+    //     latido sin retardar ni una sola muestra. Sin flanco, se atenúa.
     forEachSegment((s0, e0, isArr) => {
       const a = Math.max(s0, leadingCut);
       if (a >= e0 - 1) return;
+      let leadingSlope = 0;
+      for (let i = Math.max(1, a); i < e0; i++) {
+        const sl = slopes[i - 1] || 0;
+        if (sl > leadingSlope) leadingSlope = sl;
+      }
+      const react = Math.min(1.4, leadingSlope / sharpThreshold); // 0..1.4
       ctx.beginPath();
       traceCrestPath(a, e0);
       ctx.strokeStyle = isArr ? `rgb(${C.arr})` : '#ffffff';
-      ctx.lineWidth = 1.3;
+      ctx.lineWidth = 1.1 + react * 0.6; // 1.1 → 1.94 px
       ctx.stroke();
     });
   } else {
@@ -501,6 +563,8 @@ export function drawWaveRibbon3D(
       ctx.stroke();
     }
   }
+
+
 
 
   // 6) Marcadores fiduciales con VALORES en tiempo real: picos máximos (SYS),
