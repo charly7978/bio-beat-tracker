@@ -7,7 +7,7 @@ import {
   lerpDisplayValue,
 } from '@/lib/measurement/displaySmoothing';
 import {
-  TARGET_FPS,
+  BUFFER_SIZE as _BUFFER_SIZE_UNUSED_ALIAS_,
   BUFFER_SIZE,
   TREND_WINDOW_MS,
   TREND_MAX_POINTS,
