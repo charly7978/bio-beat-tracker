@@ -60,7 +60,6 @@ import {
 import { tilePulsatility, pulsatilityBoost } from '../../lib/signal/tileFusion';
 import {
   createActiveStabilizer,
-  stabilizeSample,
   resetActiveStabilizer,
 } from '../../lib/signal/activeStabilizer';
 import { bandLimitedDominantFreq } from './shared/dsp';
@@ -532,12 +531,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         sample.g,
         sample.b,
         motionArtifact,
-        this.placementMode,
-      );
-      const morphSource = this.extractMorphologySignal(
-        sample.r,
-        sample.g,
-        sample.b,
         this.placementMode,
       );
 
