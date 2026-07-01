@@ -162,6 +162,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const lastDiagPushRef = useRef(0);
   const beatMarkerTimerRef = useRef<number | null>(null);
   const lastPeakTimestampRef = useRef<number>(0);
+  const lastPeakAmplitudeRef = useRef<number>(1.0);
 
   // Sanity checker
   const [sanityProfileId, setSanityProfileId] = useState<string>(() => getActiveProfileId());
@@ -254,6 +255,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastSignalPushRef.current = 0;
     lastDiagPushRef.current = 0;
     lastPeakTimestampRef.current = 0;
+    lastPeakAmplitudeRef.current = 1.0;
     ppgMeterRef?.current?.clearBuffer();
 
   }, [processHeartBeat, ppgMeterRef]);
@@ -279,6 +281,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastArrhythmiaData.current = null;
     arrhythmiaDetectedRef.current = false;
     lastPeakTimestampRef.current = 0;
+    lastPeakAmplitudeRef.current = 1.0;
     ppgMeterRef?.current?.clearBuffer();
 
   }, [ppgMeterRef]);
@@ -471,26 +474,37 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     if (hasUsableContact && heartBeatResult.isPeak) {
       lastPeakTimestampRef.current = nowT;
+      // Capture actual filtered amplitude of this peak, clamping to safe range
+      const rawAmp = Math.abs(heartBeatResult.filteredValue);
+      // Normalize relative to typical amplitude (~1.3 is baseline)
+      lastPeakAmplitudeRef.current = Math.max(0.4, Math.min(2.5, rawAmp / 1.3));
     }
 
     if (!hasUsableContact) {
       lastPeakTimestampRef.current = 0;
+      lastPeakAmplitudeRef.current = 1.0;
     }
 
     let eegValue = 0;
     if (hasUsableContact && lastPeakTimestampRef.current > 0) {
       const elapsed = nowT - lastPeakTimestampRef.current;
+      const ampScale = lastPeakAmplitudeRef.current;
+      
+      const maxPeak = 10.0 * ampScale;
+      const minPeak = -4.0 * ampScale;
+      const peakRange = maxPeak - minPeak; // 14.0 * ampScale
+
       // EEG-style heartbeat spike:
-      // 0ms: reached maximum peak (+10.0) at the exact moment of peak detection (coinciding with vibration and beep)
-      // 0ms - 60ms: instant descent from +10.0 to negative peak -4.0 (below baseline)
-      // 60ms - 170ms: return from -4.0 to 0.0
+      // 0ms: reached maximum peak (+10.0 * scale) at the exact moment of peak detection
+      // 0ms - 60ms: instant descent from maxPeak to minPeak (below baseline)
+      // 60ms - 170ms: return from minPeak to 0.0
       // > 170ms: rest at 0.0
       if (elapsed >= 0 && elapsed < 60) {
         const t = elapsed / 60;
-        eegValue = 10.0 - t * 14.0;
+        eegValue = maxPeak - t * peakRange;
       } else if (elapsed >= 60 && elapsed < 170) {
         const t = (elapsed - 60) / 110;
-        eegValue = -4.0 + t * 4.0;
+        eegValue = minPeak + t * Math.abs(minPeak);
       } else {
         eegValue = 0.0;
       }
