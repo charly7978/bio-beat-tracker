@@ -391,76 +391,117 @@ export function drawWaveRibbon3D(
     ctx.stroke();
   }
 
-  // 5) Cresta frontal: la onda honesta con efecto de iluminación animada (estilo 2D)
-  const drawDirectCrestSegment = (startIdx: number, endIdx: number) => {
-    ctx.beginPath();
+  // 5) Cresta frontal: la onda honesta con suavizado por curvas cuadráticas
+  //    entre puntos medios. NO altera picos (los máximos/mínimos siguen siendo
+  //    los mismos puntos, se pasan como puntos de control), pero elimina el
+  //    aspecto poligonal/"robótico" del `lineTo` recto.
+  //
+  //    IMPORTANTE: usamos SIEMPRE el mismo trazado (misma silueta) para:
+  //      - la sombra base (silueta desplazada y difuminada),
+  //      - el glow tenue de fondo,
+  //      - el brillo del tramo reciente,
+  //      - la cresta nítida en primer plano.
+  //    Esto garantiza que la sombra respete al 100% la silueta de la onda.
+  const traceCrestPath = (startIdx: number, endIdx: number) => {
+    if (endIdx - startIdx < 2) {
+      if (endIdx > startIdx) {
+        ctx.moveTo(Pf[startIdx].x, Pf[startIdx].y);
+        ctx.lineTo(Pf[endIdx].x, Pf[endIdx].y);
+      }
+      return;
+    }
     ctx.moveTo(Pf[startIdx].x, Pf[startIdx].y);
-    for (let k = startIdx + 1; k < endIdx; k++) {
-      ctx.lineTo(Pf[k].x, Pf[k].y);
+    for (let k = startIdx; k < endIdx - 1; k++) {
+      const xc = (Pf[k].x + Pf[k + 1].x) * 0.5;
+      const yc = (Pf[k].y + Pf[k + 1].y) * 0.5;
+      ctx.quadraticCurveTo(Pf[k].x, Pf[k].y, xc, yc);
+    }
+    ctx.lineTo(Pf[endIdx - 1].x, Pf[endIdx - 1].y);
+  };
+
+  // Recorre segmentos homogéneos (normal / arritmia) y ejecuta un callback
+  // por segmento con sus índices — evita duplicar la lógica de partición.
+  const forEachSegment = (fn: (startIdx: number, endEnd: number, isArr: boolean) => void) => {
+    let s = 0;
+    while (s < n - 1) {
+      const isArr = coords[s].isArr;
+      let segEnd = s;
+      while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
+      fn(s, segEnd + 1, isArr);
+      s = segEnd;
     }
   };
 
-  const recentCut = Math.max(0, n - Math.floor(n * 0.35));
-  const leadingCut = Math.max(0, n - Math.floor(n * 0.10));
-
-  // 5a) Trazo base (toda la línea)
-  s = 0;
-  while (s < n - 1) {
-    const isArr = coords[s].isArr;
-    let segEnd = s;
-    while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-    drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
-    ctx.strokeStyle = revealed
-      ? (isArr ? `rgba(${C.arr}, 0.4)` : `rgba(${C.signal}, 0.45)`)
-      : 'rgba(148, 163, 184, 0.25)';
-    ctx.lineWidth = 2.0;
-    ctx.shadowBlur = 0;
-    ctx.stroke();
-    s = segEnd;
+  // 5a) SOMBRA SILUETA — una única pasada bajo la onda que sigue exactamente su
+  //     contorno (misma curva), con un desplazamiento sutil hacia abajo/derecha
+  //     y un blur amplio. Esto reemplaza los múltiples `shadowBlur` por trazo
+  //     (que causaban parpadeo y sombras "de contorno" no orgánicas).
+  if (revealed) {
+    ctx.save();
+    ctx.translate(1.2, 2.4);
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+    ctx.shadowBlur = 14;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    forEachSegment((s0, e0) => {
+      ctx.beginPath();
+      traceCrestPath(s0, e0);
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+      ctx.lineWidth = 3.2;
+      ctx.stroke();
+    });
+    ctx.restore();
   }
+
+  // 5b) Glow base tenue (toda la línea) — un solo pase, sin `shadowBlur` por
+  //     segmento; el aura la aporta la sombra silueta anterior.
+  forEachSegment((s0, e0, isArr) => {
+    ctx.beginPath();
+    traceCrestPath(s0, e0);
+    ctx.strokeStyle = revealed
+      ? (isArr ? `rgba(${C.arr}, 0.42)` : `rgba(${C.signal}, 0.48)`)
+      : 'rgba(148, 163, 184, 0.25)';
+    ctx.lineWidth = 2.4;
+    ctx.stroke();
+  });
 
   if (revealed) {
-    // 5b) Trazo con brillo base (último 35%)
-    ctx.shadowColor = `rgba(${C.signal}, 0.45)`;
-    ctx.shadowBlur = 8; // SHADOW_BLUR_BASE
-    s = Math.max(recentCut, 0);
-    while (s < n - 1) {
-      const isArr = coords[s].isArr;
-      let segEnd = s;
-      while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-      drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
-      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.65)` : `rgba(${C.signal}, 0.68)`;
-      ctx.lineWidth = 1.6; // GLOW_STROKE_WIDTH
-      ctx.stroke();
-      s = segEnd;
-    }
+    const recentCut = Math.max(0, n - Math.floor(n * 0.35));
+    const leadingCut = Math.max(0, n - Math.floor(n * 0.10));
 
-    // 5c) Trazo líder de punta (último 10%)
-    ctx.shadowBlur = 15; // SHADOW_BLUR_LEADING
-    s = Math.max(leadingCut, 0);
-    while (s < n - 1) {
-      const isArr = coords[s].isArr;
-      let segEnd = s;
-      while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-      drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
-      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.85)` : '#4ade80';
-      ctx.lineWidth = 1.5; // LEADING_STROKE_WIDTH
-      ctx.shadowColor = isArr ? `rgba(${C.arr}, 0.45)` : `rgba(${C.signal}, 0.45)`;
+    // 5c) Refuerzo del tramo reciente (últ. 35%): línea más nítida, sin blur.
+    forEachSegment((s0, e0, isArr) => {
+      const a = Math.max(s0, recentCut);
+      if (a >= e0 - 1) return;
+      ctx.beginPath();
+      traceCrestPath(a, e0);
+      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.85)` : `rgba(${C.signalBright}, 0.9)`;
+      ctx.lineWidth = 1.7;
       ctx.stroke();
-      s = segEnd;
-    }
-    ctx.shadowBlur = 0;
+    });
+
+    // 5d) Cabeza líder (últ. 10%) — brillo cyan/blanco muy sutil.
+    forEachSegment((s0, e0, isArr) => {
+      const a = Math.max(s0, leadingCut);
+      if (a >= e0 - 1) return;
+      ctx.beginPath();
+      traceCrestPath(a, e0);
+      ctx.strokeStyle = isArr ? `rgb(${C.arr})` : '#ffffff';
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+    });
   } else {
     // Trazo de punta tenue sin brillo cuando se está estabilizando
-    s = Math.max(leadingCut, 0);
-    if (s < n - 1) {
-      drawDirectCrestSegment(s, n);
+    const leadingCut = Math.max(0, n - Math.floor(n * 0.10));
+    if (leadingCut < n - 1) {
+      ctx.beginPath();
+      traceCrestPath(leadingCut, n);
       ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)';
       ctx.lineWidth = 2.0;
-      ctx.shadowBlur = 0;
       ctx.stroke();
     }
   }
+
 
   // 6) Marcadores fiduciales con VALORES en tiempo real: picos máximos (SYS),
   //    valles mínimos (DIA), muesca dícrota (DIC) y etiquetas de arritmia (ARR).
