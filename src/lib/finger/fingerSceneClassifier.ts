@@ -41,8 +41,8 @@ export function passesLiveFingerContact(
 ): boolean {
   const F = VITAL_THRESHOLDS.FINGER;
   if (isOpenFlashWithoutContact(raw) || isOpenFlashWithoutContact(smoothed)) return false;
-  if (spatial.coverageRatio < F.MIN_COVERAGE * 0.88) return false;
-  if (spatial.fingerTileCount < F.MIN_FINGER_TILES_FOR_WEIGHTING) return false;
+  if (spatial.coverageRatio < F.MIN_COVERAGE * 0.82) return false;
+  if (spatial.fingerTileCount < Math.max(1, F.MIN_FINGER_TILES_FOR_WEIGHTING - 1)) return false;
 
   if (ensembleScore !== undefined && ensembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.85) {
     return true;
@@ -73,7 +73,7 @@ export function passesFingerMaintain(
   if (ensembleScore !== undefined && ensembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.8) {
     return true;
   }
-  if (!hasFingerHemoglobinSignature(raw)) return false;
+  if (!hasFingerHemoglobinSignature(raw) && !hasFingerHemoglobinSignature(smoothed)) return false;
   return true;
 }
 
@@ -131,7 +131,10 @@ export function passesPulsatileAcquire(
 ): boolean {
   const F = VITAL_THRESHOLDS.FINGER;
   if (ensembleScore !== undefined && ensembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.75) {
-    if (roiRedCv >= F.ROI_RED_CV_MIN * 0.8) return true;
+    if (
+      roiRedCv >= F.ROI_RED_CV_MIN * 0.8 &&
+      !isExposureFlickerNotFingerPulse(roiRedCv, smoothed, F.PULSATILE_ACQUIRE_RB)
+    ) return true;
   }
   if (roiRedCv < F.ROI_RED_CV_MIN) return false;
   if (isExposureFlickerNotFingerPulse(roiRedCv, smoothed, F.PULSATILE_ACQUIRE_RB)) return false;
