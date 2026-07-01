@@ -7,6 +7,7 @@ import { RingF32 } from '../../utils/RingBuffer';
 import { SignalResampler } from './shared/SignalResampler';
 import { MovingAverageDetrending } from './shared/MovingAverageDetrending';
 import { ButterworthBandpass } from './shared/ButterworthFilter';
+import { LMSFilter } from './shared/LMSFilter';
 import {
   DEFAULT_BACKPRESSURE_CONFIG,
   sanitizeBackpressureConfig,
@@ -100,6 +101,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private readonly resampler = new SignalResampler(30, 'cubic');
   private readonly greenDetrending = new MovingAverageDetrending(45);
   private readonly greenButterworth = new ButterworthBandpass(4, 0.75, 3.33, 30);
+  private readonly lmsFilter = new LMSFilter(12, 0.05);
   /** BPM estimado para el notch adaptativo del canal 5 (arritmias) */
   private lastKnownBpm = 0;
   private placementMode: FingerPlacementMode = 'hybrid';
@@ -538,8 +540,20 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
       const endFilt = ppgPerf.start('bandpass');
       
+      // Option B: LMS Adaptive Filter to cancel finger motion/pressure drift
+      // Reference input (noise reference) = Red channel AC component
+      // Desired input (corrupted signal) = Green channel AC component
+      const rn = this.redBaseline > 0 ? (this.redBaseline - sample.r) / this.redBaseline : 0.0;
+      const gn = this.greenBaseline > 0 ? (this.greenBaseline - sample.g) / this.greenBaseline : 0.0;
+      const lmsCleanedAc = this.lmsFilter.filter(rn, gn);
+
+      // Reconstruct the raw intensity green signal with subtracted noise components
+      const lmsCleanedGreen = this.greenBaseline > 0
+        ? this.greenBaseline - (lmsCleanedAc * this.greenBaseline)
+        : sample.g;
+
       // Cascaded Filter Flow: Detrending -> Butterworth Bandpass
-      const greenDetrended = this.greenDetrending.filter(sample.g);
+      const greenDetrended = this.greenDetrending.filter(lmsCleanedGreen);
       const greenFiltered = this.greenButterworth.filter(greenDetrended);
 
       // AGC to normalize amplitude for peak detection
@@ -557,7 +571,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       // === BANCO DE FILTROS POR CANAL VITAL (PPGSignalSplitter) ===
       const splitOut = this.signalSplitter.process(
         sample.r,
-        sample.g,
+        lmsCleanedGreen,
         sample.b,
         this.lastKnownBpm,
       );
@@ -1413,12 +1427,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const bPulse = clampPulse(bNorm);
     const amp = 4400;
 
-    // Plane-Orthogonal-to-Skin (POS) Projection — con alpha adaptativo suavizado.
-    // stdX/stdY estima el ángulo del plano piel; se suaviza con EMA y se pondera
-    // por confianza estadística (stdY grande → estimación fiable; stdY pequeño →
-    // se blend hacia el prior suavizado para evitar inestabilidad por división).
-    const X = gPulse - bPulse;
-    const Y = gPulse + bPulse - 2 * rPulse;
+    // Option A: Algoritmo POS (Plane-Orthogonal-to-Skin) / CHROM Hybrid Projection
+    // Separates the pulse variations from physical motion using normalized AC channels
+    // mapped to skin-tone chrominance dynamics vectors, with a stabilized adaptive projection factor.
+    const X = 3 * rPulse - 2 * gPulse;
+    const Y = 1.5 * rPulse + gPulse - 1.5 * bPulse;
     this.xBuffer.push(X);
     this.yBuffer.push(Y);
 
@@ -1428,7 +1441,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const reliability = clamp(stdY / Math.max(1, stdX * 0.5 + stdY), 0, 1);
     const blendedAlpha = rawAlpha * reliability + this.smoothedPosAlpha * (1 - reliability);
     this.smoothedPosAlpha = this.smoothedPosAlpha * 0.9 + blendedAlpha * 0.1;
-    const posVal = X + this.smoothedPosAlpha * Y;
+    const posVal = X - this.smoothedPosAlpha * Y;
 
     // Source candidates (CHROM removed — amplifica ruido sin dedo)
     const sources: { [key: string]: number } = {
@@ -1705,6 +1718,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.resampler.reset();
     this.greenDetrending.reset();
     this.greenButterworth.reset();
+    this.lmsFilter.reset();
     this.lastKnownBpm = 0;
     resetPulseAgc(this.pulseAgcState);
     this.roiRedPulseRing.reset();

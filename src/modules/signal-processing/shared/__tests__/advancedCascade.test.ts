@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { SignalResampler } from '../SignalResampler';
 import { MovingAverageDetrending } from '../MovingAverageDetrending';
 import { ButterworthFilter, ButterworthBandpass } from '../ButterworthFilter';
+import { LMSFilter } from '../LMSFilter';
 
 describe('SignalResampler', () => {
   it('resamples irregular timestamps to perfect target intervals', () => {
@@ -111,5 +112,57 @@ describe('ButterworthFilter', () => {
     expect(cardiacMaxOut).toBeGreaterThan(0.3);
     expect(noiseMaxOut).toBeLessThan(0.08);
     expect(cardiacMaxOut / noiseMaxOut).toBeGreaterThan(5.0);
+  });
+});
+
+describe('LMSFilter', () => {
+  it('converges and cancels correlated noise from primary signal', () => {
+    // 12 taps, 0.05 step size
+    const lms = new LMSFilter(12, 0.05);
+
+    // Create a 1.5 Hz sine wave representing the clean PPG signal (Green AC)
+    // Create a 0.5 Hz slow sway representing the motion artifact (Red AC)
+    // The contaminated signal will be the PPG + 0.5 * motion sway
+    const fs = 30;
+    const cleanSignal: number[] = [];
+    const noiseReference: number[] = [];
+    const contaminatedSignal: number[] = [];
+
+    for (let i = 0; i < 200; i++) {
+      const t = i / fs;
+      const clean = Math.sin(2 * Math.PI * 1.5 * t) * 0.02; // PPG amplitude
+      const noise = Math.sin(2 * Math.PI * 0.5 * t) * 0.05; // Tremor amplitude
+      cleanSignal.push(clean);
+      noiseReference.push(noise);
+      contaminatedSignal.push(clean + noise); // Contaminated
+    }
+
+    // Run the filter
+    const errorSignal: number[] = [];
+    for (let i = 0; i < 200; i++) {
+      const err = lms.filter(noiseReference[i], contaminatedSignal[i]);
+      errorSignal.push(err);
+    }
+
+    // Calculate root-mean-square error in the second half (after convergence)
+    let contaminatedRms = 0;
+    let errorRms = 0;
+    const startIdx = 100; // Let it warm up for 100 samples
+    const count = 100;
+
+    for (let i = startIdx; i < 200; i++) {
+      // The goal is for the errorSignal (cleaned output) to be close to the cleanSignal
+      const contDiff = contaminatedSignal[i] - cleanSignal[i]; // Difference before filtering (just the noise)
+      const errDiff = errorSignal[i] - cleanSignal[i]; // Difference after filtering (residual noise)
+
+      contaminatedRms += contDiff * contDiff;
+      errorRms += errDiff * errDiff;
+    }
+
+    contaminatedRms = Math.sqrt(contaminatedRms / count);
+    errorRms = Math.sqrt(errorRms / count);
+
+    // The residual noise RMS should be significantly lower than the input noise RMS
+    expect(errorRms).toBeLessThan(contaminatedRms * 0.35); // At least 65% noise reduction
   });
 });
