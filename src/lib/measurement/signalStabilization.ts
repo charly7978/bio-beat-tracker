@@ -100,11 +100,16 @@ export function updateStabilization(
   const minPeriodicity = C.MIN_PERIODICITY - relaxFactor * 0.14;// de 0.30 a 0.16
   const qualityDwellFrames = Math.round(C.QUALITY_DWELL_FRAMES - relaxFactor * 15); // de 30 a 15 frames
 
+  // Toleramos mayor movimiento si la calidad de señal (sqi) es alta,
+  // o si se activa la relajación adaptativa por tiempo.
+  const motionTolerance = s.sqi >= 50 ? 0.9 : s.sqi >= 30 ? 0.4 : 0;
+  const maxMotion = C.MAX_MOTION + relaxFactor * 0.9 + motionTolerance;
+
   const qualityOk =
     s.sqi >= minSqi &&
     s.perfusionIndex >= minPi &&
     s.periodicity >= minPeriodicity &&
-    s.motionScore <= C.MAX_MOTION;
+    s.motionScore <= maxMotion;
   state.qualityStreak = qualityOk
     ? Math.min(state.qualityStreak + 1, qualityDwellFrames)
     : Math.max(0, state.qualityStreak - 2);

@@ -300,10 +300,17 @@ export class HeartBeatProcessor {
         stableBpm: this.smoothBPM,
       });
 
-      // Gate de movimiento: durante movimiento claro (IMU) la señal está
-      // corrupta → no emitir latidos (evita latidos erráticos por micro-movimiento).
-      const motionSuppressed =
-        this.ppgMotionScore > PEAK_DETECTION_DEFAULTS.peakEmitMotionSuppress;
+      // Gate de movimiento: durante movimiento claro (IMU) la señal se puede corromper.
+      // Sin embargo, si la calidad de la señal óptica (SQI) es buena, toleramos mayor
+      // aceleración física (hasta 1.8) ya que el acoplamiento dedo-lente sigue siendo estable.
+      const effectiveSqi = Math.max(this.signalQualityIndex, this.ppgSqi);
+      const motionLimit = effectiveSqi >= 50
+        ? 1.8
+        : effectiveSqi >= 30
+          ? 1.2
+          : PEAK_DETECTION_DEFAULTS.peakEmitMotionSuppress; // 0.6
+
+      const motionSuppressed = this.ppgMotionScore > motionLimit;
 
       if (decision.emit && motionSuppressed) {
         emitReason = 'MOTION_SUPPRESSED';

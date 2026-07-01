@@ -373,7 +373,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     this.updateContactState(roi);
 
-    const motionArtifact = this.motionScore > this.MOTION_THRESHOLD;
+    // Toleramos mayor movimiento físico (aceleración/giroscopio) si la calidad de
+    // la señal óptica (SQI) sigue siendo buena, ya que el acoplamiento dedo-lente
+    // puede permanecer estable a pesar de temblores o giros del celular.
+    const effectiveMotionThreshold = this.signalQuality >= 50
+      ? 1.8
+      : this.signalQuality >= 30
+        ? 1.2
+        : this.MOTION_THRESHOLD; // 0.6
+    const motionArtifact = this.motionScore > effectiveMotionThreshold;
     const fingerEnsemble = updateFingerDetection(
       { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue, coverage: roi.coverageRatio, fingerScore: roi.fingerScore },
       { red: this.smoothedRed, green: this.smoothedGreen, blue: this.smoothedBlue, coverage: this.smoothedCoverage, fingerScore: this.smoothedFingerScore },
