@@ -35,6 +35,7 @@ export interface StabilizationState {
   qualityStreak: number;
   stabilized: boolean;
   progress: number;
+  contactStartMs?: number;
 }
 
 export interface StabilizationResult {
@@ -67,9 +68,18 @@ export function updateStabilization(
     state.bpmVals.length = 0;
     state.qualityStreak = 0;
     state.stabilized = false;
+    state.contactStartMs = undefined;
     state.progress = Math.max(0, state.progress - C.PROGRESS_FALL * 2);
     return { stage: 'SEARCHING', progress: state.progress, stabilized: false, reason: 'NO_CONTACT' };
   }
+
+  if (state.contactStartMs === undefined) {
+    state.contactStartMs = s.nowMs;
+  }
+
+  const contactDuration = s.nowMs - state.contactStartMs;
+  // Factor de relajación: 0.0 a los 5 segundos de contacto continuo, escalando hasta 1.0 a los 10 segundos
+  const relaxFactor = clamp01((contactDuration - 5000) / 5000);
 
   // 1) Acumula BPM válido (suavizado) en la ventana deslizante.
   if (s.bpm >= HR.MIN && s.bpm <= HR.MAX) {
@@ -84,14 +94,19 @@ export function updateStabilization(
     }
   }
 
-  // 2) Calidad instantánea sostenida (dwell).
+  // 2) Calidad instantánea sostenida (dwell) con umbrales adaptativos por relajación.
+  const minSqi = C.MIN_SQI - relaxFactor * 14;                  // de 32 a 18
+  const minPi = C.MIN_PI - relaxFactor * 0.0006;                // de 0.0010 a 0.0004
+  const minPeriodicity = C.MIN_PERIODICITY - relaxFactor * 0.14;// de 0.30 a 0.16
+  const qualityDwellFrames = Math.round(C.QUALITY_DWELL_FRAMES - relaxFactor * 15); // de 30 a 15 frames
+
   const qualityOk =
-    s.sqi >= C.MIN_SQI &&
-    s.perfusionIndex >= C.MIN_PI &&
-    s.periodicity >= C.MIN_PERIODICITY &&
+    s.sqi >= minSqi &&
+    s.perfusionIndex >= minPi &&
+    s.periodicity >= minPeriodicity &&
     s.motionScore <= C.MAX_MOTION;
   state.qualityStreak = qualityOk
-    ? Math.min(state.qualityStreak + 1, C.QUALITY_DWELL_FRAMES)
+    ? Math.min(state.qualityStreak + 1, qualityDwellFrames)
     : Math.max(0, state.qualityStreak - 2);
 
   // 3) Cálculo del Índice de Estabilidad de Contacto (0..1)
@@ -119,6 +134,15 @@ export function updateStabilization(
     progressFall = C.PROGRESS_FALL * 2.0; // cae rápido si se pierde estabilidad
   }
 
+  // Relajamos también minSamples y minWindowMs si la calidad se estanca tras 5 segundos
+  if (relaxFactor > 0) {
+    minSamples = Math.round(minSamples - relaxFactor * 12);
+    minWindowMs = Math.round(minWindowMs - relaxFactor * 600);
+    // Aseguramos límites lógicos mínimos
+    minSamples = Math.max(15, minSamples);
+    minWindowMs = Math.max(1500, minWindowMs);
+  }
+
   // 5) Convergencia del BPM en la ventana (la lectura "dejó de moverse").
   const n = state.bpmVals.length;
   const span = n > 0 ? s.nowMs - state.bpmTimes[0]! : 0;
@@ -132,7 +156,7 @@ export function updateStabilization(
   const spread = n > 0 ? bmax - bmin : Infinity;
   const converged =
     n >= minSamples && span >= minWindowMs && spread <= bpmSpreadMax;
-  const qualitySustained = state.qualityStreak >= C.QUALITY_DWELL_FRAMES;
+  const qualitySustained = state.qualityStreak >= qualityDwellFrames;
 
   if (converged && qualitySustained) state.stabilized = true; // latch
 
@@ -146,7 +170,7 @@ export function updateStabilization(
     const pSpan = clamp01(span / minWindowMs);
     const pSamples = clamp01(n / minSamples);
     const pConv = n >= 4 ? clamp01(1 - (spread - bpmSpreadMax) / (bpmSpreadMax * 2)) : 0;
-    const pQual = clamp01(state.qualityStreak / C.QUALITY_DWELL_FRAMES);
+    const pQual = clamp01(state.qualityStreak / qualityDwellFrames);
     target = Math.min(pSpan, pSamples, pConv, pQual);
     reason =
       pQual <= pConv && pQual <= pSpan && pQual <= pSamples

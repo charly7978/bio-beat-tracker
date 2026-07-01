@@ -108,4 +108,34 @@ describe('signalStabilization (convergencia, no timer)', () => {
     expect(r.stabilized).toBe(true);
     expect(r.stage).toBe('READY');
   });
+
+  it('relajación adaptativa por tiempo → señal subóptima pero estable logra estabilizar tras 9.5 segundos', () => {
+    const st = createStabilizationState();
+    // Calidad subóptima permanente (ej: sqi=22, PI=0.0006, periodicity=0.22)
+    // Con los umbrales estrictos iniciales (sqi>=32, PI>=0.0010), no estabilizaría en 4.5 segundos (140 frames).
+    // Pero tras 9.5 segundos de contacto continuo (290 frames), los umbrales se relajan y el BPM estable converge.
+    
+    // Primero alimentamos 140 frames (~4.6s): no debe estar estable aún
+    let r = feed(st, 140, () => ({
+      bpm: 72,
+      sqi: 22,
+      perfusionIndex: 0.0006,
+      periodicity: 0.22,
+      motionScore: 0.1
+    }));
+    expect(r.stabilized).toBe(false);
+
+    // Alimentamos de forma contigua los siguientes 160 frames para continuar la línea temporal
+    for (let i = 140; i < 300; i++) {
+      r = updateStabilization(st, base(i, {
+        bpm: 72,
+        sqi: 22,
+        perfusionIndex: 0.0006,
+        periodicity: 0.22,
+        motionScore: 0.1
+      }));
+    }
+    expect(r.stabilized).toBe(true);
+    expect(r.stage).toBe('READY');
+  });
 });
