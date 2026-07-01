@@ -432,10 +432,12 @@ const Index = () => {
   useEffect(() => {
     const profile = CalibrationManager.getInstance().getAnthropometric();
     if (profile) {
-      setAge(profile.ageYears.toString());
+      const ageValue = profile.ageYears ?? profile.age ?? 35;
+      const isMale = profile.isMale ?? (profile.gender === 'male' ? true : profile.gender === 'female' ? false : true);
+      setAge(ageValue.toString());
       setHeight(profile.heightCm.toString());
       setWeight(profile.weightKg.toString());
-      setGender(profile.isMale ? "male" : "female");
+      setGender(isMale ? "male" : "female");
     }
   }, []);
 

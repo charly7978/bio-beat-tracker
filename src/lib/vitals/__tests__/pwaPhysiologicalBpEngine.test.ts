@@ -59,4 +59,20 @@ describe('pwaPhysiologicalBpEngine', () => {
     const oldIdx = computePhysiologicalIndices(baseFeatures, { hr: 72, rmssd: 35, cyclePeriodMs: 830 }, { ageYears: 70, heightCm: 180, weightKg: 70, isMale: true });
     expect(oldIdx.complianceIndex).toBeLessThan(youngIdx.complianceIndex);
   });
+
+  it('acepta perfiles antropométricos simplificados con edad y género', () => {
+    const raw = estimatePhysiologicalBp(baseFeatures, {
+      hr: 72,
+      rmssd: 35,
+      cyclePeriodMs: 830,
+    }, {
+      age: 42,
+      heightCm: 175,
+      weightKg: 74,
+      gender: 'male',
+    });
+
+    expect(raw.systolic).toBeGreaterThan(raw.diastolic);
+    expect(isPhysiologicalBp(raw.systolic, raw.diastolic)).toBe(true);
+  });
 });

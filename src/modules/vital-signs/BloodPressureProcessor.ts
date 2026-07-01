@@ -274,7 +274,8 @@ export class BloodPressureProcessor {
     if (f.augmentationIndex > 2 && f.augmentationIndex < 45) score += 10;
     if (f.dicroticDepth > 0 && f.dicroticDepth < 0.8) score += 8;
     if (f.pw50Ms > 60 && f.pw50Ms < 600) score += 7;
-    if (f.harmonicDistortion > 0.05 && f.harmonicDistortion < 1) score += 5;
+    const harmonicDistortion = f.harmonicDistortion ?? 0.3;
+    if (harmonicDistortion > 0.05 && harmonicDistortion < 1) score += 5;
     return Math.min(100, score);
   }
 
