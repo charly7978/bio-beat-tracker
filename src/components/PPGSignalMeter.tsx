@@ -150,7 +150,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const displaySpo2Ref = useRef(0);
   const displaySysRef = useRef(0);
   const displayDiaRef = useRef(0);
-  const waveGainRef = useRef(4.2);
+  const waveGainRef = useRef(4.5);
 
   useImperativeHandle(ref, () => ({
     pushSignal: (val: number, _ts: number) => {
