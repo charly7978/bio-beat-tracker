@@ -162,9 +162,11 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   // y en profundidad (Z) → celdas cuadradas que se escorzan hacia el horizonte.
   // Menos columnas = celdas más grandes. Líneas mayores cada 5 (estilo papel ECG).
   const TARGET_COLS = 11;
+  const GRID_WIDTH_FACTOR = 1.25;
   const cellPx = proj.plotW / TARGET_COLS;
   const halfCols = Math.ceil(TARGET_COLS / 2);
-  const halfX = halfCols * cellPx;
+  const colExtent = Math.ceil(halfCols * GRID_WIDTH_FACTOR);
+  const halfX = colExtent * cellPx;
   const dZ = cellPx / proj.floorSpanY; // paso de profundidad = ancho de celda → cuadrada
 
   // Filas (Z constante): cuadradas cerca, agrupándose al horizonte. Se cortan cuando
@@ -188,7 +190,7 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   }
 
   // Columnas (X constante): separadas cellPx en mundo → convergen al punto de fuga.
-  for (let k = -halfCols; k <= halfCols; k++) {
+  for (let k = -colExtent; k <= colExtent; k++) {
     const xw = k * cellPx;
     const near = proj.floorPoint(xw, proj.zNear);
     const far = proj.floorPoint(xw, proj.zFar);
