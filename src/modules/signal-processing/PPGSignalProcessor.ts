@@ -1020,7 +1020,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     // si la firma de color falla por balance de blancos/presión/colocación.
     const fingerByPulse =
       (pulsatileContact || this.lastEnsembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.7) &&
-      spatial.coverageRatio >= F.MIN_COVERAGE * 0.5;
+      spatial.coverageRatio >= Math.max(F.MIN_COVERAGE * 0.5, F.PULSATILE_ACQUIRE_FINGER_ROI) &&
+      spatial.fingerScore >= F.ACQUIRE_SOFT_FINGER_SCORE_ROI &&
+      spatial.fingerTileCount >= Math.max(2, F.MIN_FINGER_TILES_FOR_WEIGHTING);
     if (!passesLiveFingerContact(raw, smoothed, spatial, this.lastEnsembleScore)) {
       return fingerByPulse;
     }

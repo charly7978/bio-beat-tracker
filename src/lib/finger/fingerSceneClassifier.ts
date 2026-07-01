@@ -130,10 +130,18 @@ export function passesPulsatileAcquire(
   ensembleScore?: number,
 ): boolean {
   const F = VITAL_THRESHOLDS.FINGER;
+  const minTiles = Math.max(2, F.MIN_FINGER_TILES_FOR_WEIGHTING);
+  const minCoverage = Math.max(F.PULSATILE_ACQUIRE_COVERAGE, F.PULSATILE_ACQUIRE_FINGER_ROI);
+  const enoughFingerShape =
+    spatial.coverageRatio >= minCoverage &&
+    spatial.fingerScore >= F.ACQUIRE_SOFT_FINGER_SCORE_ROI &&
+    spatial.fingerTileCount >= minTiles;
+
   if (ensembleScore !== undefined && ensembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.75) {
     if (
       roiRedCv >= F.ROI_RED_CV_MIN * 0.8 &&
-      !isExposureFlickerNotFingerPulse(roiRedCv, smoothed, F.PULSATILE_ACQUIRE_RB)
+      !isExposureFlickerNotFingerPulse(roiRedCv, smoothed, F.PULSATILE_ACQUIRE_RB) &&
+      enoughFingerShape
     ) return true;
   }
   if (roiRedCv < F.ROI_RED_CV_MIN) return false;
@@ -147,7 +155,7 @@ export function passesPulsatileAcquire(
     r / g >= F.PULSATILE_ACQUIRE_RG &&
     r / b >= F.PULSATILE_ACQUIRE_RB &&
     dom >= F.PULSATILE_ACQUIRE_MIN_DOMINANCE &&
-    spatial.coverageRatio >= F.PULSATILE_ACQUIRE_COVERAGE
+    enoughFingerShape
   );
 }
 
