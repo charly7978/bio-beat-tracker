@@ -39,6 +39,10 @@ export interface NativeCameraCapabilityReportLike {
 
 const TCL_UA = /\bTCL\b|TCL[_\s-]|T671|6156|LE7|LF7/i;
 const MOTOROLA_UA = /motorola|moto[\s/_-]|xt\d{4}/i;
+const NATIVE_PROFILE_STORAGE_KEY = 'bb-native-camera-profile-v1';
+
+let nativeCapabilityCache: NativeCameraCapabilityReportLike | null = readNativeCapabilityCache();
+let nativeProfilePrimed = false;
 
 export function isTclLikeUserAgent(ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''): boolean {
   return TCL_UA.test(ua);
@@ -76,23 +80,52 @@ const STRICT_TCL: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 'torchRe
   torchExpComp: -0.5,
 };
 
+export function primeNativeCameraRuntimeProfile(): void {
+  if (nativeProfilePrimed || typeof window === 'undefined') return;
+  nativeProfilePrimed = true;
+  import('@/lib/native/NativePpgCapture')
+    .then(({ safeNativePpgCapabilities }) => safeNativePpgCapabilities())
+    .then((report) => {
+      nativeCapabilityCache = report;
+      try {
+        window.localStorage.setItem(NATIVE_PROFILE_STORAGE_KEY, JSON.stringify({
+          report,
+          selectedCameraId: selectNativePpgCamera(report)?.cameraId,
+          bestFps: maxNativeFps(selectNativePpgCamera(report)),
+          savedAt: Date.now(),
+        }));
+      } catch {
+        // ignore storage failures
+      }
+    })
+    .catch(() => {
+      // Native profile is opportunistic. WebRTC remains the active fallback.
+    });
+}
+
 export function inferCameraRuntimeHints(
   cameraDiag?: Record<string, unknown> | null,
 ): CameraRuntimeHints {
+  primeNativeCameraRuntimeProfile();
+  const nativeFallback = nativeCapabilityCache ? inferNativeCameraRuntimeHints(nativeCapabilityCache, false) : null;
   const ua =
     (typeof cameraDiag?.userAgent === 'string' && cameraDiag.userAgent) ||
     (typeof navigator !== 'undefined' ? navigator.userAgent : '');
   const tclLike = isTclLikeUserAgent(ua);
   const motorolaLike = isMotorolaLikeUserAgent(ua);
-  const fps = typeof cameraDiag?.fpsEffective === 'number' ? cameraDiag.fpsEffective : 0;
+  const nativeSelected = selectNativePpgCamera(nativeCapabilityCache);
+  const nativeFps = maxNativeFps(nativeSelected);
+  const fps = typeof cameraDiag?.fpsEffective === 'number'
+    ? cameraDiag.fpsEffective
+    : nativeFps;
   const jitter =
-    typeof cameraDiag?.timestampJitterMs === 'number' ? cameraDiag.timestampJitterMs : 0;
-  const torchSupported = cameraDiag?.torchSupported !== false;
+    typeof cameraDiag?.timestampJitterMs === 'number' ? cameraDiag.timestampJitterMs : (nativeFps >= 30 ? 0 : 70);
+  const torchSupported = cameraDiag?.torchSupported !== false && (nativeSelected?.flashAvailable ?? true);
   const torchActive = cameraDiag?.torchActive === true;
-  const torchReliable = torchSupported && torchActive;
+  const torchReliable = torchSupported && (torchActive || !!nativeSelected?.flashAvailable);
 
   const base = tclLike ? STRICT_TCL : TOLERANT_DEFAULT;
-  const constrained = !tclLike;
+  const constrained = !tclLike || !!nativeFallback?.constrained;
 
   let profile = { ...base };
   if (!tclLike && (fps > 0 && fps < 18 || jitter > 55)) {
@@ -104,7 +137,10 @@ export function inferCameraRuntimeHints(
     };
   }
 
-  const iso = typeof cameraDiag?.iso === 'number' ? cameraDiag.iso as number : 0;
+  const nativeIsoMid = nativeSelected?.isoRange
+    ? Math.round((nativeSelected.isoRange.min + nativeSelected.isoRange.max) / 2)
+    : 0;
+  const iso = typeof cameraDiag?.iso === 'number' ? cameraDiag.iso as number : nativeIsoMid;
   const expComp = typeof cameraDiag?.exposureCompensation === 'number' ? cameraDiag.exposureCompensation as number : 0;
 
   return {
@@ -113,6 +149,9 @@ export function inferCameraRuntimeHints(
     motorolaLike,
     torchReliable,
     ...profile,
+    exposureTrackAlpha: nativeSelected?.exposureTimeRangeNs
+      ? profile.exposureTrackAlpha
+      : Math.max(profile.exposureTrackAlpha, nativeFallback?.exposureTrackAlpha ?? profile.exposureTrackAlpha),
     torchIsoTarget: iso > 0 ? Math.round(clampValue(iso * 1.0, 50, 800)) : profile.torchIsoTarget,
     torchExpComp: expComp !== 0 ? clampValue(expComp - 0.3, -2, 2) : profile.torchExpComp,
   };
@@ -120,13 +159,15 @@ export function inferCameraRuntimeHints(
 
 export function inferNativeCameraRuntimeHints(
   report?: NativeCameraCapabilityReportLike | null,
+  prime = true,
 ): CameraRuntimeHints {
+  if (prime) primeNativeCameraRuntimeProfile();
   const selected = selectNativePpgCamera(report);
   const fps = maxNativeFps(selected);
   const isoMid = selected?.isoRange
     ? Math.round((selected.isoRange.min + selected.isoRange.max) / 2)
     : undefined;
-  const base = inferCameraRuntimeHints({
+  const base = inferCameraRuntimeHintsWithoutNative({
     fpsEffective: fps,
     timestampJitterMs: fps >= 30 ? 0 : 70,
     torchSupported: selected?.flashAvailable ?? false,
@@ -148,6 +189,42 @@ export function inferNativeCameraRuntimeHints(
   };
 }
 
+function inferCameraRuntimeHintsWithoutNative(
+  cameraDiag?: Record<string, unknown> | null,
+): CameraRuntimeHints {
+  const ua =
+    (typeof cameraDiag?.userAgent === 'string' && cameraDiag.userAgent) ||
+    (typeof navigator !== 'undefined' ? navigator.userAgent : '');
+  const tclLike = isTclLikeUserAgent(ua);
+  const motorolaLike = isMotorolaLikeUserAgent(ua);
+  const fps = typeof cameraDiag?.fpsEffective === 'number' ? cameraDiag.fpsEffective : 0;
+  const jitter = typeof cameraDiag?.timestampJitterMs === 'number' ? cameraDiag.timestampJitterMs : 0;
+  const torchSupported = cameraDiag?.torchSupported !== false;
+  const torchActive = cameraDiag?.torchActive === true;
+  const torchReliable = torchSupported && torchActive;
+  const base = tclLike ? STRICT_TCL : TOLERANT_DEFAULT;
+  let profile = { ...base };
+  if (!tclLike && (fps > 0 && fps < 18 || jitter > 55)) {
+    profile = {
+      ...profile,
+      liveFingerMissGrace: 40,
+      instantLostToNoContact: 60,
+      bufferResetAfterNoContact: 70,
+    };
+  }
+  const iso = typeof cameraDiag?.iso === 'number' ? cameraDiag.iso as number : 0;
+  const expComp = typeof cameraDiag?.exposureCompensation === 'number' ? cameraDiag.exposureCompensation as number : 0;
+  return {
+    constrained: !tclLike,
+    tclLike,
+    motorolaLike,
+    torchReliable,
+    ...profile,
+    torchIsoTarget: iso > 0 ? Math.round(clampValue(iso * 1.0, 50, 800)) : profile.torchIsoTarget,
+    torchExpComp: expComp !== 0 ? clampValue(expComp - 0.3, -2, 2) : profile.torchExpComp,
+  };
+}
+
 export function selectNativePpgCamera(
   report?: NativeCameraCapabilityReportLike | null,
 ): NativeCameraCapabilityLike | undefined {
@@ -162,6 +239,20 @@ export function maxNativeFps(camera?: NativeCameraCapabilityLike): number {
   return camera?.fpsRanges?.reduce((best, range) => Math.max(best, range.max), 0) ?? 0;
 }
 
+function readNativeCapabilityCache(): NativeCameraCapabilityReportLike | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(NATIVE_PROFILE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { report?: NativeCameraCapabilityReportLike };
+    return parsed.report ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function clampValue(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
+
+primeNativeCameraRuntimeProfile();
