@@ -223,11 +223,9 @@ export const CARDIAC_WAVE_CONFIG = {
   /**
    * Exponente de agudeza visual para controlar la velocidad de subida y bajada de la onda.
    * - ¿Qué significa?: Distorsión no-lineal matemática aplicada exclusivamente al trazado del Canvas.
-   * - 1.0 = render 100% LINEAL y fiel a la fisiología (la onda conserva exactamente la
-   *   forma de la señal filtrada del PPG; sin "latigazo" sintético).
-   * - Subir (>1.0) hace la subida al pico sistólico visualmente más aguda (efecto látigo).
-   * - Bajar (<1.0) aplana los picos.
-   * - ¡ATENCIÓN!: constante 100% visual y estética. No afecta la detección de pulso.
+   * - Si se sube (ej. 1.3 - 1.7): Hace que la subida al pico sistólico y la caída posterior sean visualmente mucho más rápidas y agudas (efecto "látigo" o "relámpago").
+   * - Si se baja (ej. 1.0): La onda se grafica de forma 100% lineal y fiel a la fisiología pura sin distorsión.
+   * - ¡ATENCIÓN!: Esta constante es 100% visual y estética. No afecta la lógica interna de captación de latidos ni las matemáticas médicas del procesador, por lo que es totalmente seguro calibrarla sin alterar la detección de pulso.
    */
   WAVE_SHARPNESS_EXPONENT: 1.0,
 };
@@ -726,247 +724,6 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
   ctx.restore();
 }
 
-/**
- * Dibuja la GRILLA estilo ECG (papel milimetrado) en el área de la onda.
- * Estándar ECG: cuadrícula pequeña (1×1) cada 4 px, cuadrícula grande (5×5) cada 20 px.
- * Línea de base centrada, marcas de tiempo en el eje X cada 200 ms.
- */
-export function drawECGGrid(
-  ctx: CanvasRenderingContext2D,
-  state: PpgRenderState,
-  wavePadTop: number,
-  wavePadBot: number,
-  waveH: number,
-  waveBaseY: number,
-): void {
-  const { plot } = state.layout;
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(plot.x, plot.y, plot.w, plot.h);
-  ctx.clip();
-
-  // Cuadrícula menor (cada 4 px) en blanco tenue.
-  ctx.strokeStyle = COLORS.GRID_MINOR;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  const minorStep = 4;
-  for (let x = plot.x; x <= plot.x + plot.w; x += minorStep) {
-    ctx.moveTo(x + 0.5, plot.y);
-    ctx.lineTo(x + 0.5, plot.y + plot.h);
-  }
-  for (let y = plot.y; y <= plot.y + plot.h; y += minorStep) {
-    ctx.moveTo(plot.x, y + 0.5);
-    ctx.lineTo(plot.x + plot.w, y + 0.5);
-  }
-  ctx.stroke();
-
-  // Cuadrícula mayor (cada 5 menores = 20 px) en blanco más visible.
-  ctx.strokeStyle = COLORS.GRID_MAJOR;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  const majorStep = minorStep * 5;
-  for (let x = plot.x; x <= plot.x + plot.w; x += majorStep) {
-    ctx.moveTo(x + 0.5, plot.y);
-    ctx.lineTo(x + 0.5, plot.y + plot.h);
-  }
-  for (let y = plot.y; y <= plot.y + plot.h; y += majorStep) {
-    ctx.moveTo(plot.x, y + 0.5);
-    ctx.lineTo(plot.x + plot.w, y + 0.5);
-  }
-  ctx.stroke();
-
-  // Línea de base horizontal (centrada en el área de onda) con tenue verde.
-  const centerY = waveBaseY - waveH / 2;
-  ctx.strokeStyle = 'rgba(34, 197, 94, 0.22)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(plot.x, centerY + 0.5);
-  ctx.lineTo(plot.x + plot.w, centerY + 0.5);
-  ctx.stroke();
-
-  // Marcas de tiempo cada 200 ms (cumplen estándar 25 mm/s del papel ECG).
-  ctx.font = `bold 9px ${FONT_MONO}`;
-  ctx.fillStyle = COLORS.TEXT_DIM;
-  ctx.textAlign = 'center';
-  const tickStep = 200; // ms
-  for (let t = 0; t <= WINDOW_MS; t += tickStep) {
-    const x = plot.x + plot.w - (t * plot.w / WINDOW_MS);
-    if (x < plot.x || x > plot.x + plot.w) continue;
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
-    ctx.beginPath();
-    ctx.moveTo(x + 0.5, plot.y);
-    ctx.lineTo(x + 0.5, plot.y + plot.h);
-    ctx.stroke();
-    if (t % 1000 === 0) {
-      ctx.fillText(`-${t / 1000}s`, x, plot.y + plot.h - 4);
-    }
-  }
-
-  ctx.restore();
-}
-
-/**
- * Dibuja la ONDA cardíaca en 2D estilo monitor.
- * Consume los MISMOS coords honestos que produce `drawSignal` (forma, amplitud,
- * tiempo y marcado de arritmia derivados 100% del buffer REAL de la señal
- * filtrada del PPG). Es un trazo continuo y suave, con:
- *   - Línea principal verde (señal normal) / roja (segmento de arritmia).
- *   - Halo suave (glow) alrededor del trazo para legibilidad.
- *   - Marcadores fiduciales: pico sistólico (SYS), valle diastólico (DIA),
- *     muesca dícrota (DIC) cuando la calidad lo permite.
- *   - Cursor de barrido (punta conductora) con pulso en el borde derecho.
- */
-export function drawWave2D(
-  ctx: CanvasRenderingContext2D,
-  state: PpgRenderState,
-  coords: { x: number; y: number; isArr: boolean; val: number }[],
-  geom: { waveBaseY: number; waveH: number; midValue: number },
-): void {
-  if (coords.length < 2) return;
-  const { plot } = state.layout;
-  const revealed = state.traceRevealed;
-  const n = coords.length;
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(plot.x, plot.y, plot.w, plot.h);
-  ctx.clip();
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-
-  // 1) Sombra/halo del trazo (se ve detrás del trazo principal, da profundidad).
-  ctx.beginPath();
-  ctx.moveTo(coords[0].x, coords[0].y);
-  for (let i = 1; i < n; i++) ctx.lineTo(coords[i].x, coords[i].y);
-  ctx.strokeStyle = revealed ? 'rgba(34, 197, 94, 0.16)' : 'rgba(148, 163, 184, 0.18)';
-  ctx.lineWidth = CARDIAC_WAVE_CONFIG.BASE_STROKE_WIDTH + 4;
-  ctx.stroke();
-
-  // 2) Trazo principal segmentado por arritmia (verde normal / rojo arritmia).
-  let seg = 0;
-  while (seg < n - 1) {
-    const isArr = coords[seg].isArr;
-    let end = seg;
-    while (end < n - 1 && coords[end + 1].isArr === isArr) end++;
-    ctx.beginPath();
-    ctx.moveTo(coords[seg].x, coords[seg].y);
-    for (let k = seg; k <= end; k++) ctx.lineTo(coords[k].x, coords[k].y);
-    ctx.strokeStyle = revealed
-      ? (isArr ? COLORS.SIGNAL_ARR : COLORS.SIGNAL)
-      : 'rgba(148, 163, 184, 0.55)';
-    ctx.lineWidth = CARDIAC_WAVE_CONFIG.BASE_STROKE_WIDTH;
-    ctx.stroke();
-    seg = end + 1;
-  }
-
-  // 3) Brillo fino encima (reflejo clínico, "trazo eléctrico").
-  ctx.beginPath();
-  ctx.moveTo(coords[0].x, coords[0].y);
-  for (let i = 1; i < n; i++) ctx.lineTo(coords[i].x, coords[i].y);
-  ctx.strokeStyle = revealed
-    ? 'rgba(255, 255, 255, 0.35)'
-    : 'rgba(255, 255, 255, 0.18)';
-  ctx.lineWidth = 0.6;
-  ctx.stroke();
-
-  // 4) Marcadores fiduciales con VALORES en tiempo real (SYS, DIA, DIC).
-  if (revealed) {
-    const quality = state.props.quality ?? 0;
-    ctx.textAlign = 'center';
-    for (let i = 2; i < n - 2; i++) {
-      const v = coords[i].val;
-      const isArr = coords[i].isArr;
-      const prev = coords[i - 1].val;
-      const next = coords[i + 1].val;
-      const prev2 = coords[i - 2].val;
-      const next2 = coords[i + 2].val;
-      const p = coords[i];
-
-      // Pico sistólico (máximo local) → punto + valor + etiqueta SYS/ARR.
-      if (v > prev && v > next && v > prev2 && v > next2 && v > geom.midValue) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, CARDIAC_WAVE_CONFIG.SYS_PEAK_RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = isArr ? COLORS.SIGNAL_ARR : '#ffffff';
-        ctx.fill();
-        ctx.font = `bold 9px ${FONT_MONO}`;
-        ctx.fillStyle = isArr ? COLORS.SIGNAL_ARR : COLORS.PEAK_NORMAL;
-        ctx.fillText(v.toFixed(1), p.x, p.y - 11);
-        ctx.font = `7px ${FONT_MONO}`;
-        ctx.fillStyle = isArr ? '#fecaca' : 'rgba(255, 255, 255, 0.75)';
-        ctx.fillText(isArr ? 'ARR' : 'SYS', p.x, p.y - 21);
-        if (isArr) {
-          ctx.beginPath();
-          ctx.arc(
-            p.x,
-            p.y,
-            CARDIAC_WAVE_CONFIG.ARR_WARNING_RADIUS,
-            0,
-            Math.PI * 2,
-          );
-          ctx.strokeStyle = `rgba(239, 68, 68, 0.6)`;
-          ctx.lineWidth = CARDIAC_WAVE_CONFIG.ARR_WARNING_WIDTH;
-          ctx.stroke();
-        }
-      }
-
-      // Valle diastólico (mínimo local) → anillo + valor + etiqueta DIA.
-      if (v < prev && v < next && v < prev2 && v < next2 && v < geom.midValue) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, CARDIAC_WAVE_CONFIG.DIA_VALLEY_RADIUS, 0, Math.PI * 2);
-        ctx.strokeStyle = COLORS.VALLEY;
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
-        ctx.font = `bold 9px ${FONT_MONO}`;
-        ctx.fillStyle = COLORS.VALLEY;
-        ctx.fillText(v.toFixed(1), p.x, p.y + 15);
-        ctx.font = `7px ${FONT_MONO}`;
-        ctx.fillText('DIA', p.x, p.y + 24);
-      }
-
-      // Muesca dícrota (DIC) → punto + etiqueta si la calidad es alta.
-      const d1Curr = v - prev;
-      const d1Next = next - v;
-      if (d1Curr < 0 && d1Next > d1Curr && d1Next < 0 && v > geom.midValue) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, CARDIAC_WAVE_CONFIG.DIC_NOTCH_RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(103, 232, 249, 0.6)';
-        ctx.fill();
-        if (quality > 70) {
-          ctx.font = `7px ${FONT_MONO}`;
-          ctx.fillStyle = 'rgba(103, 232, 249, 0.85)';
-          ctx.fillText('DIC', p.x, p.y - 7);
-        }
-      }
-    }
-  }
-
-  // 5) Cursor de barrido (punta conductora) con pulso en el borde derecho.
-  if (revealed) {
-    const head = coords[n - 1];
-    const pulse = (Math.sin(state.now / 110) + 1) / 2;
-    const baseR = CARDIAC_WAVE_CONFIG.HEAD_PULSE_BASE_RADIUS;
-    const innerR = CARDIAC_WAVE_CONFIG.HEAD_PULSE_INNER_RADIUS;
-    // Halo externo pulsante.
-    ctx.beginPath();
-    ctx.arc(head.x, head.y, baseR + pulse * 3, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(34, 197, 94, ${(0.18 + pulse * 0.12).toFixed(3)})`;
-    ctx.fill();
-    // Halo medio.
-    ctx.beginPath();
-    ctx.arc(head.x, head.y, innerR + 1.2, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(34, 197, 94, 0.55)';
-    ctx.fill();
-    // Núcleo blanco.
-    ctx.beginPath();
-    ctx.arc(head.x, head.y, innerR - 0.5, 0, Math.PI * 2);
-    ctx.fillStyle = '#ffffff';
-    ctx.fill();
-  }
-
-  ctx.restore();
-}
-
 export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const buffer = state.buffer;
   if (!buffer) return;
@@ -1051,22 +808,14 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
   if (coords.length < 2) return;
 
-  // === Selección de modo de presentación (2D por defecto, 3D opcional) ===
-  // La onda siempre usa los MISMOS coords honestos del buffer (forma/amplitud/tiempo
-  // derivados 100% de la señal real filtrada del PPG). El cambio entre 2D y 3D es
-  // SOLO presentación, no afecta a la lógica de detección ni a los datos.
-  const use3D = !!state.threeD?.enabled;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(plot.x, plot.y, plot.w, plot.h);
+  ctx.clip();
 
-  if (use3D) {
-    // 3D: oculta la grilla ECG (la grilla-piso del 3D la reemplaza) y proyecta
-    // la onda como cinta extruida sobre el piso en perspectiva.
-    drawGrid3D(ctx, state);
-    drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
-  } else {
-    // 2D: estilo monitor cardíaco clásico — grilla ECG de fondo + onda continua.
-    drawECGGrid(ctx, state, wavePadTop, wavePadBot, waveH, waveBaseY);
-    drawWave2D(ctx, state, coords, { waveBaseY, waveH, midValue });
-  }
+    // ── MODO 3D: onda como cinta extruida sobre el piso en perspectiva. ──
+  // Reusa las MISMAS coords honestas → forma, amplitud y tiempo idénticos al 2D.
+  drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
 
 
   // Tachogram (panel clínico: 2D en ambos modos)
