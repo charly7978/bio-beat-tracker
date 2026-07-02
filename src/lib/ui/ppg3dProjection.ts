@@ -342,8 +342,8 @@ export function drawWaveRibbon3D(
       while (e < n - 1 && coords[e].isArr === isArr) e++;
       const col = isArr ? C.arr : C.signal;
       ctx.beginPath();
-      ctx.moveTo(Pfloor[s].x, Pfloor[s].y);
-      for (let i = s; i < e; i++) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
+      ctx.moveTo(PflX[s], PflY[s]);
+      for (let i = s; i < e; i++) ctx.lineTo(PflX[i], PflY[i]);
       ctx.strokeStyle = `rgba(${col}, ${isArr ? 0.35 : 0.12})`;
       ctx.lineWidth = isArr ? 8 : 6;
       ctx.stroke();
