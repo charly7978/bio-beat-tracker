@@ -355,16 +355,16 @@ export function drawWaveRibbon3D(
   if (revealed) {
     for (let i = 0; i < n; i++) {
       if (!coords[i].isArr) continue;
-      const p = Pfloor[i];
-      const dx = proj.vpX - p.x;
-      const dy = proj.horizonY - p.y;
+      const px = PflX[i], py = PflY[i];
+      const dx = proj.vpX - px;
+      const dy = proj.horizonY - py;
       const dist = Math.hypot(dx, dy);
       if (dist < 1) continue;
       const nx = dx / dist, ny = dy / dist;
-      const fade = Math.min(1, (p.y - proj.horizonY) / (proj.nearY - proj.horizonY));
+      const fade = Math.min(1, (py - proj.horizonY) / (proj.nearY - proj.horizonY));
       ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(p.x + nx * dist, p.y + ny * dist);
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + nx * dist, py + ny * dist);
       ctx.strokeStyle = `rgba(${C.arr}, ${(0.08 + 0.12 * fade).toFixed(3)})`;
       ctx.lineWidth = 1.5 + 1.5 * fade;
       ctx.stroke();
