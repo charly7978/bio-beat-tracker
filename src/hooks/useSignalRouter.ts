@@ -162,9 +162,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const lastDiagPushRef = useRef(0);
   const beatMarkerTimerRef = useRef<number | null>(null);
   const lastPeakTimestampRef = useRef<number>(0);
-  const lastPeakAmplitudeRef = useRef<number>(1.0);
-  const runningPeakAverageRef = useRef<number>(0);
-  const recentAmplitudesRef = useRef<number[]>([]);
 
   // Sanity checker
   const [sanityProfileId, setSanityProfileId] = useState<string>(() => getActiveProfileId());
