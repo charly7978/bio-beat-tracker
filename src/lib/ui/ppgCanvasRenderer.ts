@@ -171,6 +171,13 @@ export const CARDIAC_WAVE_CONFIG = {
    */
   WAVE_PAD_BOTTOM: 44,
 
+  /**
+   * Fracción vertical del área útil donde descansa la línea base fisiológica.
+   * - 0.70 = 70% del espacio queda por encima de la base y 30% por debajo.
+   * - Mantiene una cresta alta y deja sitio suficiente para el valle negativo.
+   */
+  BASELINE_FRACTION: 0.72,
+
   // === Tiempos de Reacción y Velocidades Dinámicas ===
   /**
    * Tiempo de rebote (debounce) mínimo entre picos registrados en milisegundos.
@@ -228,6 +235,13 @@ export const CARDIAC_WAVE_CONFIG = {
    * - ¡ATENCIÓN!: Esta constante es 100% visual y estética. No afecta la lógica interna de captación de latidos ni las matemáticas médicas del procesador, por lo que es totalmente seguro calibrarla sin alterar la detección de pulso.
    */
   WAVE_SHARPNESS_EXPONENT: 1.75,
+
+  /**
+   * Exponente para la excursión negativa bajo la línea base.
+   * - Levemente menor que el positivo para que la caída posterior al pico se vea
+   *   más seca, tipo látigo, sin inventar muestras nuevas.
+   */
+  NEGATIVE_WAVE_EXPONENT: 0.9,
 };
 
 // Exportaciones individuales para mantener compatibilidad total con componentes importadores externos (como PPGSignalMeter.tsx)
@@ -779,16 +793,28 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
   const stats = state.amplitudeStats;
   if (points.length < 2) return;
-  const safeRange = stats.range > 1 ? stats.range : 1;
   const wavePadTop = CARDIAC_WAVE_CONFIG.WAVE_PAD_TOP;
   const wavePadBot = CARDIAC_WAVE_CONFIG.WAVE_PAD_BOTTOM;
   const waveH = Math.max(40, plot.h - wavePadTop - wavePadBot);
-  const waveBaseY = plot.y + wavePadTop + waveH;
+  const waveTopY = plot.y + wavePadTop;
+  const waveBottomY = waveTopY + waveH;
+  const baselineFraction = Math.max(0.55, Math.min(0.82, CARDIAC_WAVE_CONFIG.BASELINE_FRACTION));
+  const waveBaseY = waveTopY + waveH * baselineFraction;
+  const positiveSpan = Math.max(18, waveBaseY - waveTopY);
+  const negativeSpan = Math.max(12, waveBottomY - waveBaseY);
 
   const strength = state.traceRevealed
     ? (state.signalStrength < 0 ? 0 : state.signalStrength > 1 ? 1 : state.signalStrength)
     : 0.5; // Default amplitude during warmup so we can see finger contact immediately
-  const midValue = (stats.max + stats.min) / 2;
+  let positivePeak = 0;
+  let negativePeak = 0;
+  for (let i = 0; i < points.length; i++) {
+    const v = points[i]!.value;
+    if (v > positivePeak) positivePeak = v;
+    if (v < negativePeak) negativePeak = v;
+  }
+  const honestPositivePeak = Math.max(1, positivePeak * Math.max(strength, 0.35));
+  const honestNegativePeak = Math.max(1, Math.abs(negativePeak) * Math.max(strength, 0.35));
   const coords: { x: number; y: number; isArr: boolean; val: number }[] = [];
   for (let i = 0; i < points.length; i++) {
     const pt = points[i];
@@ -796,14 +822,18 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     if (age > WINDOW_MS) continue;
     const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
     if (x < plot.x || x > plot.x + plot.w) continue;
-    const honestValue = midValue + (pt.value - midValue) * strength;
-    
-    // Mapeo normalizado [0..1] para aplicar la transformación de subida/bajada no lineal
-    const pct = Math.max(0, Math.min(1, (honestValue - stats.min) / safeRange));
-    const transformedPct = Math.pow(pct, CARDIAC_WAVE_CONFIG.WAVE_SHARPNESS_EXPONENT);
-    const y = plot.y + wavePadTop + (1 - transformedPct) * waveH;
-    
-    coords.push({ x, y, isArr: pt.isArrhythmia, val: pt.value });
+    const honestValue = pt.value * strength;
+    const y = honestValue >= 0
+      ? waveBaseY - Math.pow(
+        Math.max(0, Math.min(1, honestValue / honestPositivePeak)),
+        CARDIAC_WAVE_CONFIG.WAVE_SHARPNESS_EXPONENT,
+      ) * positiveSpan
+      : waveBaseY + Math.pow(
+        Math.max(0, Math.min(1, Math.abs(honestValue) / honestNegativePeak)),
+        CARDIAC_WAVE_CONFIG.NEGATIVE_WAVE_EXPONENT,
+      ) * negativeSpan;
+
+    coords.push({ x, y, isArr: pt.isArrhythmia, val: honestValue });
   }
 
   if (coords.length < 2) return;
@@ -815,7 +845,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
     // ── MODO 3D: onda como cinta extruida sobre el piso en perspectiva. ──
   // Reusa las MISMAS coords honestas → forma, amplitud y tiempo idénticos al 2D.
-  drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
+  drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue: 0 });
 
 
   // Tachogram (panel clínico: 2D en ambos modos)

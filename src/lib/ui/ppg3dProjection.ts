@@ -300,8 +300,10 @@ export function drawWaveRibbon3D(
   const { plot } = state.layout;
   const revealed = state.traceRevealed;
 
-  // Amplitud normalizada honesta con soporte para valores negativos por debajo de la grilla (piso)
-  const hOf = (c: WaveCoord) => clamp(c.val / ((state.waveGain || 4.5) * 10.0), -0.5, 1.2) + 0.25;
+  // Reusa EXACTAMENTE la altura ya resuelta por el renderer principal: la línea base
+  // vive en `geom.waveBaseY`, los picos suben por encima de ella y los valles pueden
+  // caer por debajo. El 3D ya no reescala con otra fórmula, solo proyecta la misma forma.
+  const hOf = (c: WaveCoord) => clamp((geom.waveBaseY - c.y) / geom.waveH, -0.42, 1.05);
   const uOf = (c: WaveCoord) => clamp((c.x - plot.x) / plot.w, 0, 1);
 
   // Escritura in-place a scratch tipados: cero asignaciones por punto (evita
