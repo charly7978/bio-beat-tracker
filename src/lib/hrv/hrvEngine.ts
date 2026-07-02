@@ -55,8 +55,8 @@ export interface TimeDomainHRV {
   meanHR: number;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface FrequencyDomainHRV extends LombScargleResult {
-  /* inherited: vlf, lf, hf, lfHfRatio, lfNu, hfNu, totalPower, peakLfHz, peakHfHz */
 }
 
 export interface NonLinearHRV {
@@ -118,10 +118,9 @@ const TASK_FORCE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 const SHORT_WINDOW_MS = 60 * 1000;           // 1 minute (real-time trending)
 const WINDOW_OVERLAP_MS = 30 * 1000;         // 30s overlap for smooth transitions
 const MIN_VALID_NN = 30;                     // minimum NN for a valid window
-const MIN_VALID_NN_SHORT = 8;                // minimum NN for short window
+// unused const MIN_VALID_NN_SHORT = 8;
 
-// DFA parameters
-const DFA_MIN_BOX = 4;
+// DFA parameters — min/max box sizes for fluctuation analysis
 const DFA_MAX_BOX = 64;
 
 // ─── Interpolation ─────────────────────────────────────────────────────────────
@@ -170,7 +169,7 @@ function interpolateNN(
  *   1. Physiological bounds (300–2000 ms)
  *   2. Deviation > 30% from median of surrounding 5 beats (Kamath & Fallen)
  */
-function detectArtifacts(nn: number[], medianRR: number): Set<number> {
+function detectArtifacts(nn: number[], _medianRR: number): Set<number> {
   const artifacts = new Set<number>();
   const HR = VITAL_THRESHOLDS.HR;
 
@@ -343,16 +342,13 @@ function computeNonLinear(nn: number[]): NonLinearHRV {
 
   // Poincaré SD1/SD2
   let sumDiffSq = 0;
-  let sumSumSq = 0;
   let sumX = 0, sumY = 0;
   const pn = n - 1;
   for (let i = 0; i < pn; i++) {
     const x = nn[i], y = nn[i + 1];
     sumX += x; sumY += y;
     const diff = x - y;
-    const sumTerm = x + y;
     sumDiffSq += diff * diff;
-    sumSumSq += sumTerm * sumTerm;
   }
   const meanX = sumX / pn;
   const meanY = sumY / pn;

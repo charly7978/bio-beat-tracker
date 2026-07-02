@@ -216,7 +216,7 @@ const Index = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [showTelemedicine, setShowTelemedicine] = useState(false);
   const [webgpuAvail, setWebgpuAvail] = useState<'checking' | 'yes' | 'no'>('checking');
-  const [healthAvail, setHealthAvail] = useState<'checking' | 'yes' | 'no'>('checking');
+  const [_healthAvail, setHealthAvail] = useState<'checking' | 'yes' | 'no'>('checking');
   const [encryptionReady, setEncryptionReady] = useState(false);
   const [riskResult, setRiskResult] = useState<string | null>(null);
   const [age, setAge] = useState<string>("35");
@@ -1012,7 +1012,7 @@ const Index = () => {
                     {router.rrIntervals && router.rrIntervals.length >= 2 && (() => {
                       const rr = router.rrIntervals.filter(r => r >= 270 && r <= 2200);
                       if (rr.length < 2) return null;
-                      const { sdnn, rmssd, pnn50, cv, meanRR } = (() => {
+                      const { sdnn, rmssd, pnn50 } = (() => {
                         const n = rr.length;
                         let sum = 0;
                         for (let i = 0; i < n; i++) sum += rr[i];
