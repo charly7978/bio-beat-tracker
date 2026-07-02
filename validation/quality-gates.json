@@ -1,0 +1,9 @@
+{
+  "heartRateMapePctMax": 10,
+  "heartRateMaeBpmMax": 5,
+  "validCoveragePctMin": 70,
+  "timeToFirstValidMsMax": 15000,
+  "spo2MaePctMax": 5,
+  "systolicMaeMmHgMax": 8,
+  "diastolicMaeMmHgMax": 8
+}
