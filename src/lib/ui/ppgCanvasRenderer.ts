@@ -788,7 +788,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   const strength = state.traceRevealed
     ? (state.signalStrength < 0 ? 0 : state.signalStrength > 1 ? 1 : state.signalStrength)
     : 0.3;
-  const scaledStrength = Math.min(0.16, strength * 0.2);
+  const scaledStrength = Math.min(0.35, strength * 0.4);
   const midValue = (stats.max + stats.min) / 2;
   const coords: { x: number; y: number; isArr: boolean; val: number }[] = [];
   for (let i = 0; i < points.length; i++) {
