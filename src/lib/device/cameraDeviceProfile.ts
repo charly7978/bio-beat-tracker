@@ -121,7 +121,9 @@ export function inferCameraRuntimeHints(
     ? cameraDiag.fpsEffective
     : nativeFps;
   const jitter =
-    typeof cameraDiag?.timestampJitterMs === 'number' ? cameraDiag.timestampJitterMs : (nativeFps >= 30 ? 0 : 70);
+    typeof cameraDiag?.timestampJitterMs === 'number'
+      ? cameraDiag.timestampJitterMs
+      : (usableNative ? (nativeFps >= 30 ? 0 : 70) : 0);
   const torchSupported = cameraDiag?.torchSupported !== false && (nativeSelected?.flashAvailable ?? true);
   const torchActive = cameraDiag?.torchActive === true;
   const torchReliable = torchSupported && (torchActive || !!nativeSelected?.flashAvailable);
