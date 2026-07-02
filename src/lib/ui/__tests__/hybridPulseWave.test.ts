@@ -8,7 +8,7 @@ describe('buildHybridPulseSample', () => {
       quality: 80,
       isPeak: false,
       rrMs: 800,
-      elapsedSinceLastPeakMs: 200,
+      elapsedSinceLastPeakMs: 20,
       hasUsableContact: true,
     });
 
@@ -16,39 +16,39 @@ describe('buildHybridPulseSample', () => {
     expect(hybrid).toBeLessThan(1.4);
   });
 
-  it('recurre a una forma fisiológica cuando no hay señal real suficiente', () => {
+  it('recurre al template cuando no hay señal real suficiente', () => {
     const hybrid = buildHybridPulseSample({
       realValue: 0,
       quality: 10,
       isPeak: false,
       rrMs: 800,
-      elapsedSinceLastPeakMs: 200,
+      elapsedSinceLastPeakMs: 20,
       hasUsableContact: true,
     });
 
     expect(hybrid).toBeGreaterThan(0);
   });
 
-  it('genera un pico sistólico y una caída posterior más parecida a una onda PPG', () => {
-    const systolic = buildHybridPulseSample({
+  it('genera un pico máximo y un valle negativo (efecto latigazo)', () => {
+    const peak = buildHybridPulseSample({
       realValue: 1.0,
       quality: 90,
       isPeak: false,
       rrMs: 800,
-      elapsedSinceLastPeakMs: 120,
+      elapsedSinceLastPeakMs: 20,
       hasUsableContact: true,
     });
-    const lateDecay = buildHybridPulseSample({
+    const postRecovery = buildHybridPulseSample({
       realValue: 1.0,
       quality: 90,
       isPeak: false,
       rrMs: 800,
-      elapsedSinceLastPeakMs: 360,
+      elapsedSinceLastPeakMs: 60,
       hasUsableContact: true,
     });
 
-    expect(systolic).toBeGreaterThan(lateDecay);
-    expect(lateDecay).toBeLessThan(0.4);
+    expect(peak).toBeGreaterThan(postRecovery);
+    expect(postRecovery).toBe(0);
   });
 
   it('permanece plana sin contacto', () => {
