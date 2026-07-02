@@ -44,6 +44,36 @@ interface ProjPoint {
   scale: number;
 }
 
+/**
+ * Scratch buffers reutilizados entre frames para evitar asignaciones en el hot path
+ * del render 3D. Se dimensionan en `ensureScratch(n)` y crecen sólo cuando `n` supera
+ * la capacidad actual. Estructura SoA (struct-of-arrays) sobre Float32Array → cero
+ * boxing/unboxing por punto y presión de GC mínima.
+ */
+let SCRATCH_CAP = 0;
+let PfX: Float32Array = new Float32Array(0);
+let PfY: Float32Array = new Float32Array(0);
+let PfS: Float32Array = new Float32Array(0);
+let PbX: Float32Array = new Float32Array(0);
+let PbY: Float32Array = new Float32Array(0);
+let PbS: Float32Array = new Float32Array(0);
+let PflX: Float32Array = new Float32Array(0);
+let PflY: Float32Array = new Float32Array(0);
+function ensureScratch(n: number): void {
+  if (n <= SCRATCH_CAP) return;
+  // Sobre-asignar 25% para amortizar realloc si el frame siguiente crece un poco.
+  const cap = Math.max(64, Math.ceil(n * 1.25));
+  PfX = new Float32Array(cap);
+  PfY = new Float32Array(cap);
+  PfS = new Float32Array(cap);
+  PbX = new Float32Array(cap);
+  PbY = new Float32Array(cap);
+  PbS = new Float32Array(cap);
+  PflX = new Float32Array(cap);
+  PflY = new Float32Array(cap);
+  SCRATCH_CAP = cap;
+}
+
 export interface Projector {
   horizonY: number;
   nearY: number;
