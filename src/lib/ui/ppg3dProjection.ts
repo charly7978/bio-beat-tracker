@@ -460,9 +460,9 @@ export function drawWaveRibbon3D(
   }
 
   // 7) Punto blanco en la punta conductora (cresta más reciente).
-  const head = Pf[n - 1];
+  const headX = PfX[n - 1], headY = PfY[n - 1];
   ctx.beginPath();
-  ctx.arc(head.x, head.y, 3, 0, Math.PI * 2);
+  ctx.arc(headX, headY, 3, 0, Math.PI * 2);
   ctx.fillStyle = '#ffffff';
   ctx.fill();
 
