@@ -279,9 +279,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastArrhythmiaData.current = null;
     arrhythmiaDetectedRef.current = false;
     lastPeakTimestampRef.current = 0;
-    lastPeakAmplitudeRef.current = 1.0;
-    runningPeakAverageRef.current = 0;
-    recentAmplitudesRef.current = [];
     ppgMeterRef?.current?.clearBuffer();
 
   }, [ppgMeterRef]);
