@@ -242,6 +242,23 @@ export const CARDIAC_WAVE_CONFIG = {
    *   más seca, tipo látigo, sin inventar muestras nuevas.
    */
   NEGATIVE_WAVE_EXPONENT: 0.9,
+
+  /**
+   * Ganancia visual máxima aplicada al ascenso cuando la pendiente real es positiva.
+   * Solo usa la derivada local de la señal medida para reforzar la subida sistólica.
+   */
+  ASCENT_SLOPE_BOOST: 0.35,
+
+  /**
+   * Ganancia visual máxima aplicada a la caída cuando la pendiente real es negativa.
+   * Refuerza el latigazo posterior al pico sin alterar el orden temporal del latido.
+   */
+  DESCENT_SLOPE_BOOST: 0.95,
+
+  /**
+   * Límite de pendiente normalizada para evitar exageraciones por ruido instantáneo.
+   */
+  SLOPE_CLAMP: 0.65,
 };
 
 // Exportaciones individuales para mantener compatibilidad total con componentes importadores externos (como PPGSignalMeter.tsx)
@@ -823,13 +840,28 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
     if (x < plot.x || x > plot.x + plot.w) continue;
     const honestValue = pt.value * strength;
+    const prevValue = i > 0 ? points[i - 1]!.value * strength : honestValue;
+    const nextValue = i < points.length - 1 ? points[i + 1]!.value * strength : honestValue;
+    const slopePrev = honestValue - prevValue;
+    const slopeNext = nextValue - honestValue;
+    const slopeScale = Math.max(honestPositivePeak, honestNegativePeak, 1);
+    const risingSlope = Math.max(0, slopePrev) / slopeScale;
+    const fallingSlope = Math.max(0, -slopeNext) / slopeScale;
+    const clampedRise = Math.min(CARDIAC_WAVE_CONFIG.SLOPE_CLAMP, risingSlope);
+    const clampedFall = Math.min(CARDIAC_WAVE_CONFIG.SLOPE_CLAMP, fallingSlope);
+    const upstrokeBoost = 1 + (clampedRise / CARDIAC_WAVE_CONFIG.SLOPE_CLAMP) * CARDIAC_WAVE_CONFIG.ASCENT_SLOPE_BOOST;
+    const downstrokeBoost = 1 + (clampedFall / CARDIAC_WAVE_CONFIG.SLOPE_CLAMP) * CARDIAC_WAVE_CONFIG.DESCENT_SLOPE_BOOST;
+    const positiveWhipBoost = Math.max(
+      upstrokeBoost,
+      1 + (clampedFall / CARDIAC_WAVE_CONFIG.SLOPE_CLAMP) * CARDIAC_WAVE_CONFIG.DESCENT_SLOPE_BOOST * 0.6,
+    );
     const y = honestValue >= 0
       ? waveBaseY - Math.pow(
-        Math.max(0, Math.min(1, honestValue / honestPositivePeak)),
+        Math.max(0, Math.min(1, (honestValue / honestPositivePeak) * positiveWhipBoost)),
         CARDIAC_WAVE_CONFIG.WAVE_SHARPNESS_EXPONENT,
       ) * positiveSpan
       : waveBaseY + Math.pow(
-        Math.max(0, Math.min(1, Math.abs(honestValue) / honestNegativePeak)),
+        Math.max(0, Math.min(1, (Math.abs(honestValue) / honestNegativePeak) * downstrokeBoost)),
         CARDIAC_WAVE_CONFIG.NEGATIVE_WAVE_EXPONENT,
       ) * negativeSpan;
 
