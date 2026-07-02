@@ -78,7 +78,7 @@ export function WebrtcCallWidget() {
     navigator.clipboard.writeText(localSdp).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    }).catch(() => {});
+    }).catch(() => { /* ignore */ });
   }, [localSdp]);
 
   const isIdle = state === 'new' || state === 'closed';

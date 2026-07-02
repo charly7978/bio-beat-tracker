@@ -60,7 +60,7 @@ export async function decryptLocalMeasurements(): Promise<unknown[]> {
     try {
       const fallback = JSON.parse(raw);
       if (Array.isArray(fallback)) return fallback;
-    } catch { }
+    } catch { /* ignore */ }
     return [];
   }
 }

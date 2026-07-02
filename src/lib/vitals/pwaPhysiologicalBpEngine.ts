@@ -276,12 +276,12 @@ export function estimatePhysiologicalBp(
   ];
 
   const mlp = runMlpBpModel(normInputs);
-  let sbpMlp = mlp.sbp;
-  let dbpMlp = mlp.dbp;
+  const sbpMlp = mlp.sbp;
+  const dbpMlp = mlp.dbp;
 
   const indices = computePhysiologicalIndices(f, { hr, rmssd, cyclePeriodMs: cycleMs }, profile);
-  let resistanceIndex = indices.resistanceIndex;
-  let complianceIndex = indices.complianceIndex;
+  const resistanceIndex = indices.resistanceIndex;
+  const complianceIndex = indices.complianceIndex;
   const reflectionIndex = indices.reflectionIndex;
 
   const mapPhys = VITAL_THRESHOLDS.BP.MAP_MIN + resistanceIndex * (VITAL_THRESHOLDS.BP.MAP_MAX - VITAL_THRESHOLDS.BP.MAP_MIN);
