@@ -527,6 +527,9 @@ export const VITAL_THRESHOLDS = {
     FUSION_CONSENSUS_MIN_CONF: 60,
     /** Confianza mínima del ensemble para alimentar arritmia desde el router */
     ARRHYTHMIA_MIN_CONF: 0.15,
+    /** Cobertura buena mínima del buffer elástico para considerar la colocación
+     * estable (UX de colocación; no gatea detección ni pulso). */
+    PLACEMENT_STABLE_COVERAGE: 0.6,
   },
 };
 

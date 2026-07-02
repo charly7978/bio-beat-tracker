@@ -16,6 +16,8 @@ import {
   createStabilizationState,
   updateStabilization,
 } from '@/lib/measurement/signalStabilization';
+import { instantAcquisitionConfidence } from '@/lib/acquisition/AcquisitionStabilizer';
+import { FrameReservoir } from '@/lib/acquisition/FrameReservoir';
 import {
   DISPLAY_SMOOTH_ALPHAS,
   smoothDisplayPair,
@@ -153,6 +155,12 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   // mantiene durante toda la sesión de contacto.
   const acqReadyLatchRef = useRef(false);
   const stabilizationRef = useRef(createStabilizationState());
+  // Buffer elástico de "buenos frames" para colocación robusta: desacopla el
+  // ritmo de captura del de consumo y aporta una COBERTURA suavizada por
+  // ventana (goodCoverage) tolerante a microdescuadres. Solo alimenta la UX de
+  // colocación (diagnostics.placementCoverage/placementStable): NO toca la onda
+  // del pulso ni las compuertas de contacto/detección.
+  const placementReservoirRef = useRef(new FrameReservoir<number>());
 
   // Throttle timers
   const lastHrPushRef = useRef(0);
@@ -238,6 +246,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     unstableFrameCounter.current = 0;
     acqReadyLatchRef.current = false;
     stabilizationRef.current = createStabilizationState();
+    placementReservoirRef.current.reset();
     setRRIntervals([]);
     setBeatMarker(0);
     if (beatMarkerTimerRef.current) {
@@ -451,6 +460,30 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     md.acquisitionStage = hasUsableContact ? stab.stage : 'SEARCHING';
     md.acquisitionProgress = stab.progress;
     md.stabilizationReason = stab.reason;
+
+    // Buffer elástico de colocación: calidad de contacto por frame (primitiva ya
+    // probada) → reservorio → cobertura suavizada tolerante a microdescuadres.
+    const contactQuality = hasUsableContact
+      ? instantAcquisitionConfidence({
+          fingerDetected: fingerConfirmed,
+          contactState,
+          perfusionIndex: lastSignal.perfusionIndex ?? 0,
+          periodicity: typeof sqm.periodicity === 'number' ? sqm.periodicity : 0,
+          sqi: rawSqi,
+          motionScore: typeof sqm.motionScore === 'number' ? sqm.motionScore : 0,
+          coverageRatio:
+            diag && typeof diag === 'object' && typeof diag.coverageRatio === 'number'
+              ? diag.coverageRatio
+              : 0,
+        })
+      : 0;
+    const reservoir = placementReservoirRef.current;
+    reservoir.push(signalValue, contactQuality, nowT);
+    const reservoirOut = reservoir.consume();
+    const placementCoverage = reservoirOut ? reservoirOut.goodCoverage : 0;
+    md.placementCoverage = placementCoverage;
+    md.placementStable =
+      placementCoverage >= VITAL_THRESHOLDS.ROUTER.PLACEMENT_STABLE_COVERAGE;
     if (nowT - lastDiagPushRef.current >= DIAG_PUSH_THROTTLE_MS) {
       lastDiagPushRef.current = nowT;
       setCurrentDiagnostics(mergedDiag);

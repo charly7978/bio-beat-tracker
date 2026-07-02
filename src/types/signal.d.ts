@@ -61,6 +61,11 @@ export interface ProcessedSignal {
     acquisitionConfidence?: number;
     /** Progreso monótono de estabilización [0..1] para la UI. */
     acquisitionProgress?: number;
+    /** Cobertura buena [0..1] del buffer elástico de colocación (tolerante a
+     * microdescuadres). Solo UX de colocación; no gatea detección ni pulso. */
+    placementCoverage?: number;
+    /** La colocación se sostiene estable según el buffer elástico. */
+    placementStable?: boolean;
   };
 }
 

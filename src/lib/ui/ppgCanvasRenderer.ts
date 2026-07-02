@@ -335,6 +335,10 @@ export interface PpgRenderProps {
     hasPulsatility?: boolean;
     acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY';
     acquisitionProgress?: number;
+    /** Cobertura buena [0..1] del buffer elástico de colocación (tolerante a microdescuadres). */
+    placementCoverage?: number;
+    /** La colocación se sostiene estable según el buffer elástico. */
+    placementStable?: boolean;
     sqm?: { fpsEffective?: number; timestampJitterMs?: number; underexposureRatio?: number };
     peakDetection?: {
       confidence?: number;
@@ -474,6 +478,19 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       ctx.font = `bold 10px ${FONT_MONO}`;
       ctx.fillText(`ESTABILIZANDO SEÑAL · ${pct}%`, header.w / 2, header.y + 12);
     }
+  } else if (
+    detected &&
+    diag?.placementStable === true &&
+    !hardBlocker &&
+    (!diag?.status || diag.status === 'VALID' || diag.status === 'WARMUP')
+  ) {
+    // Refuerzo positivo: la colocación se sostiene estable según el buffer
+    // elástico (tolerante a microdescuadres). Da confianza al usuario en vez de
+    // parpadear a "sin dedo" ante un frame malo suelto.
+    ctx.fillStyle = '#22c55e';
+    ctx.font = `bold 10px ${FONT_MONO}`;
+    ctx.textAlign = 'center';
+    ctx.fillText('✓ COLOCACIÓN ESTABLE', header.w / 2, header.y + 12);
   } else if (placementHint && detected && stage === 'READY') {
     ctx.fillStyle = COLORS.TEXT_INFO;
     ctx.font = `9px ${FONT_MONO}`;
@@ -921,11 +938,21 @@ export function drawAcquisitionOverlay(ctx: CanvasRenderingContext2D, state: Ppg
   ctx.save();
   ctx.fillStyle = 'rgba(148, 163, 184, 0.16)';
   ctx.fillRect(barX, barY, barW, barH);
-  const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-  grad.addColorStop(0, 'rgba(34, 197, 94, 0.9)');
-  grad.addColorStop(1, 'rgba(103, 232, 249, 0.95)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(barX, barY, Math.max(barH, barW * progress), barH);
+  // Cobertura del buffer elástico: ancho tolerante a microdescuadres. Cuando la
+  // colocación se sostiene estable, la barra se "traba" en verde sólido (candado);
+  // mientras converge, mantiene el degradé verde→cian sobre el progreso real.
+  const stable = diag?.placementStable === true;
+  const coverage = Math.max(0, Math.min(1, diag?.placementCoverage ?? progress));
+  const fillFrac = stable ? Math.max(progress, coverage) : progress;
+  if (stable) {
+    ctx.fillStyle = 'rgba(34, 197, 94, 0.95)';
+  } else {
+    const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+    grad.addColorStop(0, 'rgba(34, 197, 94, 0.9)');
+    grad.addColorStop(1, 'rgba(103, 232, 249, 0.95)');
+    ctx.fillStyle = grad;
+  }
+  ctx.fillRect(barX, barY, Math.max(barH, barW * fillFrac), barH);
   ctx.restore();
 }
 
