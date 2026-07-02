@@ -404,7 +404,7 @@ export function drawWaveRibbon3D(
       const next = coords[i + 1].val;
       const prev2 = coords[i - 2].val;
       const next2 = coords[i + 2].val;
-      const p = Pf[i];
+      const p = { x: PfX[i], y: PfY[i], scale: PfS[i] };
 
       // Pico sistólico (máximo local) → punto + valor + etiqueta SYS/ARR.
       if (v > prev && v > next && v > prev2 && v > next2 && v > geom.midValue) {
