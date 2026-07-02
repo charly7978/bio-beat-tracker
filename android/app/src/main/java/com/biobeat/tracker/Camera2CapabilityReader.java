@@ -29,6 +29,8 @@ public final class Camera2CapabilityReader {
                 cam.put("flashAvailable", Boolean.TRUE.equals(flash));
                 cam.put("sensorOrientation", orientation != null ? orientation : 0);
                 cam.put("fpsRanges", fpsRanges(cc));
+                putRange(cam, "isoRange", cc.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE));
+                putLongRange(cam, "exposureTimeRangeNs", cc.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE));
                 cameras.put(cam);
                 if (preferred == null && facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) preferred = id;
             }
@@ -56,6 +58,22 @@ public final class Camera2CapabilityReader {
             arr.put(o);
         }
         return arr;
+    }
+
+    private static void putRange(JSObject target, String key, Range<Integer> range) {
+        if (range == null) return;
+        JSObject o = new JSObject();
+        o.put("min", range.getLower());
+        o.put("max", range.getUpper());
+        target.put(key, o);
+    }
+
+    private static void putLongRange(JSObject target, String key, Range<Long> range) {
+        if (range == null) return;
+        JSObject o = new JSObject();
+        o.put("min", range.getLower());
+        o.put("max", range.getUpper());
+        target.put(key, o);
     }
 
     private static String facingToString(Integer facing) {
