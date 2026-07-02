@@ -489,61 +489,25 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     });
     const { vitalsDspReady, fullVitalsReady, hrDisplayReady: hrReady } = readiness;
 
+    // ONDA 100% REAL: se empuja el valor filtrado del PPG que sale del
+    // HeartBeatProcessor (misma señal que alimenta la detección de picos y el BPM).
+    // No hay síntesis, no hay spike geométrico: la forma es la de la señal real de
+    // la cámara + procesador cardíaco. La construcción visual (buffer circular,
+    // waveGain, marcado de arritmia, ampliación honesta) se mantiene idéntica.
     if (hasUsableContact && heartBeatResult.isPeak) {
       lastPeakTimestampRef.current = nowT;
-      // Find the true peak crest in our sliding window to avoid sub-millisecond phase offsets
-      const currentPeakAmp = Math.max(...recentAmplitudesRef.current, 0.001);
-      if (runningPeakAverageRef.current === 0) {
-        runningPeakAverageRef.current = currentPeakAmp;
-      } else {
-        // Slow Exponential Moving Average to track general baseline scale of this device/placement
-        runningPeakAverageRef.current = runningPeakAverageRef.current * 0.85 + currentPeakAmp * 0.15;
-      }
-      // Relative scale of this heartbeat compared to recent average
-      let ampScale = 1.0;
-      if (runningPeakAverageRef.current > 1e-5) {
-        ampScale = currentPeakAmp / runningPeakAverageRef.current;
-      }
-      // Clamp to visually appealing range (0.75 to 1.25) to prevent overly tall spikes while preserving clear variation
-      lastPeakAmplitudeRef.current = Math.max(0.75, Math.min(1.25, ampScale));
     }
-
     if (!hasUsableContact) {
       lastPeakTimestampRef.current = 0;
-      lastPeakAmplitudeRef.current = 1.0;
-      runningPeakAverageRef.current = 0;
-      recentAmplitudesRef.current = [];
-    }
-
-    let eegValue = 0;
-    if (hasUsableContact && lastPeakTimestampRef.current > 0) {
-      const elapsed = nowT - lastPeakTimestampRef.current;
-      const ampScale = lastPeakAmplitudeRef.current;
-      
-      const maxPeak = 8.0 * ampScale;
-      const minPeak = -3.2 * ampScale;
-      const peakRange = maxPeak - minPeak; // 11.2 * ampScale
-
-      // EEG-style heartbeat spike:
-      // 0ms: reached maximum peak (+10.0 * scale) at the exact moment of peak detection
-      // 0ms - 60ms: instant descent from maxPeak to minPeak (below baseline)
-      // 60ms - 170ms: return from minPeak to 0.0
-      // > 170ms: rest at 0.0
-      if (elapsed >= 0 && elapsed < 60) {
-        const t = elapsed / 60;
-        eegValue = maxPeak - t * peakRange;
-      } else if (elapsed >= 60 && elapsed < 170) {
-        const t = (elapsed - 60) / 110;
-        eegValue = minPeak + t * Math.abs(minPeak);
-      } else {
-        eegValue = 0.0;
-      }
     }
 
     const showWaveform = hasUsableContact;
+    const realWaveValue = showWaveform
+      ? (Number.isFinite(heartBeatResult.filteredValue) ? heartBeatResult.filteredValue : 0)
+      : 0;
 
     if (ppgMeterRef?.current) {
-      ppgMeterRef.current.pushSignal(showWaveform ? eegValue : 0, Date.now());
+      ppgMeterRef.current.pushSignal(realWaveValue, nowT);
     }
 
     if (hasUsableContact && nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {
