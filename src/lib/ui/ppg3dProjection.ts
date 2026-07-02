@@ -44,6 +44,29 @@ interface ProjPoint {
   scale: number;
 }
 
+/**
+ * Scratch buffers reutilizados entre frames para evitar asignaciones en el hot path
+ * del render 3D. Se dimensionan en `ensureScratch(n)` y crecen sólo cuando `n` supera
+ * la capacidad actual. Estructura SoA (struct-of-arrays) sobre Float32Array → cero
+ * boxing/unboxing por punto y presión de GC mínima.
+ */
+let SCRATCH_CAP = 0;
+let PfX: Float32Array = new Float32Array(0);
+let PfY: Float32Array = new Float32Array(0);
+let PfS: Float32Array = new Float32Array(0);
+let PflX: Float32Array = new Float32Array(0);
+let PflY: Float32Array = new Float32Array(0);
+function ensureScratch(n: number): void {
+  if (n <= SCRATCH_CAP) return;
+  const cap = Math.max(64, Math.ceil(n * 1.25));
+  PfX = new Float32Array(cap);
+  PfY = new Float32Array(cap);
+  PfS = new Float32Array(cap);
+  PflX = new Float32Array(cap);
+  PflY = new Float32Array(cap);
+  SCRATCH_CAP = cap;
+}
+
 export interface Projector {
   horizonY: number;
   nearY: number;
@@ -281,17 +304,20 @@ export function drawWaveRibbon3D(
   const hOf = (c: WaveCoord) => clamp(c.val / ((state.waveGain || 4.5) * 10.0), -0.5, 1.2) + 0.25;
   const uOf = (c: WaveCoord) => clamp((c.x - plot.x) / plot.w, 0, 1);
 
-  const Pf: ProjPoint[] = []; // cresta frontal (la onda honesta)
-  const Pb: ProjPoint[] = []; // cresta trasera (grosor de la cinta)
-  const Pfloor: ProjPoint[] = []; // huella en el piso (sombra)
-  for (const c of coords) {
+  // Escritura in-place a scratch tipados: cero asignaciones por punto (evita
+  // 3 × n `push` + 3 × n objetos {x,y,scale} por frame). `Pb` no se usa aguas
+  // abajo, así que ni siquiera se calcula: elimina n proyecciones extra.
+  const n = coords.length;
+  ensureScratch(n);
+  for (let i = 0; i < n; i++) {
+    const c = coords[i];
     const u = uOf(c);
     const h = hOf(c);
-    Pf.push(proj.project(u, WAVE_D_FRONT, h));
-    Pb.push(proj.project(u, WAVE_D_BACK, h));
-    Pfloor.push(proj.project(u, WAVE_D_FRONT, 0));
+    const pf = proj.project(u, WAVE_D_FRONT, h);
+    PfX[i] = pf.x; PfY[i] = pf.y; PfS[i] = pf.scale;
+    const pfl = proj.project(u, WAVE_D_FRONT, 0);
+    PflX[i] = pfl.x; PflY[i] = pfl.y;
   }
-  const n = Pf.length;
 
   ctx.save();
   ctx.beginPath();
@@ -309,8 +335,8 @@ export function drawWaveRibbon3D(
       while (e < n - 1 && coords[e].isArr === isArr) e++;
       const col = isArr ? C.arr : C.signal;
       ctx.beginPath();
-      ctx.moveTo(Pfloor[s].x, Pfloor[s].y);
-      for (let i = s; i < e; i++) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
+      ctx.moveTo(PflX[s], PflY[s]);
+      for (let i = s; i < e; i++) ctx.lineTo(PflX[i], PflY[i]);
       ctx.strokeStyle = `rgba(${col}, ${isArr ? 0.35 : 0.12})`;
       ctx.lineWidth = isArr ? 8 : 6;
       ctx.stroke();
@@ -322,16 +348,16 @@ export function drawWaveRibbon3D(
   if (revealed) {
     for (let i = 0; i < n; i++) {
       if (!coords[i].isArr) continue;
-      const p = Pfloor[i];
-      const dx = proj.vpX - p.x;
-      const dy = proj.horizonY - p.y;
+      const px = PflX[i], py = PflY[i];
+      const dx = proj.vpX - px;
+      const dy = proj.horizonY - py;
       const dist = Math.hypot(dx, dy);
       if (dist < 1) continue;
       const nx = dx / dist, ny = dy / dist;
-      const fade = Math.min(1, (p.y - proj.horizonY) / (proj.nearY - proj.horizonY));
+      const fade = Math.min(1, (py - proj.horizonY) / (proj.nearY - proj.horizonY));
       ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(p.x + nx * dist, p.y + ny * dist);
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + nx * dist, py + ny * dist);
       ctx.strokeStyle = `rgba(${C.arr}, ${(0.08 + 0.12 * fade).toFixed(3)})`;
       ctx.lineWidth = 1.5 + 1.5 * fade;
       ctx.stroke();
@@ -341,8 +367,8 @@ export function drawWaveRibbon3D(
   // 2) Trazo único de la cresta frontal (onda limpia, sin rellenos ni brillos)
   const drawCrest = (s0: number, e0: number) => {
     ctx.beginPath();
-    ctx.moveTo(Pf[s0].x, Pf[s0].y);
-    for (let k = s0 + 1; k < e0; k++) ctx.lineTo(Pf[k].x, Pf[k].y);
+    ctx.moveTo(PfX[s0], PfY[s0]);
+    for (let k = s0 + 1; k < e0; k++) ctx.lineTo(PfX[k], PfY[k]);
   };
 
   let seg = 0;
@@ -371,7 +397,7 @@ export function drawWaveRibbon3D(
       const next = coords[i + 1].val;
       const prev2 = coords[i - 2].val;
       const next2 = coords[i + 2].val;
-      const p = Pf[i];
+      const p = { x: PfX[i], y: PfY[i], scale: PfS[i] };
 
       // Pico sistólico (máximo local) → punto + valor + etiqueta SYS/ARR.
       if (v > prev && v > next && v > prev2 && v > next2 && v > geom.midValue) {
@@ -427,9 +453,9 @@ export function drawWaveRibbon3D(
   }
 
   // 7) Punto blanco en la punta conductora (cresta más reciente).
-  const head = Pf[n - 1];
+  const headX = PfX[n - 1], headY = PfY[n - 1];
   ctx.beginPath();
-  ctx.arc(head.x, head.y, 3, 0, Math.PI * 2);
+  ctx.arc(headX, headY, 3, 0, Math.PI * 2);
   ctx.fillStyle = '#ffffff';
   ctx.fill();
 

@@ -26,9 +26,9 @@ export const PEAK_DETECTION_DEFAULTS = {
   beatWindowRrFactor: 0.85,
   beatWindowMsMax: 1100,
   /** Prominencia mínima de referencia (Elgendi); se escala por calibración en ventana */
-  minProminence: 0.019,
+  minProminence: 0.012,
   /** Peso del offset adaptativo MA_beat (referencia; calibración ajusta por SQI/PI) */
-  offsetWeight: 0.22,
+  offsetWeight: 0.18,
   /**
    * Offset β del umbral Elgendi canónico: THR1 = MA_beat + β·media(energía).
    * Valor validado en NeuroKit2/Elgendi 2013 = 0.02. La calibración por
@@ -53,31 +53,29 @@ export const PEAK_DETECTION_DEFAULTS = {
   peakEmitMinRrFrac: 0.45,
   /**
    * Movimiento (IMU, motionScore EMA) por encima del cual se SUPRIME la emisión
-   * de latidos: durante un movimiento claro la señal está corrupta y los picos
-   * son artefactos. Conservador (rest ≈ 0.1–0.3; artefacto duro = 0.75) → no
-   * actúa en reposo. Degrada con gracia: sin permiso de IMU motionScore = 0.
+   * de latidos. Se sube el umbral base para no cortar micro-movimiento normal de
+   * dedo/celular; los falsos positivos siguen bloqueados por motionScore alto,
+   * Elgendi, SQI, score y refractario.
    */
-  peakEmitMotionSuppress: 0.6,
+  peakEmitMotionSuppress: 1.15,
   /**
    * Rechazo relativo de amplitud en Elgendi: se descartan picos cuya prominencia
    * sea menor que esta fracción de la prominencia mediana (muesca dícrota/ruido
-   * son de menor amplitud que el pico sistólico). Conservador para no perder
-   * latidos reales con modulación respiratoria.
+   * son de menor amplitud que el pico sistólico). Más permisivo para no perder
+   * latidos débiles bajo modulación respiratoria o presión fuerte.
    */
-  peakAmplitudeRejectFraction: 0.35,
+  peakAmplitudeRejectFraction: 0.22,
   /**
    * Cota SUPERIOR de amplitud relativa: se descartan picos cuya prominencia
-   * supere esta fracción × la mediana. El micro-movimiento del dedo produce
-   * excursiones bruscas (picos de amplitud anómala) — un latido real no supera
-   * ~2.6× la prominencia mediana ni con potenciación post-extrasístole. Relativo
-   * → no afecta señales débiles; alto → no descarta latidos reales ni PVC.
+   * supere esta fracción × la mediana. Alto para tolerar potenciación real y AGC;
+   * los saltos por movimiento se tratan por motionScore y SQI.
    */
-  peakAmplitudeRejectUpper: 2.6,
-  minSQI: 10,
+  peakAmplitudeRejectUpper: 3.4,
+  minSQI: 8,
   /** Ventana para emitir pico respecto al frame actual (ms) — ~½ RR @ 45 BPM */
-  peakEmitWindowMs: 720,
-  /** Mínimo de muestras en ventana para correr ensemble */
-  minSamplesEnsemble: 72,
+  peakEmitWindowMs: 840,
+  /** Mínimo de muestras en ventana para correr ensemble: menor latencia y menos silencios */
+  minSamplesEnsemble: 54,
   /** Ventana de integración para detección (~180 ms de pulso sistólico típico a 30 Hz) */
   integrationWindowMs: 180,
   /** Refractario máximo derivado de maxBpm */
@@ -90,8 +88,8 @@ export const PEAK_DETECTION_DEFAULTS = {
   RESAMPLE_TARGET_MAX: 512,
   /** Normalización robusta del latido para ensemble (escala ±) */
   HEARTBEAT_NORM_SCALE: 120,
-  HEARTBEAT_NORM_MIN_RANGE: 0.032,
-  HEARTBEAT_NORM_FALLBACK_GAIN: 8,
+  HEARTBEAT_NORM_MIN_RANGE: 0.016,
+  HEARTBEAT_NORM_FALLBACK_GAIN: 16,
   HEARTBEAT_WINDOW_WARMUP: 120,
   HEARTBEAT_WINDOW_STABLE: 180,
   /**
@@ -100,12 +98,12 @@ export const PEAK_DETECTION_DEFAULTS = {
    */
   CALIBRATION: {
     TARGET_DYNAMIC_RANGE: 0.55,
-    PROMINENCE_SCALE_MIN: 0.55,
+    PROMINENCE_SCALE_MIN: 0.42,
     PROMINENCE_SCALE_MAX: 1.45,
-    OFFSET_WEIGHT_MIN: 0.14,
+    OFFSET_WEIGHT_MIN: 0.10,
     OFFSET_WEIGHT_MAX: 0.32,
-    TARGET_PI: 0.0045,
-    SQI_REFERENCE: 48,
+    TARGET_PI: 0.0032,
+    SQI_REFERENCE: 42,
   },
 } as const;
 

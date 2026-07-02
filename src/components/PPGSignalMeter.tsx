@@ -175,6 +175,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     },
     clearBuffer: () => {
       dataBufferRef.current?.clear();
+      lastPeakTimeRef.current = 0;
     }
   }), [registerBeat]);
 
@@ -252,6 +253,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       bpmTrendRef.current = [];
       pendingTrendArrRef.current = false;
       smoothedBpmRef.current = 0;
+      lastPeakTimeRef.current = 0;
     }
 
     if (!isFingerDetected && !preserveResults) {
@@ -470,6 +472,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     hrvDisplayRef.current = { sdnn: 0, rmssd: 0, pnn50: 0, cv: 0 };
     bpmStatsRef.current = { min: 0, max: 0, sum: 0, n: 0 };
     bpmTrendRef.current = [];
+    lastPeakTimeRef.current = 0;
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (ctx) {

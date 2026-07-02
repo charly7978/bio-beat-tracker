@@ -67,3 +67,15 @@ export function calculateHRV(intervals: number[]): HRVMetrics {
   const { sdnn, rmssd, pnn50, cv } = computeRrHrv(valid);
   return { sdnn, rmssd, pnn50, cv };
 }
+
+// API HRV avanzada: mantiene el motor full-spectrum conectado al grafo público
+// sin ejecutarlo en el hot path del monitor cardíaco en tiempo real.
+export { analyzeHrvWindow, computeFullHrvReport } from '../lib/hrv/hrvEngine';
+export type {
+  ArtifactStats,
+  FrequencyDomainHRV,
+  FullHrvReport,
+  HrvWindowResult,
+  NonLinearHRV,
+  TimeDomainHRV,
+} from '../lib/hrv/hrvEngine';
