@@ -1,20 +1,27 @@
 /**
  * Ponderación de candidatos a pico PPG (Elgendi + SQI/PI).
+ *
+ * Regla crítica: PI/SQI no pueden aplastar multiplicativamente un pico real.
+ * En cámara+flash hay latidos genuinos de baja perfusión: el detector debe dejar
+ * que la morfología Elgendi + confianza ensemble manden, usando PI/SQI como
+ * penalización suave contra falsos positivos, no como bloqueo encubierto.
  */
 import { clamp } from '@/utils/math';
 import { median } from '@/utils/stats';
 
 export const PEAK_SCORE_WEIGHTS = {
-  elgendi: 0.40,
-  ensemble: 0.24,
-  sqi: 0.18,
-  rrStability: 0.18,
+  // Elgendi es el detector sistólico primario: debe pesar más que el SQI global.
+  elgendi: 0.46,
+  ensemble: 0.28,
+  sqi: 0.10,
+  rrStability: 0.16,
 } as const;
 
 export const PEAK_SCORE_THRESHOLDS = {
-  minScore: 0.42,
-  /** Desviación máxima vs mediana RR previa para aceptar pico */
-  rrMedianMaxRelDev: 0.26,
+  /** Umbral mínimo de pico genuino: bajo enough para pulso débil, alto against ruido. */
+  minScore: 0.30,
+  /** Desviación máxima vs mediana RR previa para bonificar, no bloquear. */
+  rrMedianMaxRelDev: 0.36,
 } as const;
 
 export interface PeakScoreInput {
@@ -38,17 +45,21 @@ export function scorePeakCandidate(input: PeakScoreInput): number {
     const rel = Math.abs(input.rrMs - input.prevRrMedianMs) / input.prevRrMedianMs;
     score += w.rrStability * clamp(1 - rel / PEAK_SCORE_THRESHOLDS.rrMedianMaxRelDev, 0, 1);
   } else {
-    score += w.rrStability * 0.4;
+    // Arranque/re-adquisición: no castigar por falta de historial RR.
+    score += w.rrStability * 0.40;
   }
 
+  // Penalty suave: un PI bajo NO significa automáticamente falso positivo. En PPG
+  // por cámara el PI puede ser muy bajo con dedo real, presión fuerte o flash desigual.
   const piGate =
     input.perfusionIndex > 0
-      ? clamp(input.perfusionIndex / 0.007, 0.38, 1)
-      : 0.92;
+      ? clamp(0.72 + (input.perfusionIndex / 0.007) * 0.28, 0.72, 1)
+      : 0.90;
   const sqiGate =
     input.sqi > 0
-      ? clamp(0.55 + (input.sqi / 100) * 0.45, 0.55, 1)
-      : 0.82;
+      ? clamp(0.78 + (input.sqi / 100) * 0.22, 0.78, 1)
+      : 0.86;
+
   return clamp(score * piGate * sqiGate, 0, 1);
 }
 
