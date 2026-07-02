@@ -155,8 +155,8 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   useImperativeHandle(ref, () => ({
     pushSignal: (val: number, _ts: number) => {
       if (!dataBufferRef.current) return;
-      const boundedValue = Math.max(-1.2, Math.min(1.2, val));
-      const scaledValue = Math.max(-1.2, Math.min(1.2, boundedValue * waveGainRef.current));
+      const boundedValue = Math.max(-3.0, Math.min(3.0, val));
+      const scaledValue = Math.max(-3.0, Math.min(3.0, boundedValue * waveGainRef.current));
       const now = Date.now();
       const isArrhythmia = now < arrActiveUntilRef.current;
       dataBufferRef.current.push({
