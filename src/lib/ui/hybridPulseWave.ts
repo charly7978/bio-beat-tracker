@@ -26,29 +26,29 @@ export function buildHybridPulseSample(input: HybridPulseSampleInput): number {
 
   const envelope = 0.35 + cleanSignal * 0.55 * qualityWeight;
 
-  // Fase 0-1%: descanso en línea base (cero)
-  // Fase 1-2.5%: ascenso vertical muy rápido hasta el pico máximo
-  // Fase 2.5-3.5%: descenso instantáneo y abrupto (latigazo) por debajo de la línea base hasta el pico negativo
-  // Fase 3.5-7%: ascenso de vuelta a la línea base
-  // Fase 7-100%: descanso en línea base
+  // Fase 0-2%: descanso en línea base (cero)
+  // Fase 2-6%: ascenso vertical rápido hasta el pico máximo (4% del ciclo)
+  // Fase 6-8%: descenso instantáneo y abrupto (latigazo) por debajo de la línea base hasta el pico negativo
+  // Fase 8-20%: ascenso de vuelta a la línea base
+  // Fase 20-100%: descanso en línea base
 
-  const riseStart = 0.01;
-  const riseEnd = 0.025;
-  const crashEnd = 0.035;
-  const recoveryEnd = 0.07;
+  const riseStart = 0.02;
+  const riseEnd = 0.06;
+  const crashEnd = 0.08;
+  const recoveryEnd = 0.20;
 
   let template = 0;
   if (phase < riseStart) {
     template = 0;
   } else if (phase < riseEnd) {
     const t = (phase - riseStart) / (riseEnd - riseStart);
-    template = t;
+    template = t * 1.5;
   } else if (phase < crashEnd) {
     const t = (phase - riseEnd) / (crashEnd - riseEnd);
-    template = 1.0 - t * 1.6;
+    template = 1.5 - t * 2.5;
   } else if (phase < recoveryEnd) {
     const t = (phase - crashEnd) / (recoveryEnd - crashEnd);
-    template = -0.6 + t * 0.6;
+    template = -1.0 + t * 1.0;
   } else {
     template = 0;
   }

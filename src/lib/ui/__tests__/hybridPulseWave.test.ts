@@ -8,12 +8,12 @@ describe('buildHybridPulseSample', () => {
       quality: 80,
       isPeak: false,
       rrMs: 800,
-      elapsedSinceLastPeakMs: 20,
+      elapsedSinceLastPeakMs: 48,
       hasUsableContact: true,
     });
 
     expect(hybrid).toBeGreaterThan(0.7);
-    expect(hybrid).toBeLessThan(1.4);
+    expect(hybrid).toBeLessThan(1.8);
   });
 
   it('recurre al template cuando no hay señal real suficiente', () => {
@@ -22,7 +22,7 @@ describe('buildHybridPulseSample', () => {
       quality: 10,
       isPeak: false,
       rrMs: 800,
-      elapsedSinceLastPeakMs: 20,
+      elapsedSinceLastPeakMs: 48,
       hasUsableContact: true,
     });
 
@@ -35,7 +35,7 @@ describe('buildHybridPulseSample', () => {
       quality: 90,
       isPeak: false,
       rrMs: 800,
-      elapsedSinceLastPeakMs: 20,
+      elapsedSinceLastPeakMs: 48,
       hasUsableContact: true,
     });
     const postRecovery = buildHybridPulseSample({
@@ -43,7 +43,7 @@ describe('buildHybridPulseSample', () => {
       quality: 90,
       isPeak: false,
       rrMs: 800,
-      elapsedSinceLastPeakMs: 60,
+      elapsedSinceLastPeakMs: 200,
       hasUsableContact: true,
     });
 
