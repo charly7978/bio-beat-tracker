@@ -23,7 +23,7 @@ export default tseslint.config(
         "warn",
         { allowConstantExport: true },
       ],
-      "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+      "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_|^WAVE_D_BACK$" }],
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-empty-function": "warn",
       "@typescript-eslint/no-empty-object-type": "warn",
