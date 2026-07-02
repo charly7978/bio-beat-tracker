@@ -32,6 +32,7 @@ import {
 import { recordVerdict as recordAuditVerdict } from '@/lib/sanity/sanityAuditLog';
 import { toast } from '@/hooks/use-toast';
 import { triggerArrhythmiaHaptic } from '@/utils/haptics';
+import { buildHybridPulseSample } from '@/lib/ui/hybridPulseWave';
 
 interface HeartBeatProcessorAPI {
   processSignal: (
@@ -515,35 +516,22 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       recentAmplitudesRef.current = [];
     }
 
-    let eegValue = 0;
-    if (hasUsableContact && lastPeakTimestampRef.current > 0) {
-      const elapsed = nowT - lastPeakTimestampRef.current;
-      const ampScale = lastPeakAmplitudeRef.current;
-      
-      const maxPeak = 8.0 * ampScale;
-      const minPeak = -3.2 * ampScale;
-      const peakRange = maxPeak - minPeak; // 11.2 * ampScale
-
-      // EEG-style heartbeat spike:
-      // 0ms: reached maximum peak (+10.0 * scale) at the exact moment of peak detection
-      // 0ms - 60ms: instant descent from maxPeak to minPeak (below baseline)
-      // 60ms - 170ms: return from minPeak to 0.0
-      // > 170ms: rest at 0.0
-      if (elapsed >= 0 && elapsed < 60) {
-        const t = elapsed / 60;
-        eegValue = maxPeak - t * peakRange;
-      } else if (elapsed >= 60 && elapsed < 170) {
-        const t = (elapsed - 60) / 110;
-        eegValue = minPeak + t * Math.abs(minPeak);
-      } else {
-        eegValue = 0.0;
-      }
-    }
+    const rrForWaveform = rrForBpm.length >= 1 ? rrForBpm[rrForBpm.length - 1] : 0;
+    const elapsedSinceLastPeak = lastPeakTimestampRef.current > 0 ? nowT - lastPeakTimestampRef.current : 0;
+    const waveQuality = Math.max(0, Math.min(100, rawSqi));
+    const hybridValue = buildHybridPulseSample({
+      realValue: hbInput,
+      quality: waveQuality,
+      isPeak: heartBeatResult.isPeak,
+      rrMs: rrForWaveform || 800,
+      elapsedSinceLastPeakMs: elapsedSinceLastPeak,
+      hasUsableContact,
+    });
 
     const showWaveform = hasUsableContact;
 
     if (ppgMeterRef?.current) {
-      ppgMeterRef.current.pushSignal(showWaveform ? eegValue : 0, Date.now());
+      ppgMeterRef.current.pushSignal(showWaveform ? hybridValue : 0, Date.now());
     }
 
     if (hasUsableContact && nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {
