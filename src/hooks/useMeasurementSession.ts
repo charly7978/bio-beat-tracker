@@ -366,12 +366,16 @@ export function useMeasurementSession({
     lastArrhythmiaData.current = null;
   }, [cameraStream, stopFrameLoop, stopProcessing, fullResetVitalSigns, resetHeartBeat, resetSessionRefs, isMonitoringRef, setHeartbeatSignal, setBeatMarker, setRRIntervals, lastArrhythmiaData, setVitalSigns]);
 
-  // Auto-finalizar a los 90 segundos
+  // Auto-finalizar a los 10 min (600 s) máximo automático.
+  // La HRV clínica requiere mínimo 5 min (300 s), según Task Force 1996.
   useEffect(() => {
-    if (isMonitoring && elapsedTime >= 90) {
+    if (isMonitoring && elapsedTime >= 600) {
       finalizeMeasurement();
     }
   }, [elapsedTime, isMonitoring, finalizeMeasurement]);
+
+  /** ¿La sesión ya cumplió los 5 minutos reglamentarios para HRV? */
+  const hrvReady = elapsedTime >= 300;
 
   // Sincronizar isMonitoringRef
   useEffect(() => {
@@ -381,6 +385,7 @@ export function useMeasurementSession({
   return {
     isMonitoring,
     setIsMonitoring,
+    hrvReady,
     isCameraOn,
     setIsCameraOn,
     elapsedTime,

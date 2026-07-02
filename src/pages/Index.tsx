@@ -1,6 +1,6 @@
 // Force rebuild on Vercel
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, XCircle, Brain, Loader2, Sliders, Cpu, User, Check } from "lucide-react";
+import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, XCircle, Brain, Loader2, Sliders, Cpu, User, Check, FileText } from "lucide-react";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
 import { CalibrationManager } from "@/modules/vital-signs/CalibrationManager";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,6 +15,7 @@ import { useMeasurementSession } from "@/hooks/useMeasurementSession";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
 import { PoincarePlot } from "@/components/PoincarePlot";
 import { WebrtcCallWidget } from "@/components/WebrtcCallWidget";
+import { openPdfReport } from "@/utils/pdfExport";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
 import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
 import { isNative } from "@/lib/device/platform";
@@ -877,11 +878,13 @@ const Index = () => {
             <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${webgpuAvail === 'yes' ? 'bg-cyan-500/10 text-cyan-400' : 'bg-zinc-900/50 text-zinc-600'}`}>
               <Cpu className="w-2 h-2" />GPU{webgpuAvail === 'yes' ? '' : '—'}
             </span>
+            {session.isMonitoring && (
+              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${session.hrvReady ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                <Activity className="w-2 h-2" />{session.hrvReady ? 'HRV LISTO' : `HRV ${Math.max(0, 300 - session.elapsedTime)}s`}
+              </span>
+            )}
             <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${encryptionReady ? 'bg-amber-500/10 text-amber-400' : 'bg-zinc-900/50 text-zinc-600'}`}>
               <Shield className="w-2 h-2" />{encryptionReady ? 'ENC' : '—'}
-            </span>
-            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${healthAvail === 'yes' ? 'bg-blue-500/10 text-blue-400' : 'bg-zinc-900/50 text-zinc-600'}`}>
-              <Activity className="w-2 h-2" />HC{healthAvail === 'yes' ? '' : '—'}
             </span>
             {riskResult && (
               <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${riskResult === 'IMMEDIATE' ? 'bg-red-500/10 text-red-400' : riskResult === 'SOON' ? 'bg-orange-500/10 text-orange-400' : riskResult === 'MONITOR' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
@@ -1005,12 +1008,49 @@ const Index = () => {
                       </div>
                     </div>
 
-                    {/* Poincaré Plot de HRV */}
-                    {router.rrIntervals && router.rrIntervals.length >= 2 && (
-                      <div className="flex justify-center my-2 animate-in fade-in zoom-in-95 duration-500">
-                        <PoincarePlot rrIntervals={router.rrIntervals} width={200} height={200} />
-                      </div>
-                    )}
+                    {/* HRV — Poincaré + métricas (solo si hay suficientes RR) */}
+                    {router.rrIntervals && router.rrIntervals.length >= 2 && (() => {
+                      const rr = router.rrIntervals.filter(r => r >= 270 && r <= 2200);
+                      if (rr.length < 2) return null;
+                      const { sdnn, rmssd, pnn50, cv, meanRR } = (() => {
+                        const n = rr.length;
+                        let sum = 0;
+                        for (let i = 0; i < n; i++) sum += rr[i];
+                        const m = sum / n;
+                        let sq = 0, sqd = 0, nn50 = 0;
+                        for (let i = 0; i < n; i++) sq += (rr[i] - m) ** 2;
+                        for (let i = 1; i < n; i++) {
+                          const d = Math.abs(rr[i] - rr[i - 1]);
+                          sqd += d * d;
+                          if (d > 50) nn50++;
+                        }
+                        return { meanRR: m, sdnn: Math.sqrt(sq / n), rmssd: Math.sqrt(sqd / (n - 1)), pnn50: nn50 / (n - 1), cv: m ? (Math.sqrt(sq / n) / m) : 0 };
+                      })();
+                      const sd1 = rmssd / Math.SQRT2;
+                      const sd2 = Math.sqrt(2 * sdnn * sdnn - sd1 * sd1);
+                      const sdRatio = sd2 > 0 ? sd1 / sd2 : 0;
+                      return (
+                        <div className="bg-zinc-950/80 rounded-xl p-3 border border-zinc-900/50 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-zinc-400 text-[10px] font-semibold tracking-wide">HRV — VARIABILIDAD CARDÍACA</span>
+                            {session.hrvReady && <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">5 min ✓</span>}
+                          </div>
+                          <div className="grid grid-cols-3 gap-2 text-center">
+                            <div><div className="text-white text-xs font-bold">{sdnn.toFixed(1)}</div><div className="text-zinc-500 text-[8px]">SDNN ms</div></div>
+                            <div><div className="text-white text-xs font-bold">{rmssd.toFixed(1)}</div><div className="text-zinc-500 text-[8px]">RMSSD ms</div></div>
+                            <div><div className="text-white text-xs font-bold">{(pnn50 * 100).toFixed(1)}%</div><div className="text-zinc-500 text-[8px]">pNN50</div></div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2 text-center pt-1 border-t border-zinc-900">
+                            <div><div className="text-blue-300 text-xs font-bold">{sd1.toFixed(1)}</div><div className="text-zinc-500 text-[8px]">SD1 ms</div></div>
+                            <div><div className="text-blue-300 text-xs font-bold">{sd2.toFixed(1)}</div><div className="text-zinc-500 text-[8px]">SD2 ms</div></div>
+                            <div><div className="text-blue-300 text-xs font-bold">{sdRatio.toFixed(2)}</div><div className="text-zinc-500 text-[8px]">SD1/SD2</div></div>
+                          </div>
+                          <div className="flex justify-center mt-1">
+                            <PoincarePlot rrIntervals={router.rrIntervals} width={160} height={160} />
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Porcentaje circular visual */}
                     <div className="flex items-center justify-center gap-4 pt-1">
@@ -1054,6 +1094,49 @@ const Index = () => {
                         <><Brain className="w-4 h-4" /> Análisis AI de Salud</>
                       )}
                     </button>
+                    {/* Botón Exportar PDF — disponible solo si HRV-ready */}
+                    {session.hrvReady && (() => {
+                      const rr = (router.rrIntervals || []).filter(r => r >= 270 && r <= 2200);
+                      const n = rr.length;
+                      let hrvSummary = null;
+                      if (n >= 2) {
+                        let sum = 0;
+                        for (let i = 0; i < n; i++) sum += rr[i];
+                        const meanRR = sum / n;
+                        let sq = 0, sqd = 0, nn50 = 0;
+                        for (let i = 0; i < n; i++) sq += (rr[i] - meanRR) ** 2;
+                        for (let i = 1; i < n; i++) {
+                          const d = Math.abs(rr[i] - rr[i - 1]);
+                          sqd += d * d;
+                          if (d > 50) nn50++;
+                        }
+                        const sdnn = Math.sqrt(sq / n);
+                        const rmssd = Math.sqrt(sqd / (n - 1));
+                        const pnn50 = nn50 / (n - 1);
+                        const cv = meanRR > 0 ? sdnn / meanRR : 0;
+                        const sd1 = rmssd / Math.SQRT2;
+                        const sd2 = Math.sqrt(Math.max(0, 2 * sdnn * sdnn - sd1 * sd1));
+                        hrvSummary = {
+                          meanHR: meanRR > 0 ? 60000 / meanRR : 0,
+                          meanRR, sdnn, rmssd, pnn50, cv,
+                          poincare: { sd1, sd2, sd1_sd2_ratio: sd2 > 0 ? sd1 / sd2 : 0 },
+                        };
+                      }
+                      return (
+                        <button
+                          onClick={() => openPdfReport({
+                            timestamp: new Date().toISOString(),
+                            durationSec: session.elapsedTime,
+                            vitals: router.vitalSigns,
+                            hrv: hrvSummary,
+                            beats: { total: totalBeats, arrhythmia: arrhythmiaBeats, normalPercent },
+                          })}
+                          className="w-full mt-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-sm transition-all border border-slate-700/50"
+                        >
+                          <FileText className="w-4 h-4" /> Exportar Reporte PDF
+                        </button>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
