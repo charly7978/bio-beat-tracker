@@ -354,16 +354,15 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         ? diag.sqm.sqi
         : lastSignal.quality) || 0;
 
+    const finiteSignalValue = Number.isFinite(signalValue) ? signalValue : 0;
+
     let hbInput = 0;
-    if (fingerConfirmed) {
-      if (Math.abs(signalValue) > 1e-7) {
-        lastHbInputRef.current = signalValue;
-        hbInput = signalValue;
-      } else if (Math.abs(lastHbInputRef.current) > 1e-7) {
-        hbInput = lastHbInputRef.current;
-      }
+    if (fingerConfirmed && Math.abs(finiteSignalValue) > 1e-7) {
+      lastHbInputRef.current = finiteSignalValue;
+      hbInput = finiteSignalValue;
     } else {
-      lastHbInputRef.current = 0;
+      hbInput = 0;
+      if (!fingerConfirmed) lastHbInputRef.current = 0;
     }
 
     // Keep sliding window of unnormalized absolute amplitudes (10 frames ~ 330ms)
@@ -542,8 +541,10 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     const showWaveform = hasUsableContact;
 
+    const emittedPeak = hasUsableContact && heartBeatResult.isPeak;
+
     if (ppgMeterRef?.current) {
-      ppgMeterRef.current.pushSignal(showWaveform ? eegValue : 0, Date.now());
+      ppgMeterRef.current.pushSignal(showWaveform ? finiteSignalValue : 0, nowT, emittedPeak);
     }
 
     if (hasUsableContact && nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {
@@ -687,8 +688,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     } else if (!hasUsableContact) {
       lastRrSnapshotRef.current = null;
     }
-
-    const emittedPeak = hasUsableContact && heartBeatResult.isPeak;
 
     if (emittedPeak) {
       setBeatMarker(1);

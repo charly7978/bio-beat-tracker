@@ -75,7 +75,7 @@ export interface PPGSignalMeterProps {
 }
 
 export interface PPGSignalMeterHandle {
-  pushSignal: (value: number, timestamp: number) => void;
+  pushSignal: (value: number, timestamp: number, isBeat?: boolean) => void;
   clearBuffer: () => void;
 }
 
@@ -152,11 +152,20 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const displayDiaRef = useRef(0);
   const waveGainRef = useRef(4.5);
 
+  const registerBeat = useCallback((now: number) => {
+    if (now - lastPeakTimeRef.current <= 250) return;
+    lastPeakTimeRef.current = now;
+    setShowPulse(true);
+    window.setTimeout(() => setShowPulse(false), 120);
+  }, []);
+
   useImperativeHandle(ref, () => ({
-    pushSignal: (val: number, _ts: number) => {
+    pushSignal: (val: number, ts: number, isBeatNow = false) => {
       if (!dataBufferRef.current) return;
       const scaledValue = val * waveGainRef.current;
-      const now = Date.now();
+      const now = Number.isFinite(ts) && ts > 1_000_000_000_000 ? ts : Date.now();
+      if (isBeatNow) registerBeat(now);
+      
       const isArrhythmia = now < arrActiveUntilRef.current;
       dataBufferRef.current.push({
         time: now,
@@ -167,7 +176,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     clearBuffer: () => {
       dataBufferRef.current?.clear();
     }
-  }));
+  }), [registerBeat]);
 
   const layoutRef = useRef<PpgLayout>({
     width: 0, height: 0,
@@ -260,15 +269,9 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
 
   useEffect(() => {
     if (isPeak && isFingerDetected) {
-      const now = Date.now();
-      if (now - lastPeakTimeRef.current > 250) {
-        lastPeakTimeRef.current = now;
-        setShowPulse(true);
-        const t = window.setTimeout(() => setShowPulse(false), 120);
-        return () => window.clearTimeout(t);
-      }
+      registerBeat(Date.now());
     }
-  }, [isPeak, isFingerDetected]);
+  }, [isPeak, isFingerDetected, registerBeat]);
 
   useEffect(() => {
     if (!dataBufferRef.current) {
