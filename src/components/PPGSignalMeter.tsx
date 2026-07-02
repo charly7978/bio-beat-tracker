@@ -91,6 +91,123 @@ function getSafeAreaBottom(): number {
   return offset;
 }
 
+const REAL_BEAT_VISUAL_MORPHOLOGY = {
+  /**
+   * Morfología visual pura: reproduce el look cardiográfico sintético anterior,
+   * pero el disparo temporal sale de picos PPG reales aceptados por el pipeline.
+   * No alimenta BPM, SpO₂, HRV, presión, arritmias ni persistencia de mediciones.
+   */
+  MAX_PEAK: 8.0,
+  MIN_VALLEY: -3.2,
+  DICROTIC_SHOULDER: 1.25,
+  DOWNSTROKE_MS: 60,
+  RECOVERY_MS: 170,
+  DICROTIC_START_MS: 185,
+  DICROTIC_PEAK_MS: 238,
+  DICROTIC_END_MS: 330,
+  CYCLE_MAX_MS: 520,
+  RAW_BASELINE_GAIN: 0.10,
+  BASELINE_DECAY: 0.84,
+  MIN_AMP_SCALE: 0.74,
+  MAX_AMP_SCALE: 1.18,
+};
+
+interface VisualMorphologyState {
+  lastOutput: number;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function easeOutCubic(t: number): number {
+  const x = clampNumber(t, 0, 1);
+  return 1 - Math.pow(1 - x, 3);
+}
+
+function easeInOutSine(t: number): number {
+  const x = clampNumber(t, 0, 1);
+  return -(Math.cos(Math.PI * x) - 1) / 2;
+}
+
+function lerpNumber(a: number, b: number, t: number): number {
+  return a + (b - a) * clampNumber(t, 0, 1);
+}
+
+function realBeatVisualValue(args: {
+  rawValue: number;
+  nowMs: number;
+  lastPeakMs: number;
+  lastRRMs: number;
+  isFingerDetected: boolean;
+  preserveResults: boolean;
+  quality: number;
+  perfusionIndex: number;
+  previousValue: number;
+}): number {
+  const {
+    rawValue,
+    nowMs,
+    lastPeakMs,
+    lastRRMs,
+    isFingerDetected,
+    preserveResults,
+    quality,
+    perfusionIndex,
+    previousValue,
+  } = args;
+
+  if (!isFingerDetected && !preserveResults) return 0;
+
+  const rawMicroMotion = clampNumber(rawValue, -1, 1) * REAL_BEAT_VISUAL_MORPHOLOGY.RAW_BASELINE_GAIN;
+  const baseline = previousValue * REAL_BEAT_VISUAL_MORPHOLOGY.BASELINE_DECAY + rawMicroMotion;
+
+  if (lastPeakMs <= 0) return baseline;
+
+  const ageMs = nowMs - lastPeakMs;
+  const rrMs = isPhysiologicalRR(lastRRMs) ? lastRRMs : 800;
+  const visibleCycleMs = Math.min(
+    REAL_BEAT_VISUAL_MORPHOLOGY.CYCLE_MAX_MS,
+    Math.max(360, rrMs * 0.82),
+  );
+
+  if (ageMs < 0 || ageMs > visibleCycleMs) return baseline;
+
+  const qLift = clampNumber(quality / 100, 0, 1) * 0.20;
+  const piLift = clampNumber(perfusionIndex / 0.012, 0, 1) * 0.24;
+  const ampScale = clampNumber(
+    0.74 + qLift + piLift,
+    REAL_BEAT_VISUAL_MORPHOLOGY.MIN_AMP_SCALE,
+    REAL_BEAT_VISUAL_MORPHOLOGY.MAX_AMP_SCALE,
+  );
+
+  let y = 0;
+  if (ageMs <= REAL_BEAT_VISUAL_MORPHOLOGY.DOWNSTROKE_MS) {
+    const t = ageMs / REAL_BEAT_VISUAL_MORPHOLOGY.DOWNSTROKE_MS;
+    y = lerpNumber(
+      REAL_BEAT_VISUAL_MORPHOLOGY.MAX_PEAK,
+      REAL_BEAT_VISUAL_MORPHOLOGY.MIN_VALLEY,
+      easeOutCubic(t),
+    );
+  } else if (ageMs <= REAL_BEAT_VISUAL_MORPHOLOGY.RECOVERY_MS) {
+    const t = (ageMs - REAL_BEAT_VISUAL_MORPHOLOGY.DOWNSTROKE_MS) /
+      (REAL_BEAT_VISUAL_MORPHOLOGY.RECOVERY_MS - REAL_BEAT_VISUAL_MORPHOLOGY.DOWNSTROKE_MS);
+    y = lerpNumber(REAL_BEAT_VISUAL_MORPHOLOGY.MIN_VALLEY, 0, easeOutCubic(t));
+  } else if (ageMs <= REAL_BEAT_VISUAL_MORPHOLOGY.DICROTIC_END_MS) {
+    if (ageMs <= REAL_BEAT_VISUAL_MORPHOLOGY.DICROTIC_PEAK_MS) {
+      const t = (ageMs - REAL_BEAT_VISUAL_MORPHOLOGY.DICROTIC_START_MS) /
+        (REAL_BEAT_VISUAL_MORPHOLOGY.DICROTIC_PEAK_MS - REAL_BEAT_VISUAL_MORPHOLOGY.DICROTIC_START_MS);
+      y = lerpNumber(0, REAL_BEAT_VISUAL_MORPHOLOGY.DICROTIC_SHOULDER, easeInOutSine(t));
+    } else {
+      const t = (ageMs - REAL_BEAT_VISUAL_MORPHOLOGY.DICROTIC_PEAK_MS) /
+        (REAL_BEAT_VISUAL_MORPHOLOGY.DICROTIC_END_MS - REAL_BEAT_VISUAL_MORPHOLOGY.DICROTIC_PEAK_MS);
+      y = lerpNumber(REAL_BEAT_VISUAL_MORPHOLOGY.DICROTIC_SHOULDER, 0, easeInOutSine(t));
+    }
+  }
+
+  return y * ampScale + rawMicroMotion;
+}
+
 const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProps>(({
   value,
   quality,
@@ -136,6 +253,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
 
   const lastArrhythmiaCountRef = useRef(0);
   const beatHistoryRef = useRef<{ isArrhythmia: boolean; time: number; rr: number }[]>([]);
+  const visualMorphologyRef = useRef<VisualMorphologyState>({ lastOutput: 0 });
 
   const amplitudeStatsRef = useRef({ min: -50, max: 50, range: 100 });
 
@@ -155,8 +273,21 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   useImperativeHandle(ref, () => ({
     pushSignal: (val: number, _ts: number) => {
       if (!dataBufferRef.current) return;
-      const scaledValue = val * waveGainRef.current;
       const now = Date.now();
+      const p = propsRef.current;
+      const visualValue = realBeatVisualValue({
+        rawValue: Number.isFinite(val) ? val : 0,
+        nowMs: now,
+        lastPeakMs: lastPeakTimeRef.current,
+        lastRRMs: ibiDisplayRef.current,
+        isFingerDetected: p.isFingerDetected,
+        preserveResults: p.preserveResults,
+        quality: p.quality,
+        perfusionIndex: p.perfusionIndex ?? 0,
+        previousValue: visualMorphologyRef.current.lastOutput,
+      });
+      visualMorphologyRef.current.lastOutput = visualValue;
+      const scaledValue = visualValue * waveGainRef.current;
       const isArrhythmia = now < arrActiveUntilRef.current;
       dataBufferRef.current.push({
         time: now,
@@ -166,6 +297,8 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     },
     clearBuffer: () => {
       dataBufferRef.current?.clear();
+      lastPeakTimeRef.current = 0;
+      visualMorphologyRef.current = { lastOutput: 0 };
     }
   }));
 
@@ -243,6 +376,8 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       bpmTrendRef.current = [];
       pendingTrendArrRef.current = false;
       smoothedBpmRef.current = 0;
+      lastPeakTimeRef.current = 0;
+      visualMorphologyRef.current = { lastOutput: 0 };
     }
 
     if (!isFingerDetected && !preserveResults) {
@@ -263,6 +398,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       const now = Date.now();
       if (now - lastPeakTimeRef.current > 250) {
         lastPeakTimeRef.current = now;
+        visualMorphologyRef.current.lastOutput = REAL_BEAT_VISUAL_MORPHOLOGY.MAX_PEAK;
         setShowPulse(true);
         const t = window.setTimeout(() => setShowPulse(false), 120);
         return () => window.clearTimeout(t);
@@ -467,6 +603,8 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     hrvDisplayRef.current = { sdnn: 0, rmssd: 0, pnn50: 0, cv: 0 };
     bpmStatsRef.current = { min: 0, max: 0, sum: 0, n: 0 };
     bpmTrendRef.current = [];
+    lastPeakTimeRef.current = 0;
+    visualMorphologyRef.current = { lastOutput: 0 };
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (ctx) {
