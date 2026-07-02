@@ -357,16 +357,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       lastHbInputRef.current = 0;
     }
 
-    // Keep sliding window of unnormalized absolute amplitudes (10 frames ~ 330ms)
-    // to find the true peak crest robust to phase / frame timing offsets.
-    if (hasUsableContact) {
-      recentAmplitudesRef.current.push(Math.abs(hbInput));
-      if (recentAmplitudesRef.current.length > 10) {
-        recentAmplitudesRef.current.shift();
-      }
-    } else {
-      recentAmplitudesRef.current = [];
-    }
+    // (Sliding window de amplitudes removido: la onda es ahora la señal filtrada
+    // real del PPG, no una reconstrucción sintética escalada por picos.)
 
     const heartBeatResult = processHeartBeat.processSignal(
       hbInput,
