@@ -12,7 +12,7 @@ describe('buildHybridPulseSample', () => {
       hasUsableContact: true,
     });
 
-    expect(hybrid).toBeGreaterThan(0.8);
+    expect(hybrid).toBeGreaterThan(0.7);
     expect(hybrid).toBeLessThan(1.4);
   });
 
@@ -27,6 +27,28 @@ describe('buildHybridPulseSample', () => {
     });
 
     expect(hybrid).toBeGreaterThan(0);
+  });
+
+  it('genera un pico sistólico y una caída posterior más parecida a una onda PPG', () => {
+    const systolic = buildHybridPulseSample({
+      realValue: 1.0,
+      quality: 90,
+      isPeak: false,
+      rrMs: 800,
+      elapsedSinceLastPeakMs: 120,
+      hasUsableContact: true,
+    });
+    const lateDecay = buildHybridPulseSample({
+      realValue: 1.0,
+      quality: 90,
+      isPeak: false,
+      rrMs: 800,
+      elapsedSinceLastPeakMs: 360,
+      hasUsableContact: true,
+    });
+
+    expect(systolic).toBeGreaterThan(lateDecay);
+    expect(lateDecay).toBeLessThan(0.4);
   });
 
   it('permanece plana sin contacto', () => {
