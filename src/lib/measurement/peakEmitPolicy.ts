@@ -112,12 +112,30 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
     // Confianza mínima del ensemble (calidad de señal) — NO regularidad RR.
     if (ens.confidence < minPeakConf) continue;
 
+    const rrMs = lastEmittedPeakMs > 0 ? t - lastEmittedPeakMs : undefined;
     const weightedScore =
       ens.peakScores?.[i] ??
-      scorePeakCandidate({ elConf, ensConf: ens.confidence, sqi, perfusionIndex });
+      scorePeakCandidate({
+        elConf,
+        ensConf: ens.confidence,
+        sqi,
+        perfusionIndex,
+        rrMs,
+        prevRrMedianMs: prevRrMed > 0 ? prevRrMed : undefined,
+      });
 
-    // Enforce minimum score threshold to eliminate false positives from noise/distortion
-    const minScoreReq = stallReacquire ? PEAK_SCORE_THRESHOLDS.minScore * 0.8 : PEAK_SCORE_THRESHOLDS.minScore;
+    // Umbral dinámico: en reacquisición o pulso real de baja perfusión, se relaja
+    // el score pero nunca se elimina el conjunto de protecciones: Elgendi debe haber
+    // producido candidato, debe respetar refractario y debe superar confianza mínima.
+    const weakRealPulse =
+      fingerContactConfirmed &&
+      sqi >= 8 &&
+      perfusionIndex > 0 &&
+      perfusionIndex < 0.0045;
+    const minScoreReq =
+      PEAK_SCORE_THRESHOLDS.minScore *
+      (stallReacquire ? 0.82 : 1) *
+      (weakRealPulse ? 0.86 : 1);
     if (weightedScore < minScoreReq) continue;
 
     // Emite el pico genuino más reciente fuera del refractario.
@@ -147,7 +165,7 @@ export function bpmFromEmittedRr(rrMs: number[]): number {
   const med = sorted[Math.floor(sorted.length / 2)] ?? sorted[0]!;
   const trimmed =
     tail.length >= 3
-      ? tail.filter((d) => Math.abs(d - med) / med <= 0.22)
+      ? tail.filter((d) => Math.abs(d - med) / med <= 0.30)
       : tail;
   const use = trimmed.length >= 2 ? trimmed : tail;
   const sortedUse = [...use].sort((a, b) => a - b);
