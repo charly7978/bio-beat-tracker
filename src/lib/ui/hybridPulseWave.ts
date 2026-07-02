@@ -26,25 +26,37 @@ export function buildHybridPulseSample(input: HybridPulseSampleInput): number {
 
   const envelope = 0.35 + cleanSignal * 0.55 * qualityWeight;
 
-  const rise = phase < 0.12
-    ? phase / 0.12
-    : 1 - ((phase - 0.12) / 0.08) * 0.2;
+  // Fase 0-1%: descanso en línea base (cero)
+  // Fase 1-2.5%: ascenso vertical muy rápido hasta el pico máximo
+  // Fase 2.5-3.5%: descenso instantáneo y abrupto (latigazo) por debajo de la línea base hasta el pico negativo
+  // Fase 3.5-7%: ascenso de vuelta a la línea base
+  // Fase 7-100%: descanso en línea base
 
-  const systolicPeak = Math.exp(-Math.pow((phase - 0.16) / 0.06, 2));
-  const dicroticNotch = Math.exp(-Math.pow((phase - 0.42) / 0.045, 2)) * 0.18;
-  const diastolicTail = Math.exp(-phase * 3) * 0.18;
-  const recovery = phase > 0.6 ? (1 - phase) * 0.2 : 0;
+  const riseStart = 0.01;
+  const riseEnd = 0.025;
+  const crashEnd = 0.035;
+  const recoveryEnd = 0.07;
 
-  let template = rise * 0.32 + systolicPeak * 0.9 - dicroticNotch - diastolicTail + recovery;
-
-  if (phase > 0.2 && phase < 0.45) {
-    template *= 0.85;
+  let template = 0;
+  if (phase < riseStart) {
+    template = 0;
+  } else if (phase < riseEnd) {
+    const t = (phase - riseStart) / (riseEnd - riseStart);
+    template = t;
+  } else if (phase < crashEnd) {
+    const t = (phase - riseEnd) / (crashEnd - riseEnd);
+    template = 1.0 - t * 1.6;
+  } else if (phase < recoveryEnd) {
+    const t = (phase - crashEnd) / (recoveryEnd - crashEnd);
+    template = -0.6 + t * 0.6;
+  } else {
+    template = 0;
   }
 
   const base = template * envelope * (0.85 + 0.15 * rrWeight);
 
   if (isPeak) {
-    return base + 0.2 + cleanSignal * 0.05 * (1 - qualityWeight);
+    return base + cleanSignal * 0.05 * (1 - qualityWeight);
   }
 
   return base;

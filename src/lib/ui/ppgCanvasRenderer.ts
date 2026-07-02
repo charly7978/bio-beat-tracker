@@ -227,7 +227,7 @@ export const CARDIAC_WAVE_CONFIG = {
    * - Si se baja (ej. 1.0): La onda se grafica de forma 100% lineal y fiel a la fisiología pura sin distorsión.
    * - ¡ATENCIÓN!: Esta constante es 100% visual y estética. No afecta la lógica interna de captación de latidos ni las matemáticas médicas del procesador, por lo que es totalmente seguro calibrarla sin alterar la detección de pulso.
    */
-  WAVE_SHARPNESS_EXPONENT: 1.75,
+   WAVE_SHARPNESS_EXPONENT: 2.5,
 };
 
 // Exportaciones individuales para mantener compatibilidad total con componentes importadores externos (como PPGSignalMeter.tsx)
