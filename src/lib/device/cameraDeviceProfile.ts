@@ -86,6 +86,7 @@ export function primeNativeCameraRuntimeProfile(): void {
   import('@/lib/native/NativePpgCapture')
     .then(({ safeNativePpgCapabilities }) => safeNativePpgCapabilities())
     .then((report) => {
+      if (!isUsableNativeReport(report)) return;
       nativeCapabilityCache = report;
       try {
         window.localStorage.setItem(NATIVE_PROFILE_STORAGE_KEY, JSON.stringify({
@@ -107,13 +108,14 @@ export function inferCameraRuntimeHints(
   cameraDiag?: Record<string, unknown> | null,
 ): CameraRuntimeHints {
   primeNativeCameraRuntimeProfile();
-  const nativeFallback = nativeCapabilityCache ? inferNativeCameraRuntimeHints(nativeCapabilityCache, false) : null;
+  const usableNative = isUsableNativeReport(nativeCapabilityCache) ? nativeCapabilityCache : null;
+  const nativeFallback = usableNative ? inferNativeCameraRuntimeHints(usableNative, false) : null;
   const ua =
     (typeof cameraDiag?.userAgent === 'string' && cameraDiag.userAgent) ||
     (typeof navigator !== 'undefined' ? navigator.userAgent : '');
   const tclLike = isTclLikeUserAgent(ua);
   const motorolaLike = isMotorolaLikeUserAgent(ua);
-  const nativeSelected = selectNativePpgCamera(nativeCapabilityCache);
+  const nativeSelected = selectNativePpgCamera(usableNative);
   const nativeFps = maxNativeFps(nativeSelected);
   const fps = typeof cameraDiag?.fpsEffective === 'number'
     ? cameraDiag.fpsEffective
@@ -245,10 +247,14 @@ function readNativeCapabilityCache(): NativeCameraCapabilityReportLike | null {
     const raw = window.localStorage.getItem(NATIVE_PROFILE_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { report?: NativeCameraCapabilityReportLike };
-    return parsed.report ?? null;
+    return isUsableNativeReport(parsed.report) ? parsed.report : null;
   } catch {
     return null;
   }
+}
+
+function isUsableNativeReport(report?: NativeCameraCapabilityReportLike | null): report is NativeCameraCapabilityReportLike {
+  return !!report?.available && Array.isArray(report.cameras) && report.cameras.length > 0;
 }
 
 function clampValue(v: number, lo: number, hi: number): number {
