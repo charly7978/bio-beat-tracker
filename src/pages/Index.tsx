@@ -1024,7 +1024,7 @@ const Index = () => {
                           sqd += d * d;
                           if (d > 50) nn50++;
                         }
-                        return { meanRR: m, sdnn: Math.sqrt(sq / n), rmssd: Math.sqrt(sqd / (n - 1)), pnn50: nn50 / (n - 1), cv: m ? (Math.sqrt(sq / n) / m) : 0 };
+                        return { sdnn: Math.sqrt(sq / n), rmssd: Math.sqrt(sqd / (n - 1)), pnn50: nn50 / (n - 1) };
                       })();
                       const sd1 = rmssd / Math.SQRT2;
                       const sd2 = Math.sqrt(2 * sdnn * sdnn - sd1 * sd1);
