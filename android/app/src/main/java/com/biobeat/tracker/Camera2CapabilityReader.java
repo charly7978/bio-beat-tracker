@@ -23,11 +23,13 @@ public final class Camera2CapabilityReader {
                 Integer facing = cc.get(CameraCharacteristics.LENS_FACING);
                 Boolean flash = cc.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
                 Integer orientation = cc.get(CameraCharacteristics.SENSOR_ORIENTATION);
+                Integer level = cc.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
                 JSObject cam = new JSObject();
                 cam.put("cameraId", id);
                 cam.put("lensFacing", facingToString(facing));
                 cam.put("flashAvailable", Boolean.TRUE.equals(flash));
                 cam.put("sensorOrientation", orientation != null ? orientation : 0);
+                cam.put("hardwareLevel", hardwareLevel(level));
                 cam.put("fpsRanges", fpsRanges(cc));
                 putRange(cam, "isoRange", cc.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE));
                 putLongRange(cam, "exposureTimeRangeNs", cc.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE));
@@ -81,6 +83,15 @@ public final class Camera2CapabilityReader {
         if (facing == CameraCharacteristics.LENS_FACING_BACK) return "back";
         if (facing == CameraCharacteristics.LENS_FACING_FRONT) return "front";
         if (facing == CameraCharacteristics.LENS_FACING_EXTERNAL) return "external";
+        return "unknown";
+    }
+
+    private static String hardwareLevel(Integer level) {
+        if (level == null) return "unknown";
+        if (level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY) return "legacy";
+        if (level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED) return "limited";
+        if (level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL) return "full";
+        if (level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3) return "level_3";
         return "unknown";
     }
 }
