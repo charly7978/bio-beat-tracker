@@ -374,8 +374,8 @@ export function drawWaveRibbon3D(
   // 2) Trazo único de la cresta frontal (onda limpia, sin rellenos ni brillos)
   const drawCrest = (s0: number, e0: number) => {
     ctx.beginPath();
-    ctx.moveTo(Pf[s0].x, Pf[s0].y);
-    for (let k = s0 + 1; k < e0; k++) ctx.lineTo(Pf[k].x, Pf[k].y);
+    ctx.moveTo(PfX[s0], PfY[s0]);
+    for (let k = s0 + 1; k < e0; k++) ctx.lineTo(PfX[k], PfY[k]);
   };
 
   let seg = 0;
