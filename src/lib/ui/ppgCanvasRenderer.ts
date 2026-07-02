@@ -766,12 +766,12 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
       if (v < mn) mn = v;
       if (v > mx) mx = v;
     }
-    const range = Math.max(24, mx - mn);
+    const dynamicRange = Math.max(2.8, mx - mn);
     const stats = state.amplitudeStats;
-    const targetMin = mn - range * 0.1;
-    const targetMax = mx + range * 0.1;
+    const targetMin = mn - dynamicRange * 0.06;
+    const targetMax = mx + dynamicRange * 0.06;
     const expanding = targetMax - targetMin > stats.range;
-    const blend = expanding ? AMP_ATTACK : AMP_RELEASE;
+    const blend = expanding ? AMP_ATTACK * 0.35 : AMP_RELEASE * 0.35;
     stats.min = stats.min * (1 - blend) + targetMin * blend;
     stats.max = stats.max * (1 - blend) + targetMax * blend;
     stats.range = stats.max - stats.min;
@@ -779,7 +779,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
   const stats = state.amplitudeStats;
   if (points.length < 2) return;
-  const safeRange = stats.range > 1 ? stats.range : 1;
+  const safeRange = Math.max(2.2, stats.range > 1 ? stats.range : 1);
   const wavePadTop = CARDIAC_WAVE_CONFIG.WAVE_PAD_TOP;
   const wavePadBot = CARDIAC_WAVE_CONFIG.WAVE_PAD_BOTTOM;
   const waveH = Math.max(40, plot.h - wavePadTop - wavePadBot);
@@ -787,7 +787,8 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
   const strength = state.traceRevealed
     ? (state.signalStrength < 0 ? 0 : state.signalStrength > 1 ? 1 : state.signalStrength)
-    : 0.5; // Default amplitude during warmup so we can see finger contact immediately
+    : 0.3;
+  const scaledStrength = Math.min(0.16, strength * 0.2);
   const midValue = (stats.max + stats.min) / 2;
   const coords: { x: number; y: number; isArr: boolean; val: number }[] = [];
   for (let i = 0; i < points.length; i++) {
@@ -796,7 +797,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     if (age > WINDOW_MS) continue;
     const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
     if (x < plot.x || x > plot.x + plot.w) continue;
-    const honestValue = midValue + (pt.value - midValue) * strength;
+    const honestValue = midValue + (pt.value - midValue) * scaledStrength;
     
     // Mapeo normalizado [0..1] para aplicar la transformación de subida/bajada no lineal
     const pct = Math.max(0, Math.min(1, (honestValue - stats.min) / safeRange));

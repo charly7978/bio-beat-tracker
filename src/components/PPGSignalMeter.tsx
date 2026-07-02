@@ -150,12 +150,13 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const displaySpo2Ref = useRef(0);
   const displaySysRef = useRef(0);
   const displayDiaRef = useRef(0);
-  const waveGainRef = useRef(4.5);
+  const waveGainRef = useRef(1.0);
 
   useImperativeHandle(ref, () => ({
     pushSignal: (val: number, _ts: number) => {
       if (!dataBufferRef.current) return;
-      const scaledValue = val * waveGainRef.current;
+      const boundedValue = Math.max(-1.2, Math.min(1.2, val));
+      const scaledValue = Math.max(-1.2, Math.min(1.2, boundedValue * waveGainRef.current));
       const now = Date.now();
       const isArrhythmia = now < arrActiveUntilRef.current;
       dataBufferRef.current.push({
@@ -210,10 +211,11 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const pi = perfusionIndex ?? 0;
     const q = quality ?? 0;
     const weakTarget =
-      4.2 *
-      (pi < 0.0025 ? 2.1 : pi < 0.005 ? 1.65 : pi < 0.01 ? 1.35 : 1.08) *
-      (q < 20 ? 1.4 : q < 40 ? 1.2 : 1);
-    waveGainRef.current = waveGainRef.current * 0.40 + weakTarget * 0.60;
+      0.75 +
+      (pi > 0.005 ? 0.15 : pi > 0.0025 ? 0.08 : 0) +
+      (q > 60 ? 0.08 : q > 35 ? 0.04 : 0);
+    waveGainRef.current = waveGainRef.current * 0.55 + weakTarget * 0.45;
+    waveGainRef.current = Math.max(0.55, Math.min(1.1, waveGainRef.current));
 
     if (bpm != null && bpm > 30 && bpm < 220 && nowMs - lastBpmSampleRef.current > 500) {
       lastBpmSampleRef.current = nowMs;
