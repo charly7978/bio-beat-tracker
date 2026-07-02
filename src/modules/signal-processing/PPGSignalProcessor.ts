@@ -16,7 +16,7 @@ import {
   type DiagnosticStatusState,
 } from '../signal-quality/SignalQualityIndex';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
-import { DSP_CONSTANTS } from '../../config/signalProcessing';
+import { DSP_CONSTANTS, ENVELOPE_EQ } from '../../config/signalProcessing';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 import {
   hasFingerHemoglobinSignature,
@@ -49,6 +49,7 @@ import {
   DEFAULT_PULSE_AGC,
   resetPulseAgc,
 } from './shared/pulseAgc';
+import { EnvelopeEqualizer } from '../../lib/signal/envelopeEqualizer';
 import {
   createAcquisitionState,
   updateAcquisition,
@@ -100,6 +101,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private placementMode: FingerPlacementMode = 'hybrid';
   private placementStreak = { mode: 'hybrid' as FingerPlacementMode, count: 0 };
   private readonly pulseAgcState = createPulseAgcState();
+  /** Ecualización de envolvente del canal HR (A/B, flag ENVELOPE_EQ.ENABLED). */
+  private readonly envelopeEq = new EnvelopeEqualizer({
+    attack: ENVELOPE_EQ.ATTACK,
+    release: ENVELOPE_EQ.RELEASE,
+    slowAlpha: ENVELOPE_EQ.SLOW_ALPHA,
+    floorFrac: ENVELOPE_EQ.FLOOR_FRAC,
+    maxGain: ENVELOPE_EQ.MAX_GAIN,
+    mix: ENVELOPE_EQ.MIX,
+  });
 
   private readonly ACDC_WINDOW = 120;
   private readonly TILE_COLUMNS = 5;
@@ -538,7 +548,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.contactState === 'STABLE_CONTACT',
     );
     endFilt();
-    this.filteredBuffer.push(enhanced);
+    // Ecualización de envolvente (A/B, flag OFF por defecto): comprime el rango
+    // dinámico del canal HR para rescatar latidos débiles sin bajar el umbral de
+    // ruido. Con ENABLED=false, detInput === enhanced (idéntico, sin costo).
+    const detInput = ENVELOPE_EQ.ENABLED ? this.envelopeEq.process(enhanced) : enhanced;
+    this.filteredBuffer.push(detInput);
 
     // === BANCO DE FILTROS POR CANAL VITAL (PPGSignalSplitter) ===
     // Cada signo vital recibe la señal pre-procesada con los requisitos DSP de su canal.
@@ -687,7 +701,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.onSignalReady({
       timestamp,
       rawValue: signalPathActive ? pulseSource.value : 0,
-      filteredValue: signalPathActive ? enhanced : 0,
+      filteredValue: signalPathActive ? detInput : 0,
       morphologyValue: signalPathActive ? morphFiltered : 0,
       // Canales del banco de filtros especializado por signo vital
       morphologyFiltered: signalPathActive ? splitOut.morphology : 0,
@@ -1695,6 +1709,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.signalSplitter.reset();
     this.lastKnownBpm = 0;
     resetPulseAgc(this.pulseAgcState);
+    this.envelopeEq.reset();
     this.roiRedPulseRing.reset();
     this.lastRoiRedCv = 0;
     this.signalMotionScore = 0;

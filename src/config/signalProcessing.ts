@@ -124,6 +124,40 @@ export const DSP_CONSTANTS = {
   SOURCE_BUFFER_SIZE: 120,
 } as const;
 
+/**
+ * ECUALIZACIÓN DE ENVOLVENTE (fase 2 — detección de latidos débiles/lentos).
+ *
+ * Comprime el RANGO DINÁMICO del canal HR: normaliza la amplitud entre latidos
+ * dividiendo por una envolvente lenta (~1–2 s) que representa la amplitud local
+ * del pulso. Aplana la modulación respiratoria de amplitud —causa dominante de
+ * que los latidos débiles caigan bajo el rechazo de amplitud relativa de Elgendi
+ * y se pierdan— PRESERVANDO la morfología dentro de cada latido (la envolvente
+ * es ~constante en la escala de un latido). NO baja el umbral de ruido.
+ *
+ * A/B seguro: ENABLED=false ⇒ la señal pasa idéntica (bit-a-bit). Es zona
+ * sensible (detección Elgendi validada); VERIFICAR EN MÓVIL antes de activar.
+ * Solo afecta el canal HR (filteredValue/filteredBuffer); NO toca morfología/PA.
+ */
+export const ENVELOPE_EQ = {
+  /** A/B: apagado por defecto. true = ecualiza el canal de detección. */
+  ENABLED: false,
+  /** Envolvente rápida SIMÉTRICA y lenta (attack≈release): casi plana dentro del
+   * latido (no corre la ubicación del pico → timing RR intacto) pero varía en la
+   * escala respiratoria. Un attack alto corre el pico y distorsiona el RR; por
+   * eso se prioriza timing sobre compresión máxima. Se afina en el móvil. */
+  ATTACK: 0.025,
+  /** EMA de bajada = subida (simétrica) para no introducir lag asimétrico. */
+  RELEASE: 0.025,
+  /** EMA de la envolvente lenta (amplitud típica de largo plazo). << resp. */
+  SLOW_ALPHA: 0.005,
+  /** Piso de la envolvente rápida como fracción de la lenta (anti-ruido). */
+  FLOOR_FRAC: 0.35,
+  /** Ganancia máxima: acota el refuerzo de latidos débiles / ruido. */
+  MAX_GAIN: 4,
+  /** Mezcla 0..1: 0 = señal cruda, 1 = totalmente ecualizada. */
+  MIX: 1.0,
+} as const;
+
 export const RESPIRATION_DEFAULTS = {
   /** Banda respiratoria típica 8–30 rpm → 0.13–0.5 Hz */
   minRpm: 6,
