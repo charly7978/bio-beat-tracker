@@ -22,10 +22,12 @@ public final class Camera2CapabilityReader {
                 CameraCharacteristics cc = manager.getCameraCharacteristics(id);
                 Integer facing = cc.get(CameraCharacteristics.LENS_FACING);
                 Boolean flash = cc.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
+                Integer orientation = cc.get(CameraCharacteristics.SENSOR_ORIENTATION);
                 JSObject cam = new JSObject();
                 cam.put("cameraId", id);
                 cam.put("lensFacing", facingToString(facing));
                 cam.put("flashAvailable", Boolean.TRUE.equals(flash));
+                cam.put("sensorOrientation", orientation != null ? orientation : 0);
                 cam.put("fpsRanges", fpsRanges(cc));
                 cameras.put(cam);
                 if (preferred == null && facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) preferred = id;
