@@ -43,7 +43,7 @@ describe('buildHybridPulseSample', () => {
       quality: 90,
       isPeak: false,
       rrMs: 800,
-      elapsedSinceLastPeakMs: 250,
+      elapsedSinceLastPeakMs: 450,
       hasUsableContact: true,
     });
 
