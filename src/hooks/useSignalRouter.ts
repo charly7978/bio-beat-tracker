@@ -384,7 +384,14 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       {
         sqi: rawSqi,
         perfusionIndex: lastSignal.perfusionIndex ?? 0,
-        motionScore: typeof sqm.motionScore === 'number' ? sqm.motionScore : 0,
+        // Supresión de latidos: SOLO movimiento del IMU. El score óptico combinado
+        // (sqm.motionScore) reacciona al propio pulso y borraría latidos reales.
+        motionScore:
+          typeof sqm.motionScoreImu === 'number'
+            ? sqm.motionScoreImu
+            : typeof sqm.motionScore === 'number'
+              ? sqm.motionScore
+              : 0,
       },
     );
 

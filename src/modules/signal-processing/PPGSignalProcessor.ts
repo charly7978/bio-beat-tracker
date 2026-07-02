@@ -728,7 +728,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           snr: pulseSource.strength,
           periodicity: this.cachedPeriodicity,
           // Movimiento efectivo = max(IMU, micro-movimiento del dedo desde la señal).
+          // Se usa para estabilización/diagnóstico, NO para suprimir emisión de latidos.
           motionScore: Math.max(this.motionScore, this.signalMotionScore),
+          // Movimiento SOLO IMU: alimenta la supresión de latidos. El componente óptico
+          // (signalMotionScore) reacciona al pulso y provocaría silencios si suprimiera.
+          motionScoreImu: this.motionScore,
           saturationRatio: (roi.rawRed > 250 ? 1 : 0),
           underexposureRatio: this.underexposureEma,
           fpsEffective: this.estimatedSampleRate,

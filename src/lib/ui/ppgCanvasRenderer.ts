@@ -377,18 +377,40 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.stroke();
 
   const pulse = (Math.sin(state.now / 400) + 1) / 2;
-  const statusColor = state.props.isMonitoring ? COLORS.SIGNAL : (state.props.preserveResults ? COLORS.TEXT_INFO : COLORS.TEXT_DIM);
+  // HONESTIDAD DEL INDICADOR DE ESTADO: el punto no debe ponerse verde por el mero
+  // hecho de estar midiendo (isMonitoring). Verde = la señal REALMENTE se estabilizó
+  // (acquisitionStage READY, con dedo y sin bloqueadores duros). Mientras busca o
+  // estabiliza → ÁMBAR. Así no se comunica "todo bien" cuando la señal aún no lo está.
+  const hdrDiag = diagnostics as { acquisitionStage?: string; status?: string } | undefined;
+  const hdrHardBlock =
+    hdrDiag?.status === 'MOTION_ARTIFACT' ||
+    hdrDiag?.status === 'SATURATED' ||
+    hdrDiag?.status === 'UNDEREXPOSED' ||
+    hdrDiag?.status === 'LOW_FPS' ||
+    hdrDiag?.status === 'TORCH_UNAVAILABLE';
+  const signalReady =
+    state.props.isMonitoring && detected && hdrDiag?.acquisitionStage === 'READY' && !hdrHardBlock;
   ctx.beginPath();
   ctx.arc(16, header.y + 18, 5, 0, Math.PI * 2);
-  ctx.fillStyle = state.props.isMonitoring
-    ? `rgba(34, 197, 94, ${0.55 + pulse * 0.45})`
-    : statusColor;
+  if (state.props.isMonitoring) {
+    ctx.fillStyle = signalReady
+      ? `rgba(34, 197, 94, ${0.55 + pulse * 0.45})` // verde: señal estabilizada real
+      : `rgba(245, 158, 11, ${0.45 + pulse * 0.35})`; // ámbar: buscando/estabilizando
+  } else {
+    ctx.fillStyle = state.props.preserveResults ? COLORS.TEXT_INFO : COLORS.TEXT_DIM;
+  }
   ctx.fill();
 
   ctx.font = `bold 11px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_PRIMARY;
   ctx.textAlign = 'left';
-  ctx.fillText(state.props.isMonitoring ? 'MONITOREANDO' : (state.props.preserveResults ? 'RESULTADOS' : 'EN ESPERA'), 28, header.y + 22);
+  ctx.fillText(
+    state.props.isMonitoring
+      ? (signalReady ? 'MONITOREANDO' : 'ESTABILIZANDO…')
+      : (state.props.preserveResults ? 'RESULTADOS' : 'EN ESPERA'),
+    28,
+    header.y + 22,
+  );
 
   const d = new Date(state.now);
   const hh = String(d.getHours()).padStart(2, '0');

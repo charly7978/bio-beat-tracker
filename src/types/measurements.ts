@@ -27,6 +27,13 @@ export interface SignalQualityMetrics {
   snr: number | null;
   periodicity: number | null;
   motionScore: number | null;
+  /**
+   * Movimiento SOLO del IMU (acelerómetro/giroscopio), sin el componente óptico.
+   * La supresión de EMISIÓN de latidos usa ESTE, no el `motionScore` combinado: el
+   * score óptico (|ΔDC rojo|) reacciona al propio pulso y borraría latidos reales
+   * (silencios). El óptico queda en `motionScore` para estabilización/diagnóstico.
+   */
+  motionScoreImu?: number;
   saturationRatio: number;
   /** Fracción de frames con canal muy oscuro (subexposición) */
   underexposureRatio?: number;
