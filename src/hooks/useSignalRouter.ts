@@ -357,11 +357,9 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     let hbInput = 0;
     if (fingerConfirmed) {
+      hbInput = signalValue;
       if (Math.abs(signalValue) > 1e-7) {
         lastHbInputRef.current = signalValue;
-        hbInput = signalValue;
-      } else if (Math.abs(lastHbInputRef.current) > 1e-7) {
-        hbInput = lastHbInputRef.current;
       }
     } else {
       lastHbInputRef.current = 0;

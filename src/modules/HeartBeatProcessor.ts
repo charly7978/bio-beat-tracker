@@ -202,22 +202,12 @@ export class HeartBeatProcessor {
   } {
     const now = timestamp ?? (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
-    if (Math.abs(filteredValue) > 1e-6) {
-      this.signalBuffer.push(filteredValue);
-      this.timestampBuffer.push(now);
-      if (this.signalBuffer.length > DSP_CONSTANTS.BUFFER_SIZE) {
-        this.signalBuffer.shift();
-        this.timestampBuffer.shift();
-      }
-    } else if (
-      this.fingerContactConfirmed &&
-      this.signalBuffer.length > 0 &&
-      this.signalBuffer.length < DSP_CONSTANTS.BUFFER_SIZE
-    ) {
-      const hold = this.signalBuffer[this.signalBuffer.length - 1]! * 0.999;
-      this.signalBuffer.push(hold);
-      this.timestampBuffer.push(now);
+    if (this.signalBuffer.length >= DSP_CONSTANTS.BUFFER_SIZE) {
+      this.signalBuffer.shift();
+      this.timestampBuffer.shift();
     }
+    this.signalBuffer.push(filteredValue);
+    this.timestampBuffer.push(now);
 
     if (this.signalBuffer.length < 20) {
       return { bpm: 0, confidence: 0, isPeak: false, filteredValue: 0, sqi: 0, internalSqi: 0, externalSqi: 0, ensembleDiagnostics: {} };

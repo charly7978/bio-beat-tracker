@@ -101,7 +101,7 @@ export class ElgendiPeakDetector {
 
     const hampelWin = Math.max(5, Math.round(fs * 0.25) | 1);
     const cleaned = hampel1D(sig, hampelWin, 3);
-    let x = bandpassOffline(detrendLinear(cleaned), fs);
+    let x = detrendLinear(cleaned);
     x = robustNormalizeZeroCenter(x);
 
     // SQI por skewness (Elgendi 2016) sobre la señal filtrada — PPG limpio tiene
