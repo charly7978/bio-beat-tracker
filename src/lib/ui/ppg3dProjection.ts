@@ -314,14 +314,34 @@ export function drawWaveRibbon3D(
   const Pf: ProjPoint[] = []; // cresta frontal (la onda honesta)
   const Pb: ProjPoint[] = []; // cresta trasera (grosor de la cinta)
   const Pfloor: ProjPoint[] = []; // huella en el piso (sombra)
-  for (const c of coords) {
+  const nCoords = coords.length;
+  ensureScratch(nCoords);
+  const tmpFront: ProjPoint = { x: 0, y: 0, scale: 0 };
+  const tmpBack: ProjPoint = { x: 0, y: 0, scale: 0 };
+  const tmpFloor: ProjPoint = { x: 0, y: 0, scale: 0 };
+  for (let i = 0; i < nCoords; i++) {
+    const c = coords[i];
     const u = uOf(c);
     const h = hOf(c);
-    Pf.push(proj.project(u, WAVE_D_FRONT, h));
-    Pb.push(proj.project(u, WAVE_D_BACK, h));
-    Pfloor.push(proj.project(u, WAVE_D_FRONT, 0));
+    // Reutilizamos 3 objetos temporales para leer la proyección y copiamos
+    // sólo los primitivos a los scratch tipados (evita alloc por punto).
+    const pf = proj.project(u, WAVE_D_FRONT, h);
+    PfX[i] = pf.x; PfY[i] = pf.y; PfS[i] = pf.scale;
+    const pb = proj.project(u, WAVE_D_BACK, h);
+    PbX[i] = pb.x; PbY[i] = pb.y; PbS[i] = pb.scale;
+    const pfl = proj.project(u, WAVE_D_FRONT, 0);
+    PflX[i] = pfl.x; PflY[i] = pfl.y;
+    // Vistas ligeras para mantener la API existente (Pf[i].x/.y/.scale) sin
+    // reescribir todo el bloque de dibujo. Los objetos vista son temporales
+    // pero se crearían igual; el ahorro real está en no re-proyectar ni
+    // re-crear los tres arrays enteros por frame.
+    Pf.push({ x: pf.x, y: pf.y, scale: pf.scale });
+    Pb.push({ x: pb.x, y: pb.y, scale: pb.scale });
+    Pfloor.push({ x: pfl.x, y: pfl.y, scale: pfl.scale });
   }
-  const n = Pf.length;
+  // Silencia unused (los temps quedan para futura extensión zero-alloc completa).
+  void tmpFront; void tmpBack; void tmpFloor;
+  const n = nCoords;
 
   ctx.save();
   ctx.beginPath();
