@@ -4,6 +4,7 @@ import android.content.Context;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
+import android.util.Range;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -25,6 +26,7 @@ public final class Camera2CapabilityReader {
                 cam.put("cameraId", id);
                 cam.put("lensFacing", facingToString(facing));
                 cam.put("flashAvailable", Boolean.TRUE.equals(flash));
+                cam.put("fpsRanges", fpsRanges(cc));
                 cameras.put(cam);
                 if (preferred == null && facing != null && facing == CameraCharacteristics.LENS_FACING_BACK) preferred = id;
             }
@@ -39,6 +41,19 @@ public final class Camera2CapabilityReader {
             ret.put("reason", e.getMessage());
         }
         return ret;
+    }
+
+    private static JSArray fpsRanges(CameraCharacteristics cc) {
+        JSArray arr = new JSArray();
+        Range<Integer>[] ranges = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+        if (ranges == null) return arr;
+        for (Range<Integer> r : ranges) {
+            JSObject o = new JSObject();
+            o.put("min", r.getLower());
+            o.put("max", r.getUpper());
+            arr.put(o);
+        }
+        return arr;
     }
 
     private static String facingToString(Integer facing) {
