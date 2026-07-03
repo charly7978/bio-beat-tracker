@@ -232,6 +232,13 @@ export const VITAL_THRESHOLDS = {
     COVERAGE_TARGET: 0.15,
     /** Movimiento por encima del cual se penaliza la confianza (escala 0..1 del score). */
     MOTION_TOLERANCE: 0.6,
+    /**
+     * Piso de PERIODICIDAD REAL (autocorrelación 0..1) exigido para declarar READY.
+     * Requisito NECESARIO (gate), no un término ponderado más: sin pulso periódico
+     * genuino el semáforo NO se pone verde aunque haya buena cobertura, PI y SQI
+     * (evita el "verde falso" por un dedo que tapa sin pulso). Un latido real da
+     * autocorrelación muy por encima de este piso; ruido/DC no. */
+    PERIODICITY_READY_FLOOR: 0.3,
     /** Pesos de fusión (suman 1.0). */
     W_PI: 0.30,
     W_PERIODICITY: 0.28,

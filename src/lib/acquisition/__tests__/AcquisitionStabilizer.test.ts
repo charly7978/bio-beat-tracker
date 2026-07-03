@@ -121,6 +121,31 @@ describe('AcquisitionStabilizer', () => {
     expect(s.confidence).toBeLessThan(A.CONF_EXIT_READY);
   });
 
+  it('NO llega a READY sin pulso periódico real (anti "verde falso")', () => {
+    const s = createAcquisitionState();
+    // Dedo que tapa con buena cobertura/PI/SQI pero SIN pulso (periodicidad 0):
+    // p.ej. un objeto inerte o un dedo sin buen acoplamiento. No debe ponerse verde.
+    const noPulse = () => goodSample({ periodicity: 0 });
+    for (let i = 0; i < A.WARMUP_FRAMES + A.READY_DWELL_FRAMES + 20; i++) {
+      updateAcquisition(s, noPulse());
+    }
+    expect(s.stage).not.toBe('READY');
+    expect(isAcquisitionReady(s)).toBe(false);
+  });
+
+  it('pierde READY si el pulso periódico desaparece de forma sostenida', () => {
+    const s = createAcquisitionState();
+    for (let i = 0; i < A.WARMUP_FRAMES + A.READY_DWELL_FRAMES + 5; i++) {
+      updateAcquisition(s, goodSample());
+    }
+    expect(s.stage).toBe('READY');
+    // Métricas DC siguen buenas pero se pierde la periodicidad → debe abandonar READY.
+    for (let i = 0; i < A.EXIT_DWELL_FRAMES + 3; i++) {
+      updateAcquisition(s, goodSample({ periodicity: 0 }));
+    }
+    expect(s.stage).not.toBe('READY');
+  });
+
   it('el progreso es mayormente monótono mientras sube (sin saltos bruscos)', () => {
     const s = createAcquisitionState();
     let prev = s.progress;

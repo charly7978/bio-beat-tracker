@@ -104,13 +104,19 @@ export function updateAcquisition(state: AcquisitionState, sample: AcquisitionSa
   const alpha = instant >= state.confidence ? A.CONF_ATTACK : A.CONF_RELEASE;
   state.confidence = state.confidence + (instant - state.confidence) * alpha;
 
+  // GATE DE PULSO REAL: sólo se declara READY si hay periodicidad genuina (pulso
+  // periódico enganchado). Requisito NECESARIO además de la confianza — sin esto
+  // el semáforo se ponía verde por cobertura+PI+SQI sin latido real ("verde falso").
+  const hasRealPulse = sample.periodicity >= A.PERIODICITY_READY_FLOOR;
+
   // Conteo de dwell con histéresis para las transiciones de estado.
-  if (state.confidence >= A.CONF_ENTER_READY) {
+  if (state.confidence >= A.CONF_ENTER_READY && hasRealPulse) {
     state.aboveEnterFrames = Math.min(state.aboveEnterFrames + 1, A.READY_DWELL_FRAMES);
   } else {
     state.aboveEnterFrames = 0;
   }
-  if (state.confidence < A.CONF_EXIT_READY) {
+  // Se abandona READY tanto por confianza baja como por pérdida del pulso real.
+  if (state.confidence < A.CONF_EXIT_READY || !hasRealPulse) {
     state.belowExitFrames = Math.min(state.belowExitFrames + 1, A.EXIT_DWELL_FRAMES);
   } else {
     state.belowExitFrames = 0;
