@@ -33,6 +33,10 @@ export class HeartBeatProcessor {
   private lastPeakTime = 0;
   private rrIntervals: number[] = [];
   private smoothBPM = 0;
+  /** HR de ritmo ESTABLECIDO — fusión de autocorrelación (robusta) + RR. */
+  private trackedBpm = 0;
+  private trackedBpmConf = 0;
+  private lastTrackUpdateMs = 0;
 
   private audioContext: AudioContext | null = null;
   private audioUnlocked = false;
@@ -315,12 +319,25 @@ export class HeartBeatProcessor {
     }
 
     const rrBpm = bpmFromEmittedRr(this.rrIntervals);
+
+    // Tracker de ritmo: fusiona autocorrelación + RR → HR estable ESTABLECIDO.
+    this.updateTrackedBpm(now, rrBpm);
+    // Ancla el refractario del detector al ritmo estable (más robusto que la
+    // mediana RR local, que el ruido corrompe).
+    this.beatDetector.setExpectedRrMs(this.trackedBpm > 0 ? 60000 / this.trackedBpm : 0);
+    // Si el ritmo se pierde de forma sostenida, olvidar el track.
+    if (peakAgeMs > this.BPM_PUBLISH_HOLD_MS * 2) {
+      this.trackedBpm = 0;
+      this.trackedBpmConf = 0;
+    }
+
     let publishBpm = 0;
-    if (
-      this.fingerContactConfirmed &&
-      peakAgeMs < this.BPM_PUBLISH_HOLD_MS
-    ) {
-      if (this.smoothBPM > 0 && rrBpm > 0) {
+    if (this.fingerContactConfirmed && peakAgeMs < this.BPM_PUBLISH_HOLD_MS) {
+      // El HR publicado sale del tracker (estable). Sólo si aún no hay track se
+      // recurre al RR/smoothBPM crudo como arranque.
+      if (this.trackedBpm > 0) {
+        publishBpm = Math.round(this.trackedBpm);
+      } else if (this.smoothBPM > 0 && rrBpm > 0) {
         const agree = Math.abs(this.smoothBPM - rrBpm) / Math.max(1, rrBpm) < 0.08;
         publishBpm = Math.round(agree ? this.smoothBPM : rrBpm);
       } else if (this.smoothBPM > 0) {
@@ -451,6 +468,68 @@ export class HeartBeatProcessor {
     return sqi;
   }
 
+  /**
+   * TRACKER DE RITMO — establece un HR estable fusionando la estimación por
+   * AUTOCORRELACIÓN (robusta, ventana temporal → no salta por un latido perdido o
+   * doble) con el RR latido-a-latido (preciso pero frágil). El HR publicado sale
+   * de aquí, no del RR crudo: por eso el ritmo "se asienta" en vez de bailar.
+   *
+   *   - Concuerdan (autocorr ≈ RR): lock fuerte, se prioriza el RR para precisión.
+   *   - Discrepan: se confía en la fuente más fiable (autocorr si su score es alto).
+   *   - Cambios acotados por una tasa máxima (bpm/s) → no da saltos no fisiológicos.
+   */
+  private updateTrackedBpm(now: number, rrBpm: number): void {
+    const HRmin = VITAL_THRESHOLDS.HR.MIN;
+    const HRmax = VITAL_THRESHOLDS.HR.MAX;
+    const spec = this.cachedPeriodicity;
+    const specOk = spec.bpm >= HRmin && spec.bpm <= HRmax && spec.score >= 0.35;
+    const rrOk = rrBpm >= HRmin && rrBpm <= HRmax && this.rrIntervals.length >= 2;
+
+    let target = 0;
+    let conf = 0;
+    if (specOk && rrOk) {
+      const agree = Math.abs(spec.bpm - rrBpm) / Math.max(1, rrBpm) < 0.12;
+      if (agree) {
+        target = rrBpm * 0.6 + spec.bpm * 0.4;
+        conf = clamp(0.65 + spec.score * 0.35, 0, 1);
+      } else if (spec.score >= 0.55) {
+        target = spec.bpm;
+        conf = spec.score;
+      } else {
+        target = rrBpm;
+        conf = 0.5;
+      }
+    } else if (rrOk) {
+      target = rrBpm;
+      conf = 0.45;
+    } else if (specOk) {
+      target = spec.bpm;
+      conf = spec.score * 0.7;
+    } else {
+      this.trackedBpmConf *= 0.99;
+      return;
+    }
+
+    if (this.trackedBpm <= 0) {
+      if (conf >= 0.4) {
+        this.trackedBpm = target;
+        this.trackedBpmConf = conf;
+      }
+      this.lastTrackUpdateMs = now;
+      return;
+    }
+
+    const dtS =
+      this.lastTrackUpdateMs > 0 ? clamp((now - this.lastTrackUpdateMs) / 1000, 0.01, 1) : 0.033;
+    this.lastTrackUpdateMs = now;
+    const maxStep = 18 * dtS; // tasa máxima de cambio del ritmo (bpm/s)
+    const alpha = clamp(0.15 + conf * 0.3, 0.1, 0.5);
+    const raw = this.trackedBpm + (target - this.trackedBpm) * alpha;
+    const change = clamp(raw - this.trackedBpm, -maxStep, maxStep);
+    this.trackedBpm += change;
+    this.trackedBpmConf = this.trackedBpmConf * 0.7 + conf * 0.3;
+  }
+
   private calculateConfidence(ensembleConf: number, isPeak: boolean): number {
     const effectiveSqi = this.signalQualityIndex;
     const sqiFactor = effectiveSqi / 100;
@@ -521,6 +600,9 @@ export class HeartBeatProcessor {
     this.timestampBuffer = [];
     this.rrIntervals = [];
     this.smoothBPM = 0;
+    this.trackedBpm = 0;
+    this.trackedBpmConf = 0;
+    this.lastTrackUpdateMs = 0;
     this.lastPeakTime = 0;
     this.lastEmittedPeakTime = 0;
     this.consecutivePeaks = 0;

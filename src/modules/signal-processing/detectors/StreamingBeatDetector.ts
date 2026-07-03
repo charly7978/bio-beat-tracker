@@ -67,6 +67,12 @@ export interface StreamingBeatDetectorConfig {
   refractoryRrFrac: number;
   /** Rechazo de dícrota/ruido: el pico debe superar esta fracción de ampEnv. */
   amplitudeRejectFrac: number;
+  /**
+   * Duración mínima (ms) de la excursión sobre el umbral. El upstroke sistólico
+   * real dura ≳80–120 ms; un pico de ruido es 1 muestra (~33 ms a 30fps). Exigir
+   * un mínimo rechaza spikes de ruido sin bloquear latidos reales.
+   */
+  minExcursionMs: number;
 }
 
 export const STREAMING_BEAT_DEFAULTS: StreamingBeatDetectorConfig = {
@@ -78,6 +84,7 @@ export const STREAMING_BEAT_DEFAULTS: StreamingBeatDetectorConfig = {
   refractoryMinMs: PEAK_DETECTION_DEFAULTS.peakEmitRefractoryMinMs,
   refractoryRrFrac: 0.5,
   amplitudeRejectFrac: 0.3,
+  minExcursionMs: 55,
 };
 
 export class StreamingBeatDetector {
@@ -92,12 +99,15 @@ export class StreamingBeatDetector {
   private aboveThr = false;
   private excMaxVal = -Infinity;
   private excMaxTime = 0;
+  private excStartTime = 0;
 
   // Historial para refractario adaptativo y score.
   private lastEmitTime = 0;
   private recentRr: number[] = [];
   private recentAmp: number[] = [];
   private readonly MAX_HISTORY = 12;
+  /** RR esperado (ms) provisto por el tracker de ritmo — ancla estable del refractario. */
+  private expectedRrMs = 0;
 
   constructor(cfg: Partial<StreamingBeatDetectorConfig> = {}) {
     this.cfg = { ...STREAMING_BEAT_DEFAULTS, ...cfg };
@@ -108,6 +118,17 @@ export class StreamingBeatDetector {
     /* umbral adaptativo: sin ventanas fijas que recalibrar */
   }
 
+  /**
+   * Ancla el refractario adaptativo a un RR de ritmo ESTABLE (del tracker de HR,
+   * anclado en autocorrelación) en vez de la mediana RR local (que se corrompe con
+   * ruido). 0 = sin ancla (usa la mediana local). Arritmia-seguro: sólo fija el
+   * lado bajo del refractario, no bloquea latidos prematuros genuinos.
+   */
+  setExpectedRrMs(rrMs: number): void {
+    this.expectedRrMs =
+      Number.isFinite(rrMs) && rrMs >= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS ? rrMs : 0;
+  }
+
   private median(arr: number[]): number {
     if (arr.length === 0) return 0;
     const s = [...arr].sort((a, b) => a - b);
@@ -115,8 +136,9 @@ export class StreamingBeatDetector {
   }
 
   private adaptiveRefractoryMs(): number {
-    const medRr = this.median(this.recentRr);
-    const adaptive = medRr > 0 ? medRr * this.cfg.refractoryRrFrac : 0;
+    // Prioriza el RR de ritmo estable (tracker); si no hay, usa la mediana local.
+    const anchorRr = this.expectedRrMs > 0 ? this.expectedRrMs : this.median(this.recentRr);
+    const adaptive = anchorRr > 0 ? anchorRr * this.cfg.refractoryRrFrac : 0;
     return Math.max(this.cfg.refractoryMinMs, adaptive);
   }
 
@@ -165,6 +187,7 @@ export class StreamingBeatDetector {
       if (!this.aboveThr) {
         this.aboveThr = true;
         this.excMaxVal = -Infinity;
+        this.excStartTime = timeMs;
       }
       if (pos > this.excMaxVal) {
         this.excMaxVal = pos;
@@ -173,7 +196,8 @@ export class StreamingBeatDetector {
     } else if (this.aboveThr) {
       // Fin de la excursión → candidato = máximo rastreado (pico sistólico real).
       this.aboveThr = false;
-      const decision = this.evaluateCandidate(this.excMaxTime, this.excMaxVal);
+      const excDurationMs = timeMs - this.excStartTime;
+      const decision = this.evaluateCandidate(this.excMaxTime, this.excMaxVal, excDurationMs);
       reason = decision.reason;
       if (decision.emit) {
         isPeak = true;
@@ -196,8 +220,17 @@ export class StreamingBeatDetector {
     };
   }
 
-  private evaluateCandidate(time: number, val: number): { emit: boolean; score: number; reason: string } {
+  private evaluateCandidate(
+    time: number,
+    val: number,
+    excDurationMs: number,
+  ): { emit: boolean; score: number; reason: string } {
     if (val <= 0) return { emit: false, score: 0, reason: 'NON_POSITIVE_PEAK' };
+
+    // Ancho de excursión: rechaza spikes de ruido de 1 muestra (upstroke real ≳80ms).
+    if (excDurationMs < this.cfg.minExcursionMs) {
+      return { emit: false, score: 0, reason: 'EXCURSION_TOO_BRIEF' };
+    }
 
     // Refractario adaptativo (lado bajo del RR → tolera arritmias/pausas).
     if (this.lastEmitTime > 0) {
@@ -281,8 +314,10 @@ export class StreamingBeatDetector {
     this.aboveThr = false;
     this.excMaxVal = -Infinity;
     this.excMaxTime = 0;
+    this.excStartTime = 0;
     this.lastEmitTime = 0;
     this.recentRr = [];
     this.recentAmp = [];
+    this.expectedRrMs = 0;
   }
 }

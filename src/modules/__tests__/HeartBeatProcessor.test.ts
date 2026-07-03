@@ -80,6 +80,26 @@ describe('HeartBeatProcessor', () => {
     expect(final.bpm).toBeLessThan(90);
   });
 
+  it('establece un ritmo ESTABLE y publica un BPM que no baila', () => {
+    const { filtered, times } = makeSignal(72, 30, 8, 0, 600);
+    hbp.setFingerContactConfirmed(true);
+    hbp.setPpgQualityMetrics(70, 0.005, 0);
+    const publishedTail: number[] = [];
+    for (let i = 0; i < filtered.length; i++) {
+      const r = hbp.processSignal(filtered[i], times[i]);
+      // Recolecta el BPM publicado del último ~1.5 s (ritmo ya establecido).
+      if (i > filtered.length - 45 && r.bpm > 0) publishedTail.push(r.bpm);
+    }
+    expect(publishedTail.length).toBeGreaterThan(10);
+    const min = Math.min(...publishedTail);
+    const max = Math.max(...publishedTail);
+    // Ritmo establecido: el número no debe oscilar más de ±4 BPM.
+    expect(max - min).toBeLessThanOrEqual(4);
+    // Y debe ser el ritmo real (~72).
+    expect(min).toBeGreaterThan(62);
+    expect(max).toBeLessThan(84);
+  });
+
   it('computes internal SQI over time', () => {
     const { filtered, times } = makeSignal(72, 30, 8, 0, 300);
     hbp.setFingerContactConfirmed(true);
