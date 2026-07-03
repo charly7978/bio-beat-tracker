@@ -7,14 +7,14 @@ import { triggerHeartbeatHaptic } from '../utils/haptics';
 import { robustBounds } from '../utils/stats';
 import { PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS, adaptiveMotionLimit } from '../config/vitalThresholds';
-import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
+import { StreamingBeatDetector } from './signal-processing/detectors/StreamingBeatDetector';
 import { autocorrDominantLag } from './signal-processing/shared/dsp';
 import { computeRrHrv } from '../utils/physio';
 import {
   inferCameraRuntimeHints,
   type CameraRuntimeHints,
 } from '../lib/device/cameraDeviceProfile';
-import { bpmFromEmittedRr, decidePeakEmit } from '../lib/measurement/peakEmitPolicy';
+import { bpmFromEmittedRr } from '../lib/measurement/peakEmitPolicy';
 import type { FingerPlacementMode } from '../types/signal';
 
 export interface HeartBeatProcessDiagnostics {
@@ -52,6 +52,8 @@ export class HeartBeatProcessor {
 
   private lastDiagnostics: HeartBeatProcessDiagnostics = {};
   private lastEmittedPeakTime = 0;
+  /** Detector de latidos en streaming (emisión única, refractario adaptativo). */
+  private readonly beatDetector = new StreamingBeatDetector();
   /** Mantener BPM publicado entre latidos (~3 s a 45 BPM). */
   private readonly BPM_PUBLISH_HOLD_MS = 4200;
   private readonly GATE_RANGE_MIN = 0.022;
@@ -247,84 +249,47 @@ export class HeartBeatProcessor {
     const sampleRate = this.estimateSampleRate();
     let ensembleConf = 0;
 
-    const peakStallMs =
-      this.lastEmittedPeakTime > 0 ? now - this.lastEmittedPeakTime : 0;
-    const autoGateRelax =
-      this.fingerContactConfirmed && peakStallMs > 1600
-        ? clamp(1 - (peakStallMs - 1600) / 7000, 0.45, 1)
-        : 1;
-    const manualRelax = now < this.gateRelaxUntilMs ? 0.5 : 1;
-    const gateScale =
-      Math.min(autoGateRelax, manualRelax) *
-      (this.ppgPerfusionIndex > 0 && this.ppgPerfusionIndex < 0.004 ? 0.68 : 1);
-    const gateOk =
-      this.cachedGateRange >= this.gateRangeMin() * gateScale;
-    const runEnsemble =
-      this.signalBuffer.length >= PEAK_DETECTION_DEFAULTS.minSamplesEnsemble &&
-      (gateOk || this.fingerContactConfirmed);
+    // El SQI interno alimenta el score/confianza (no gatea la detección: el
+    // detector streaming es escala-invariante y no depende de un gate de rango).
+    this.ensembleInputSqi(this.signalQualityIndex);
 
-    if (runEnsemble) {
-      const win = Math.min(DSP_CONSTANTS.BUFFER_SIZE, this.signalBuffer.length);
-      const sigRaw = this.signalBuffer.slice(-win);
-      const ts = this.timestampBuffer.slice(-win);
-      const sig = this.normalizeWindow(sigRaw, Math.min(150, sigRaw.length));
-      const ensSqi = this.ensembleInputSqi(this.signalQualityIndex);
-      const ens = PeakDetectionEnsemble.analyze({
-        signal: sig,
-        timestampsMs: ts,
-        samplingRateHz: sampleRate,
-        sqi: ensSqi,
-        perfusionIndex: this.ppgPerfusionIndex,
-        beatWindowMs: this.adaptiveBeatWindowMs(),
-      });
-      ensembleConf = ens.confidence;
+    const gateOk = this.cachedGateRange >= this.gateRangeMin();
+    const runDetect =
+      this.signalBuffer.length >= 20 && (gateOk || this.fingerContactConfirmed);
 
-      const minPeakConf =
-        VITAL_THRESHOLDS.QUALITY.MIN_ENSEMBLE_CONF_FOR_PEAK *
-        (this.cameraHints.constrained ? 0.42 : 0.52);
+    if (runDetect) {
+      // Alinea la beat-window del detector con el ritmo detectado (baja HR → más ancha).
+      this.beatDetector.setBeatWindowMs(this.adaptiveBeatWindowMs());
+      // Muestra actual = último valor bufferizado (incluye el "hold" de contacto).
+      const sample = this.signalBuffer[this.signalBuffer.length - 1]!;
+      const sampleTs = this.timestampBuffer[this.timestampBuffer.length - 1]!;
+      const det = this.beatDetector.process(sample, sampleTs, sampleRate);
+      ensembleConf = clamp(det.score, 0, 1);
 
-      const decision = decidePeakEmit({
-        ens,
-        lastEmittedPeakMs: this.lastEmittedPeakTime,
-        minPeakConf,
-        sampleRateHz: sampleRate,
-        windowSamples: win,
-        fingerContactConfirmed: this.fingerContactConfirmed,
-        nowMs: now,
-        emittedPeakCount: this.emittedPeakCount,
-        peakStallMs,
-        reacquireMode: now < this.reacquireModeUntilMs || peakStallMs >= 1800,
-        recentRrMs: this.rrIntervals,
-        sqi: ensSqi,
-        perfusionIndex: this.ppgPerfusionIndex,
-        stableBpm: this.smoothBPM,
-      });
-
-      // Gate de movimiento: durante movimiento claro (IMU) la señal se puede corromper.
-      // Sin embargo, si la calidad de la señal óptica (SQI) es buena, toleramos mayor
-      // aceleración física (hasta 1.8) ya que el acoplamiento dedo-lente sigue siendo estable.
+      // Gate de movimiento (legítimo): durante movimiento IMU claro la señal se
+      // corrompe. Si el SQI óptico es bueno se tolera más aceleración física
+      // (acoplamiento dedo-lente estable pese a temblores).
       const effectiveSqi = Math.max(this.signalQualityIndex, this.ppgSqi);
       const motionLimit = adaptiveMotionLimit(
         effectiveSqi, PEAK_DETECTION_DEFAULTS.peakEmitMotionSuppress,
       );
-
       const motionSuppressed = this.ppgMotionScore > motionLimit;
 
-      if (decision.emit && motionSuppressed) {
+      if (det.isPeak && motionSuppressed) {
         emitReason = 'MOTION_SUPPRESSED';
-      } else if (decision.emit) {
+      } else if (det.isPeak) {
         isPeak = true;
-        emitReason = decision.reason;
-        const wScore = decision.weightedScore ?? 0;
+        emitReason = det.reason;
+        const wScore = det.score;
         const prevEmitted = this.lastEmittedPeakTime;
-        this.lastEmittedPeakTime = decision.peakTimeMs;
-        this.lastPeakTime = decision.peakTimeMs;
+        this.lastEmittedPeakTime = det.peakTimeMs;
+        this.lastPeakTime = det.peakTimeMs;
         this.emittedPeakCount += 1;
         this.reacquireModeUntilMs = 0;
         this.gateRelaxUntilMs = 0;
 
         if (prevEmitted > 0) {
-          const rrMs = decision.peakTimeMs - prevEmitted;
+          const rrMs = det.peakTimeMs - prevEmitted;
           if (rrMs >= this.MIN_PEAK_INTERVAL_MS && rrMs <= this.MAX_PEAK_INTERVAL_MS) {
             this.rrIntervals.push(rrMs);
             if (this.rrIntervals.length > DSP_CONSTANTS.MAX_RR_INTERVALS) {
@@ -346,8 +311,6 @@ export class HeartBeatProcessor {
             } else {
               const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
               const trust = clamp(0.18 + wScore * 0.32, 0.18, 0.50);
-              // A menor desviación, más suavizado (alpha bajo)
-              // A mayor desviación, más seguimiento (alpha alto)
               const alpha = rel > 0.22 ? trust : rel > 0.12 ? trust * 0.75 : trust * 0.45;
               this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
             }
@@ -362,13 +325,13 @@ export class HeartBeatProcessor {
 
       this.lastDiagnostics = {
         ensemble: {
-          ...ens.diagnostics,
-          agreement: ens.agreement,
-          confidence: ens.confidence,
-          rejectedPeaks: ens.rejectedPeaks,
-          fusedPeakCount: ens.peaks.length,
+          detectorScore: det.score,
+          threshold: det.threshold,
+          maPeak: det.maPeak,
+          inBlock: det.inBlock,
+          medianRrMs: this.beatDetector.getMedianRrMs(),
           emitReason,
-          weightedScore: decision.weightedScore,
+          weightedScore: det.score,
           gateRange: this.cachedGateRange,
         },
         lastPeakTime: this.lastPeakTime,
@@ -587,6 +550,7 @@ export class HeartBeatProcessor {
     this.gateRelaxUntilMs = t + 6500;
     this.reacquireModeUntilMs = t + 6500;
     this.consecutivePeaks = 0;
+    this.beatDetector.softReset();
   }
 
   /** Limpia estado de picos/RR al quitar el dedo o al volver a colocarlo. */
@@ -604,6 +568,7 @@ export class HeartBeatProcessor {
     this.gateRelaxUntilMs = 0;
     this.reacquireModeUntilMs = 0;
     this.lastDiagnostics = {};
+    this.beatDetector.reset();
   }
 
   reset(): void {
