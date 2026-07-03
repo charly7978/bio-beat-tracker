@@ -62,7 +62,7 @@ export class SpO2Calculator {
   private redAcHistory: number[] = [];
   private greenAcHistory: number[] = [];
   private blueAcHistory: number[] = [];
-  private readonly ICA_WINDOW_SIZE = 64;
+  private readonly ICA_WINDOW_SIZE = VITAL_THRESHOLDS.SPO2.ICA_WINDOW_SIZE;
 
   /** Calcula SpO2 a partir de los canales RGB. Retorna 0 si no hay señal válida. */
   calculate(raw: RGBData, frameCount: number): number {

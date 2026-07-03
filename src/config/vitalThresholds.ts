@@ -33,6 +33,10 @@ export const VITAL_THRESHOLDS = {
     MIN_PI_PERCENT: 0.02,
     MIN_RED_DC: 10,
     MIN_GREEN_DC: 5,
+    /** Ventana de muestras para BSS (FastICA) en SpO2Calculator. */
+    ICA_WINDOW_SIZE: 64,
+    /** Frames de estabilidad requeridos antes de publicar SpO2 (~1.5 s). */
+    STABILITY_FRAMES: 45,
   },
   
   /** Geometría dedo: unificar punta (HR/SpO2) y almohadilla (PA) */
@@ -64,6 +68,18 @@ export const VITAL_THRESHOLDS = {
     MIN_CYCLES: 2,
     MIN_CYCLE_QUALITY: 0.28,
     MIN_BUFFER_SAMPLES: 90,
+    /** Máximo de ciclos PPG en el buffer deslizante del estimador de BP. */
+    CYCLE_BUFFER_MAX: 24,
+    /** Cadencia de emisión de estimaciones BP (cada N frames). */
+    EMIT_EVERY_N_FRAMES: 6,
+    /** Frames sin nueva estimación antes de marcar stale. */
+    STALE_FRAMES_MAX: 30,
+    /** Alpha del EMA de suavizado de la estimación de BP. */
+    EMA_ALPHA: 0.20,
+    /** Ventana de varianza para detección de estancamiento. */
+    VARIANCE_WINDOW: 5,
+    /** Umbral de varianza para determinar que la lectura está estancada. */
+    STALE_VARIANCE_THRESHOLD: 3.0,
     STABILITY_FRAMES_HIGH: 20,
     STABILITY_FRAMES_MEDIUM: 12,
     FEATURE_QUALITY_HIGH: 72,
@@ -169,6 +185,16 @@ export const VITAL_THRESHOLDS = {
     WAVE_PI_FLOOR: 0.0004,
     WAVE_PI_REF: 0.003,
     WAVE_PERIODICITY_REF: 0.25,
+    /**
+     * UMBRAL DE MOVIMIENTO ADAPTATIVO: cuando el SQI (calidad óptica) es alto,
+     * el acoplamiento dedo-lente es estable y se tolera mayor aceleración
+     * física antes de suprimir la emisión de latidos. Centralizado aquí para
+     * evitar duplicación entre PPGSignalProcessor y HeartBeatProcessor.
+     */
+    ADAPTIVE_MOTION_SQI_HIGH: 50,
+    ADAPTIVE_MOTION_SQI_MED: 30,
+    ADAPTIVE_MOTION_LIMIT_HIGH: 1.8,
+    ADAPTIVE_MOTION_LIMIT_MED: 1.2,
   },
 
   /**
@@ -538,3 +564,19 @@ export const CALIBRATION_CONFIG = {
   BP_REQUIRED_SAMPLES: 25,
   EXPIRATION_DAYS: 30,
 };
+
+/**
+ * Umbral de movimiento adaptativo según calidad de señal (SQI).
+ * Cuando el SQI es alto, el acoplamiento dedo-lente es estable y se tolera
+ * mayor aceleración física. Función utilitaria para evitar duplicación entre
+ * PPGSignalProcessor y HeartBeatProcessor.
+ */
+export function adaptiveMotionLimit(
+  sqi: number,
+  baseLimit: number = VITAL_THRESHOLDS.QUALITY.MAX_MOTION,
+): number {
+  const Q = VITAL_THRESHOLDS.QUALITY;
+  if (sqi >= Q.ADAPTIVE_MOTION_SQI_HIGH) return Q.ADAPTIVE_MOTION_LIMIT_HIGH;
+  if (sqi >= Q.ADAPTIVE_MOTION_SQI_MED) return Q.ADAPTIVE_MOTION_LIMIT_MED;
+  return baseLimit;
+}

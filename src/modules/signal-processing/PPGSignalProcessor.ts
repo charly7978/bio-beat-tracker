@@ -15,7 +15,7 @@ import {
   createDiagnosticStatusState,
   type DiagnosticStatusState,
 } from '../signal-quality/SignalQualityIndex';
-import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import { VITAL_THRESHOLDS, adaptiveMotionLimit } from '../../config/vitalThresholds';
 import { DSP_CONSTANTS, ENVELOPE_EQ } from '../../config/signalProcessing';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 import {
@@ -65,7 +65,6 @@ import { bandLimitedDominantFreq } from './shared/dsp';
 import { RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
 
 const log = createLogger('PPGSignalProcessor');
-// BUILD_STAMP: 2026-05-15 18:32:00
 
 interface ROIMetrics {
   rawRed: number;
@@ -386,11 +385,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     // Toleramos mayor movimiento físico (aceleración/giroscopio) si la calidad de
     // la señal óptica (SQI) sigue siendo buena, ya que el acoplamiento dedo-lente
     // puede permanecer estable a pesar de temblores o giros del celular.
-    const effectiveMotionThreshold = this.signalQuality >= 50
-      ? 1.8
-      : this.signalQuality >= 30
-        ? 1.2
-        : this.MOTION_THRESHOLD; // 0.6
+    const effectiveMotionThreshold = adaptiveMotionLimit(
+      this.signalQuality, this.MOTION_THRESHOLD,
+    );
     const motionArtifact = this.motionScore > effectiveMotionThreshold;
     const fingerEnsemble = updateFingerDetection(
       { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue, coverage: roi.coverageRatio, fingerScore: roi.fingerScore },
@@ -907,7 +904,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       fingerScore: roi.fingerScore,
     };
   }
-
 
 
   private fingerSpatial(roi: ROIMetrics) {

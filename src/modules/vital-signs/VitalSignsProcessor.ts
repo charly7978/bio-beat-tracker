@@ -9,7 +9,7 @@ import { isPhysiologicalRR, getMonotonicNow } from '../../utils/physio';
 import { VitalMeasurement, MeasurementStatus, SignalQualityMetrics } from '../../types/measurements';
 import { CalibrationManager } from './CalibrationManager';
 import { SignalQualityIndex } from '../signal-quality/SignalQualityIndex';
-import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import { VITAL_THRESHOLDS, CALIBRATION_CONFIG } from '../../config/vitalThresholds';
 import { RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
 import { RingF32 } from '../../utils/RingBuffer';
 import { clamp } from '../../utils/math';
@@ -63,7 +63,7 @@ export class VitalSignsProcessor {
   private lastBPConfidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT' = 'INSUFFICIENT';
   private lastBPFeatureQuality: number = 0;
   private calibrationSamples: number = 0;
-  private readonly CALIBRATION_REQUIRED = 25;
+  private readonly CALIBRATION_REQUIRED = CALIBRATION_CONFIG.BP_REQUIRED_SAMPLES;
   private isCalibrating: boolean = false;
 
   // Estado actual - SIN VALORES BASE FIJOS
@@ -94,7 +94,7 @@ export class VitalSignsProcessor {
 
   // Gating de estabilidad (Consistencia)
   private stableFramesCount: number = 0;
-  private readonly STABILITY_SPO2_FRAMES = 45;  // ~1.5s para SpO2 (actualización rápida)
+  private readonly STABILITY_SPO2_FRAMES = VITAL_THRESHOLDS.SPO2.STABILITY_FRAMES;
   private readonly STABILITY_BP_FRAMES = VITAL_THRESHOLDS.BP.STABILITY_FRAMES_HIGH;
   private lastCoherentSpO2: number = 0;
   /** Frames seguidos con SpO2 fuera de banda de coherencia → adapta cambios reales sostenidos. */

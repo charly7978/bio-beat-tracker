@@ -122,7 +122,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const [rrIntervals, setRRIntervals] = useState<number[]>([]);
   const [currentDiagnostics, setCurrentDiagnostics] = useState<Record<string, unknown> | null>(null);
 
-
   // Refs de sesión compartidos
   const vitalSignsRef = useRef<VitalSignsResult>(vitalSigns);
   const totalBeatsRef = useRef(0);

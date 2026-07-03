@@ -14,6 +14,7 @@
  */
 
 import { calculateHRV } from '../../utils/physio';
+import { DSP_CONSTANTS } from '../../config/signalProcessing';
 
 // ═══════════════════════════════════════════
 // TYPES
@@ -91,7 +92,7 @@ export class PPGFeatureExtractor {
    * Detect individual cardiac cycles from PPG signal
    * Uses valley detection validated with first derivative zero-crossings
    */
-  static detectCardiacCycles(buffer: number[], sampleRate: number = 30): FiducialPoints[] {
+  static detectCardiacCycles(buffer: number[], sampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE): FiducialPoints[] {
     if (buffer.length < sampleRate * 2) return [];
 
     // 1. Find valleys (cycle onsets) using first derivative
@@ -138,7 +139,7 @@ export class PPGFeatureExtractor {
   static extractCycleFeatures(
     buffer: number[],
     fiducials: FiducialPoints,
-    sampleRate: number = 30
+    sampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE
   ): CycleFeatures | null {
     const { onset, systolicPeak, dicroticNotch, diastolicPeak, nextOnset } = fiducials;
 

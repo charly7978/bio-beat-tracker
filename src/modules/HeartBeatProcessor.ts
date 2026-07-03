@@ -6,7 +6,7 @@ import { clamp } from '../utils/math';
 import { triggerHeartbeatHaptic } from '../utils/haptics';
 import { robustBounds } from '../utils/stats';
 import { PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS } from '../config/signalProcessing';
-import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
+import { VITAL_THRESHOLDS, adaptiveMotionLimit } from '../config/vitalThresholds';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
 import { autocorrDominantLag } from './signal-processing/shared/dsp';
 import { computeRrHrv } from '../utils/physio';
@@ -304,11 +304,9 @@ export class HeartBeatProcessor {
       // Sin embargo, si la calidad de la señal óptica (SQI) es buena, toleramos mayor
       // aceleración física (hasta 1.8) ya que el acoplamiento dedo-lente sigue siendo estable.
       const effectiveSqi = Math.max(this.signalQualityIndex, this.ppgSqi);
-      const motionLimit = effectiveSqi >= 50
-        ? 1.8
-        : effectiveSqi >= 30
-          ? 1.2
-          : PEAK_DETECTION_DEFAULTS.peakEmitMotionSuppress; // 0.6
+      const motionLimit = adaptiveMotionLimit(
+        effectiveSqi, PEAK_DETECTION_DEFAULTS.peakEmitMotionSuppress,
+      );
 
       const motionSuppressed = this.ppgMotionScore > motionLimit;
 
