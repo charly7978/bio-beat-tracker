@@ -109,33 +109,40 @@ describe('signalStabilization (convergencia, no timer)', () => {
     expect(r.stage).toBe('READY');
   });
 
-  it('relajación adaptativa por tiempo → señal subóptima pero estable logra estabilizar tras 9.5 segundos', () => {
+  it('HONESTO: pulso DÉBIL pero REAL (periodicidad ≥ 0.30) sí estabiliza', () => {
     const st = createStabilizationState();
-    // Calidad subóptima permanente (ej: sqi=22, PI=0.0006, periodicity=0.22)
-    // Con los umbrales estrictos iniciales (sqi>=32, PI>=0.0010), no estabilizaría en 4.5 segundos (140 frames).
-    // Pero tras 9.5 segundos de contacto continuo (290 frames), los umbrales se relajan y el BPM estable converge.
-    
-    // Primero alimentamos 140 frames (~4.6s): no debe estar estable aún
-    let r = feed(st, 140, () => ({
-      bpm: 72,
-      sqi: 22,
-      perfusionIndex: 0.0006,
-      periodicity: 0.22,
-      motionScore: 0.1
-    }));
-    expect(r.stabilized).toBe(false);
-
-    // Alimentamos de forma contigua los siguientes 160 frames para continuar la línea temporal
-    for (let i = 140; i < 300; i++) {
+    // Amplitud débil (sqi/PI en el piso relajado) PERO con pulso periódico real y
+    // BPM convergido → debe estabilizar (dedo débil pero genuino).
+    let r = { stabilized: false } as ReturnType<typeof updateStabilization>;
+    for (let i = 0; i < 300; i++) {
       r = updateStabilization(st, base(i, {
         bpm: 72,
-        sqi: 22,
-        perfusionIndex: 0.0006,
-        periodicity: 0.22,
-        motionScore: 0.1
+        sqi: 26,
+        perfusionIndex: 0.0007,
+        periodicity: 0.34,
+        motionScore: 0.1,
       }));
     }
     expect(r.stabilized).toBe(true);
     expect(r.stage).toBe('READY');
+  });
+
+  it('HONESTO: sin pulso real (periodicidad 0.22) NO estabiliza jamás, aunque pase el tiempo', () => {
+    const st = createStabilizationState();
+    // periodicidad 0.22 = apenas por encima del ruido, sin pulso enganchado. El
+    // BPM podría "converger" por casualidad, pero sin ritmo real NO debe ponerse
+    // READY ni tras 12 s (antes lo hacía por relajación temporal → fake).
+    let r = { stabilized: false } as ReturnType<typeof updateStabilization>;
+    for (let i = 0; i < 360; i++) {
+      r = updateStabilization(st, base(i, {
+        bpm: 72,
+        sqi: 26,
+        perfusionIndex: 0.0007,
+        periodicity: 0.22,
+        motionScore: 0.1,
+      }));
+    }
+    expect(r.stabilized).toBe(false);
+    expect(r.stage).not.toBe('READY');
   });
 });

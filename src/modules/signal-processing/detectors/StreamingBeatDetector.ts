@@ -1,132 +1,139 @@
 /**
- * STREAMING BEAT DETECTOR — umbral adaptativo + máximo local + refractario.
+ * STREAMING BEAT DETECTOR — Elgendi fiel (two moving averages) con EMISIÓN ÚNICA
+ * POR CONFIRMACIÓN (settled-peak).
  *
- * Reemplaza la arquitectura frágil de "re-detectar toda la ventana en cada frame
- * y elegir el pico más reciente" (batch-por-frame + cherry-pick), causa raíz de
- * latidos pegados, silencios y jitter de timing.
+ * Algoritmo de detección: Elgendi et al. 2013, PLoS ONE "Systolic Peak Detection
+ * in Acceleration Photoplethysmograms..." — implementación fiel a NeuroKit2
+ * (`_ppg_findpeaks_elgendi`): recorte de negativos + cuadrado, dos medias móviles
+ * boxcar (MA_peak 111 ms, MA_beat 667 ms), umbral = MA_beat + β·media(señal²) con
+ * β=0.02, bloques de interés donde MA_peak>umbral, descarte de bloques < peakwindow,
+ * pico = máximo de mayor prominencia por bloque, mindelay 300 ms. Ese detector vive
+ * en {@link ElgendiPeakDetector} (batch, validado y testeado).
  *
- * MÉTODO (validado en detección PPG en tiempo real — HeartPy/van Gent 2019,
- * detectores de umbral adaptativo + refractario; robusto frente a ruido y a la
- * modulación de amplitud, a diferencia del bloque de dos medias móviles que con
- * MA causal se fragmenta y localiza el pico en la rama descendente):
+ * PROBLEMA que resuelve la CAPA de streaming: correr un detector batch en cada
+ * frame y "elegir el pico más reciente del borde vivo" (arquitectura anterior)
+ * emite picos AÚN NO ASENTADOS — la media móvil CENTRADA no tiene soporte futuro
+ * cerca del borde, así que el pico salta/aparece/desaparece entre frames → latidos
+ * dobles y silencios.
  *
- *   1) Envolvente de amplitud `ampEnv` = peak-hold con decaimiento lento del
- *      excursión positiva (≈ amplitud sistólica reciente). ESCALA-INVARIANTE:
- *      el umbral es una FRACCIÓN de ampEnv, no un valor absoluto → no hay gate
- *      que "cierre" por colapso de amplitud, y se re-adquiere solo al decaer.
- *   2) Umbral T = thrFrac · ampEnv (sobre la línea base lenta). Un latido cruza T
- *      en su flanco de subida; la MUESCA DÍCROTA (menor) no lo cruza.
- *   3) Máquina de estados: mientras x > T se rastrea el MÁXIMO REAL (x, t). Al
- *      caer x por debajo de T se CONFIRMA el pico = ese máximo → localización
- *      exacta del pico sistólico (no de la rama descendente).
- *   4) EMISIÓN ÚNICA por excursión + refractario fisiológico adaptativo (lado
- *      bajo del RR → tolera arritmias). Imposible doble-contar ni re-emitir.
- *
- * Consume la señal YA filtrada en vivo (bandpass causal único aguas arriba) → sin
- * re-filtrado offline (sin doble filtrado). Latencia: el pico se confirma al caer
- * por debajo del umbral (~100–180 ms tras el pico), CONSTANTE → se cancela en el
- * RR (diferencia de tiempos).
+ * SOLUCIÓN (settled-peak / confirmación): se corre Elgendi sobre la ventana y sólo
+ * se EMITE un pico cuando ya está lo bastante ATRÁS del borde vivo como para que la
+ * MA_beat centrada (±beatwindow/2) y la prominencia tengan soporte completo →
+ * `latest − t ≥ confirmLagMs`. Cada pico se emite EXACTAMENTE UNA vez (dedup por
+ * tiempo contra el último emitido) → imposible doble-contar o re-emitir. Elgendi
+ * detecta de forma robusta → sin silencios. La latencia añadida es CONSTANTE
+ * (~confirmLag) → se cancela en el RR (diferencia de tiempos).
  */
 import { clamp } from '../../../utils/math';
 import { VITAL_THRESHOLDS } from '../../../config/vitalThresholds';
-import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
+import { PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS } from '../../../config/signalProcessing';
+import { PeakDetectionEnsemble } from './PeakDetectionEnsemble';
 
 export interface StreamingBeatSampleResult {
-  /** True SÓLO en el frame en que se confirma un latido genuino. */
+  /** True SÓLO en el frame en que se confirma (emite) un latido genuino. */
   isPeak: boolean;
   /** Tiempo (ms, mismo reloj que los timestamps de entrada) del pico sistólico. */
   peakTimeMs: number;
   /** Amplitud (señal filtrada) del pico. 0 si no hubo emisión. */
   peakValue: number;
-  /** Score de confianza del pico [0..1] (amplitud relativa × consistencia). */
+  /** Score de confianza del pico [0..1]. */
   score: number;
   /** Motivo auditable de la decisión de este frame. */
   reason: string;
-  /** Umbral instantáneo (diagnóstico). */
+  /** Umbral Elgendi instantáneo del último análisis (diagnóstico). */
   threshold: number;
-  /** Envolvente de amplitud instantánea (diagnóstico). */
+  /** Confianza del detector Elgendi sobre la ventana (diagnóstico). */
   ampEnv: number;
-  /** True mientras la muestra está por encima del umbral (excursión en curso). */
+  /** True si hay un bloque de interés abierto en el borde vivo (diagnóstico). */
   inBlock: boolean;
 }
 
 export interface StreamingBeatDetectorConfig {
-  /** Fracción de la envolvente de amplitud usada como umbral de detección. */
-  thrFrac: number;
-  /** EMA (por muestra) de la línea base lenta (quita deriva residual). */
-  baselineAlpha: number;
-  /** Ataque de la envolvente (subida cuando la excursión supera la actual). */
-  envAttack: number;
-  /** Decaimiento por SEGUNDO de la envolvente (re-adquisición al debilitarse). */
-  envDecayPerSec: number;
-  /** Piso absoluto de la envolvente para no disparar con ruido ínfimo. */
-  envFloor: number;
-  /** Refractario mínimo absoluto (ms) — anti doble conteo / dícrota. */
-  refractoryMinMs: number;
-  /** Fracción de la mediana RR usada como refractario adaptativo. */
-  refractoryRrFrac: number;
-  /** Rechazo de dícrota/ruido: el pico debe superar esta fracción de ampEnv. */
-  amplitudeRejectFrac: number;
+  /** Muestras mínimas en la ventana para correr Elgendi. */
+  minSamples: number;
+  /** Máximo de la ventana de análisis (muestras). */
+  maxWindow: number;
   /**
-   * Duración mínima (ms) de la excursión sobre el umbral. El upstroke sistólico
-   * real dura ≳80–120 ms; un pico de ruido es 1 muestra (~33 ms a 30fps). Exigir
-   * un mínimo rechaza spikes de ruido sin bloquear latidos reales.
+   * Retardo de confirmación (ms): un pico en t se emite cuando latest−t ≥ este
+   * valor, garantizando soporte completo de la MA_beat CENTRADA (±333 ms) y de la
+   * prominencia. Debe ser ≥ beatwindow/2. Añade latencia CONSTANTE (se cancela en RR).
    */
-  minExcursionMs: number;
+  confirmLagMs: number;
+  /** mindelay Elgendi (ms) entre picos consecutivos (refractario canónico). */
+  minDelayMs: number;
+  /** Fracción de la mediana RR usada como refractario adaptativo (lado bajo). */
+  refractoryRrFrac: number;
+  /** Correr Elgendi cada N frames (throttle de CPU; la emisión sigue siendo puntual). */
+  analyzeEveryNFrames: number;
 }
 
 export const STREAMING_BEAT_DEFAULTS: StreamingBeatDetectorConfig = {
-  thrFrac: 0.35,
-  baselineAlpha: 0.02,
-  envAttack: 0.5,
-  envDecayPerSec: 0.55,
-  envFloor: 1e-4,
-  refractoryMinMs: PEAK_DETECTION_DEFAULTS.peakEmitRefractoryMinMs,
+  minSamples: PEAK_DETECTION_DEFAULTS.minSamplesEnsemble,
+  maxWindow: DSP_CONSTANTS.BUFFER_SIZE,
+  confirmLagMs: 380,
+  minDelayMs: PEAK_DETECTION_DEFAULTS.peakEmitRefractoryMinMs,
   refractoryRrFrac: 0.5,
-  amplitudeRejectFrac: 0.3,
-  minExcursionMs: 55,
+  analyzeEveryNFrames: 2,
 };
 
 export class StreamingBeatDetector {
   private cfg: StreamingBeatDetectorConfig;
 
-  private baseline = 0;
-  private ampEnv = 0;
-  private initialized = false;
-  private lastTimeMs = 0;
+  // Ring buffer de la señal filtrada en vivo.
+  private sig: number[] = [];
+  private ts: number[] = [];
+  private frame = 0;
 
-  // Estado de la excursión supra-umbral en curso.
-  private aboveThr = false;
-  private excMaxVal = -Infinity;
-  private excMaxTime = 0;
-  private excStartTime = 0;
-
-  // Historial para refractario adaptativo y score.
-  private lastEmitTime = 0;
+  private lastEmittedPeakTime = 0;
   private recentRr: number[] = [];
   private recentAmp: number[] = [];
   private readonly MAX_HISTORY = 12;
-  /** RR esperado (ms) provisto por el tracker de ritmo — ancla estable del refractario. */
+
+  private lastThreshold = 0;
+  private lastElgendiConf = 0;
+  private lastInBlock = false;
+
+  // Contexto de calidad para calibrar el detector Elgendi.
+  private sqi = 0;
+  private perfusionIndex = 0;
+  /** RR esperado (ms) del tracker de ritmo — ancla estable del refractario. */
   private expectedRrMs = 0;
 
   constructor(cfg: Partial<StreamingBeatDetectorConfig> = {}) {
     this.cfg = { ...STREAMING_BEAT_DEFAULTS, ...cfg };
   }
 
-  /** Compat: el ritmo detectado aguas arriba ya no ajusta ventanas fijas aquí. */
-  setBeatWindowMs(_beatWindowMs: number): void {
-    /* umbral adaptativo: sin ventanas fijas que recalibrar */
+  /** Contexto de calidad del pipeline PPG para calibrar Elgendi (SQI/PI). */
+  setQualityContext(sqi: number, perfusionIndex: number): void {
+    if (Number.isFinite(sqi) && sqi >= 0) this.sqi = sqi;
+    if (Number.isFinite(perfusionIndex) && perfusionIndex >= 0) this.perfusionIndex = perfusionIndex;
   }
 
-  /**
-   * Ancla el refractario adaptativo a un RR de ritmo ESTABLE (del tracker de HR,
-   * anclado en autocorrelación) en vez de la mediana RR local (que se corrompe con
-   * ruido). 0 = sin ancla (usa la mediana local). Arritmia-seguro: sólo fija el
-   * lado bajo del refractario, no bloquea latidos prematuros genuinos.
-   */
+  /** Compat: Elgendi usa beatwindow interno; el ritmo no ajusta ventanas fijas aquí. */
+  setBeatWindowMs(_beatWindowMs: number): void {
+    /* no-op: beatwindow canónico dentro de ElgendiPeakDetector */
+  }
+
+  /** Ancla el refractario a un RR de ritmo estable (tracker); 0 = mediana local. */
   setExpectedRrMs(rrMs: number): void {
     this.expectedRrMs =
       Number.isFinite(rrMs) && rrMs >= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS ? rrMs : 0;
+  }
+
+  /** Valor de la señal en la muestra de timestamp más cercano a `t` (ventana ordenada). */
+  private valueAtTime(t: number): number {
+    let bestDt = Infinity;
+    let bestVal = 0;
+    for (let i = this.ts.length - 1; i >= 0; i--) {
+      const dt = Math.abs(this.ts[i]! - t);
+      if (dt < bestDt) {
+        bestDt = dt;
+        bestVal = this.sig[i]!;
+      } else if (this.ts[i]! < t - bestDt) {
+        break; // más atrás sólo aumenta la distancia (ts ascendente)
+      }
+    }
+    return bestVal;
   }
 
   private median(arr: number[]): number {
@@ -135,159 +142,135 @@ export class StreamingBeatDetector {
     return s[Math.floor(s.length / 2)]!;
   }
 
-  private adaptiveRefractoryMs(): number {
-    // Prioriza el RR de ritmo estable (tracker); si no hay, usa la mediana local.
+  /** Refractario efectivo: canónico (mindelay) o anclado al ritmo estable (lado bajo). */
+  private effectiveMinDelayMs(): number {
     const anchorRr = this.expectedRrMs > 0 ? this.expectedRrMs : this.median(this.recentRr);
     const adaptive = anchorRr > 0 ? anchorRr * this.cfg.refractoryRrFrac : 0;
-    return Math.max(this.cfg.refractoryMinMs, adaptive);
+    return Math.max(this.cfg.minDelayMs, adaptive);
   }
 
   /**
-   * Procesa UNA muestra de la señal filtrada en vivo.
-   * @param x       muestra filtrada (bandpass causal, zero-centrada)
-   * @param timeMs  timestamp de la muestra (mismo reloj en toda la sesión)
-   * @param fs      frecuencia de muestreo estimada (Hz) — para el decaimiento temporal
+   * Procesa UNA muestra de la señal filtrada en vivo. Acumula en la ventana y
+   * (throttled) corre Elgendi, emitiendo el pico confirmado más antiguo aún no emitido.
    */
   process(x: number, timeMs: number, fs: number): StreamingBeatSampleResult {
-    const cfg = this.cfg;
-
-    if (!this.initialized) {
-      this.baseline = x;
-      this.ampEnv = cfg.envFloor;
-      this.lastTimeMs = timeMs;
-      this.initialized = true;
-      return this.idleResult('WARMUP');
+    // Acumula en la ventana (drop del más antiguo).
+    this.sig.push(x);
+    this.ts.push(timeMs);
+    if (this.sig.length > this.cfg.maxWindow) {
+      this.sig.shift();
+      this.ts.shift();
     }
+    this.frame++;
 
-    const dtMs = timeMs > this.lastTimeMs ? timeMs - this.lastTimeMs : 1000 / Math.max(1, fs);
-    this.lastTimeMs = timeMs;
-
-    // Línea base lenta (deriva residual). La señal ya viene bandpass → ~0.
-    this.baseline += cfg.baselineAlpha * (x - this.baseline);
-    const pos = x - this.baseline;
-
-    // Envolvente de amplitud: peak-hold con ataque rápido y decaimiento temporal
-    // (independiente de fps). Escala-invariante.
-    const decay = Math.pow(cfg.envDecayPerSec, dtMs / 1000);
-    this.ampEnv = Math.max(this.ampEnv * decay, cfg.envFloor);
-    if (pos > this.ampEnv) {
-      this.ampEnv += cfg.envAttack * (pos - this.ampEnv);
-    }
-
-    const threshold = cfg.thrFrac * this.ampEnv;
-
-    let isPeak = false;
-    let peakTimeMs = 0;
-    let peakValue = 0;
-    let score = 0;
-    let reason = this.aboveThr ? 'IN_EXCURSION' : 'BELOW_THR';
-
-    if (pos > threshold) {
-      // Dentro de una excursión supra-umbral: rastrea el máximo real.
-      if (!this.aboveThr) {
-        this.aboveThr = true;
-        this.excMaxVal = -Infinity;
-        this.excStartTime = timeMs;
-      }
-      if (pos > this.excMaxVal) {
-        this.excMaxVal = pos;
-        this.excMaxTime = timeMs;
-      }
-    } else if (this.aboveThr) {
-      // Fin de la excursión → candidato = máximo rastreado (pico sistólico real).
-      this.aboveThr = false;
-      const excDurationMs = timeMs - this.excStartTime;
-      const decision = this.evaluateCandidate(this.excMaxTime, this.excMaxVal, excDurationMs);
-      reason = decision.reason;
-      if (decision.emit) {
-        isPeak = true;
-        peakTimeMs = this.excMaxTime;
-        peakValue = this.excMaxVal;
-        score = decision.score;
-        this.commitEmission(this.excMaxTime, this.excMaxVal);
-      }
-    }
-
-    return {
-      isPeak,
-      peakTimeMs,
-      peakValue,
-      score,
-      reason,
-      threshold,
-      ampEnv: this.ampEnv,
-      inBlock: this.aboveThr,
-    };
-  }
-
-  private evaluateCandidate(
-    time: number,
-    val: number,
-    excDurationMs: number,
-  ): { emit: boolean; score: number; reason: string } {
-    if (val <= 0) return { emit: false, score: 0, reason: 'NON_POSITIVE_PEAK' };
-
-    // Ancho de excursión: rechaza spikes de ruido de 1 muestra (upstroke real ≳80ms).
-    if (excDurationMs < this.cfg.minExcursionMs) {
-      return { emit: false, score: 0, reason: 'EXCURSION_TOO_BRIEF' };
-    }
-
-    // Refractario adaptativo (lado bajo del RR → tolera arritmias/pausas).
-    if (this.lastEmitTime > 0) {
-      const gap = time - this.lastEmitTime;
-      if (gap < this.adaptiveRefractoryMs()) {
-        return { emit: false, score: 0, reason: 'REFRACTORY' };
-      }
-      if (gap < VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS) {
-        return { emit: false, score: 0, reason: 'RR_TOO_SHORT' };
-      }
-    }
-
-    // Rechazo de dícrota/ruido: el pico debe superar una fracción de la envolvente.
-    if (val < this.ampEnv * this.cfg.amplitudeRejectFrac) {
-      return { emit: false, score: 0, reason: 'LOW_REL_AMPLITUDE' };
-    }
-
-    // Score: cercanía a la amplitud típica × madurez del historial RR.
-    const medAmp = this.median(this.recentAmp);
-    let ampScore = 1;
-    if (medAmp > 0) {
-      const rel = Math.abs(val - medAmp) / medAmp;
-      ampScore = clamp(1 - rel * 0.5, 0.3, 1);
-    }
-    const historyScore = clamp(this.recentRr.length / 4, 0.25, 1);
-    const score = clamp(ampScore * 0.6 + historyScore * 0.4, 0, 1);
-
-    return { emit: true, score, reason: 'PEAK_DETECTED' };
-  }
-
-  private commitEmission(time: number, val: number): void {
-    if (this.lastEmitTime > 0) {
-      const rr = time - this.lastEmitTime;
-      if (
-        rr >= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS &&
-        rr <= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS
-      ) {
-        this.recentRr.push(rr);
-        if (this.recentRr.length > this.MAX_HISTORY) this.recentRr.shift();
-      }
-    }
-    this.recentAmp.push(val);
-    if (this.recentAmp.length > this.MAX_HISTORY) this.recentAmp.shift();
-    this.lastEmitTime = time;
-  }
-
-  private idleResult(reason: string): StreamingBeatSampleResult {
-    return {
+    const idle = (reason: string): StreamingBeatSampleResult => ({
       isPeak: false,
       peakTimeMs: 0,
       peakValue: 0,
       score: 0,
       reason,
-      threshold: this.cfg.thrFrac * this.ampEnv,
-      ampEnv: this.ampEnv,
-      inBlock: this.aboveThr,
-    };
+      threshold: this.lastThreshold,
+      ampEnv: this.lastElgendiConf,
+      inBlock: this.lastInBlock,
+    });
+
+    if (this.sig.length < this.cfg.minSamples) return idle('WARMUP');
+    // Throttle del análisis (CPU); en los frames intermedios no se emite.
+    if (this.frame % this.cfg.analyzeEveryNFrames !== 0) return idle('THROTTLED');
+
+    // Elgendi fiel + calibración por SQI/PI + scoring (wrapper validado).
+    const ens = PeakDetectionEnsemble.analyze({
+      signal: this.sig,
+      timestampsMs: this.ts,
+      samplingRateHz: fs,
+      sqi: this.sqi,
+      perfusionIndex: this.perfusionIndex,
+    });
+
+    const elgDiag = (ens.diagnostics as { elgendi?: { thrOffset?: number } }).elgendi;
+    this.lastThreshold = elgDiag?.thrOffset ?? 0;
+    this.lastElgendiConf = ens.confidence;
+
+    const latest = this.ts[this.ts.length - 1]!;
+    const minDelay = this.effectiveMinDelayMs();
+    const confirmLag = this.cfg.confirmLagMs;
+
+    const times = ens.peakTimes;
+    const scores = ens.peakScores;
+
+    // ¿Hay un bloque abierto (pico sin asentar) cerca del borde? (diagnóstico)
+    this.lastInBlock =
+      times.length > 0 && times[times.length - 1]! > latest - confirmLag;
+
+    // Elige el pico CONFIRMADO más antiguo que aún no fue emitido (sin asumir orden).
+    let emitT = 0;
+    let emitScore = 0;
+    for (let i = 0; i < times.length; i++) {
+      const t = times[i]!;
+      if (t <= 0) continue;
+      // Dedup / refractario: sólo picos posteriores al último emitido + refractario.
+      if (this.lastEmittedPeakTime > 0 && t < this.lastEmittedPeakTime + minDelay) continue;
+      // Confirmación: el pico debe estar asentado (soporte completo de la MA centrada).
+      if (t > latest - confirmLag) continue;
+      if (emitT === 0 || t < emitT) {
+        emitT = t;
+        emitScore = scores?.[i] ?? ens.confidence;
+      }
+    }
+
+    if (emitT > 0) {
+      // Amplitud del pico por timestamp más cercano (robusto al resampling interno
+      // de Elgendi: sus índices no mapean 1:1 a esta ventana).
+      const emitVal = this.valueAtTime(emitT);
+      const rrMs = this.lastEmittedPeakTime > 0 ? emitT - this.lastEmittedPeakTime : 0;
+      const score = this.scorePeak(Math.max(ens.confidence, emitScore), emitVal, rrMs);
+      this.commitEmission(emitT, emitVal, rrMs);
+      return {
+        isPeak: true,
+        peakTimeMs: emitT,
+        peakValue: emitVal,
+        score,
+        reason: 'PEAK_CONFIRMED',
+        threshold: this.lastThreshold,
+        ampEnv: ens.confidence,
+        inBlock: this.lastInBlock,
+      };
+    }
+
+    return idle('NO_NEW_CONFIRMED_PEAK');
+  }
+
+  private scorePeak(elConf: number, val: number, rrMs: number): number {
+    const conf = clamp(elConf, 0, 1);
+    const medAmp = this.median(this.recentAmp);
+    let ampScore = 1;
+    if (medAmp > 0 && val > 0) {
+      const rel = Math.abs(val - medAmp) / medAmp;
+      ampScore = clamp(1 - rel * 0.5, 0.3, 1);
+    }
+    // Consistencia RR con el ritmo (si hay historial): bonus si el RR es plausible.
+    let rrScore = 0.6;
+    const medRr = this.expectedRrMs > 0 ? this.expectedRrMs : this.median(this.recentRr);
+    if (medRr > 0 && rrMs > 0) {
+      const rel = Math.abs(rrMs - medRr) / medRr;
+      rrScore = clamp(1 - rel, 0.2, 1);
+    }
+    return clamp(conf * 0.45 + ampScore * 0.25 + rrScore * 0.3, 0, 1);
+  }
+
+  private commitEmission(time: number, val: number, rrMs: number): void {
+    if (
+      rrMs >= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS &&
+      rrMs <= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS
+    ) {
+      this.recentRr.push(rrMs);
+      if (this.recentRr.length > this.MAX_HISTORY) this.recentRr.shift();
+    }
+    if (val > 0) {
+      this.recentAmp.push(val);
+      if (this.recentAmp.length > this.MAX_HISTORY) this.recentAmp.shift();
+    }
+    this.lastEmittedPeakTime = time;
   }
 
   /** Mediana RR (ms) del historial reciente, 0 si no hay. */
@@ -296,28 +279,25 @@ export class StreamingBeatDetector {
   }
 
   getLastEmitTime(): number {
-    return this.lastEmitTime;
+    return this.lastEmittedPeakTime;
   }
 
-  /** Reabre la detección sin vaciar la envolvente (dedo quieto). */
+  /** Reabre la detección sin vaciar la ventana de señal (dedo quieto). */
   softReset(): void {
-    this.aboveThr = false;
-    this.excMaxVal = -Infinity;
+    this.lastInBlock = false;
   }
 
   /** Reset total del estado (quitar dedo / recolocar). */
   reset(): void {
-    this.baseline = 0;
-    this.ampEnv = 0;
-    this.initialized = false;
-    this.lastTimeMs = 0;
-    this.aboveThr = false;
-    this.excMaxVal = -Infinity;
-    this.excMaxTime = 0;
-    this.excStartTime = 0;
-    this.lastEmitTime = 0;
+    this.sig = [];
+    this.ts = [];
+    this.frame = 0;
+    this.lastEmittedPeakTime = 0;
     this.recentRr = [];
     this.recentAmp = [];
+    this.lastThreshold = 0;
+    this.lastElgendiConf = 0;
+    this.lastInBlock = false;
     this.expectedRrMs = 0;
   }
 }

@@ -94,11 +94,15 @@ export function updateStabilization(
     }
   }
 
-  // 2) Calidad instantánea sostenida (dwell) con umbrales adaptativos por relajación.
-  const minSqi = C.MIN_SQI - relaxFactor * 14;                  // de 32 a 18
-  const minPi = C.MIN_PI - relaxFactor * 0.0006;                // de 0.0010 a 0.0004
-  const minPeriodicity = C.MIN_PERIODICITY - relaxFactor * 0.14;// de 0.30 a 0.16
-  const qualityDwellFrames = Math.round(C.QUALITY_DWELL_FRAMES - relaxFactor * 15); // de 30 a 15 frames
+  // 2) Calidad instantánea sostenida (dwell). ESTABILIZACIÓN HONESTA: sólo se
+  //    relaja MODERADAMENTE la AMPLITUD (SQI/PI) para pulsos débiles-pero-reales,
+  //    con PISOS que el ruido no alcanza. La PERIODICIDAD (¿hay ritmo real?) NO se
+  //    relaja por tiempo — es el gate de "pulso enganchado". Así el estado READY
+  //    lo dicta la SEÑAL, no un temporizador.
+  const minSqi = Math.max(24, C.MIN_SQI - relaxFactor * 8);          // 32 → 24 (piso)
+  const minPi = Math.max(0.0006, C.MIN_PI - relaxFactor * 0.0004);   // 0.0010 → 0.0006 (piso)
+  const minPeriodicity = C.MIN_PERIODICITY;                          // fijo 0.30 (pulse-lock real)
+  const qualityDwellFrames = C.QUALITY_DWELL_FRAMES;                 // fijo (sin abaratar por tiempo)
 
   // Toleramos mayor movimiento si la calidad de señal (sqi) es alta,
   // o si se activa la relajación adaptativa por tiempo.
@@ -139,14 +143,10 @@ export function updateStabilization(
     progressFall = C.PROGRESS_FALL * 2.0; // cae rápido si se pierde estabilidad
   }
 
-  // Relajamos también minSamples y minWindowMs si la calidad se estanca tras 5 segundos
-  if (relaxFactor > 0) {
-    minSamples = Math.round(minSamples - relaxFactor * 12);
-    minWindowMs = Math.round(minWindowMs - relaxFactor * 600);
-    // Aseguramos límites lógicos mínimos
-    minSamples = Math.max(15, minSamples);
-    minWindowMs = Math.max(1500, minWindowMs);
-  }
+  // La CONVERGENCIA del BPM (minSamples/minWindowMs/bpmSpread) NO se relaja por
+  // tiempo: es el criterio HONESTO de "el ritmo se asentó" y no debe abaratarse con
+  // un temporizador. Sólo se flexibiliza cuando la señal es REALMENTE buena
+  // (fStability alto, bloque de arriba) — dictado por la señal, no por el reloj.
 
   // 5) Convergencia del BPM en la ventana (la lectura "dejó de moverse").
   const n = state.bpmVals.length;

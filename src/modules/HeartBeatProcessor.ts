@@ -226,6 +226,11 @@ export class HeartBeatProcessor {
       this.signalBuffer.length >= 20 && (gateOk || this.fingerContactConfirmed);
 
     if (runDetect) {
+      // Calibra Elgendi con la calidad del pipeline (SQI/PI).
+      this.beatDetector.setQualityContext(
+        Math.max(this.signalQualityIndex, this.ppgSqi),
+        this.ppgPerfusionIndex,
+      );
       // Muestra actual = último valor bufferizado (incluye el "hold" de contacto).
       const sample = this.signalBuffer[this.signalBuffer.length - 1]!;
       const sampleTs = this.timestampBuffer[this.timestampBuffer.length - 1]!;
