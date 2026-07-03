@@ -19,6 +19,11 @@ interface SynthOpts {
   respAmpMod?: number;
   fpsJitter?: number;
   seed?: number;
+  /** Ráfaga de ruido fuerte en un tramo (simula el escenario que rompía el batch). */
+  burstAt?: { fromSec: number; toSec: number; noise: number };
+  /** RR entre dos latidos consecutivos forzado a un valor (ms) — para doble giba. */
+  tightPairAtSec?: number;
+  tightPairGapMs?: number;
 }
 
 /** Onda tipo PPG (sistólico agudo + muesca dícrota) ya "filtrada" (zero-centrada). */
@@ -32,11 +37,16 @@ function synthPpg(bpm: number, fs: number, seconds: number, o: SynthOpts = {}) {
   const respHz = 0.25;
   let clock = 1000;
   for (let i = 0; i < n; i++) {
-    const phase = ((i / fs) * hrHz) % 1;
+    const tSec = i / fs;
+    const phase = ((tSec) * hrHz) % 1;
     const systolic = Math.exp(-Math.pow((phase - 0.15) / 0.07, 2));
     const dicrotic = 0.3 * Math.exp(-Math.pow((phase - 0.42) / 0.08, 2));
-    const respGain = 1 - respAmpMod * 0.5 * (1 + Math.sin(2 * Math.PI * respHz * (i / fs)));
-    const nz = noise ? (rand() - 0.5) * 2 * noise : 0;
+    const respGain = 1 - respAmpMod * 0.5 * (1 + Math.sin(2 * Math.PI * respHz * tSec));
+    let localNoise = noise;
+    if (o.burstAt && tSec >= o.burstAt.fromSec && tSec <= o.burstAt.toSec) {
+      localNoise = o.burstAt.noise;
+    }
+    const nz = localNoise ? (rand() - 0.5) * 2 * localNoise : 0;
     x.push(amp * respGain * (systolic + dicrotic - 0.32) + nz);
     clock += (1000 / fs) * (1 + (fpsJitter ? (rand() - 0.5) * 2 * fpsJitter : 0));
     t.push(clock);
@@ -46,31 +56,37 @@ function synthPpg(bpm: number, fs: number, seconds: number, o: SynthOpts = {}) {
 
 function runDetector(bpm: number, fs: number, seconds: number, o: SynthOpts = {}) {
   const det = new StreamingBeatDetector();
-  det.setQualityContext(70, 0.01);
   const { x, t } = synthPpg(bpm, fs, seconds, o);
   const peakTimes: number[] = [];
+  const reasons: string[] = [];
   for (let i = 0; i < x.length; i++) {
     const r = det.process(x[i], t[i], fs);
-    if (r.isPeak) peakTimes.push(r.peakTimeMs);
+    if (r.isPeak) {
+      peakTimes.push(r.peakTimeMs);
+      reasons.push(r.reason);
+    }
   }
-  return { det, peakTimes };
+  return { det, peakTimes, reasons };
 }
 
-/**
- * Latidos esperados descontando el warm-up de ventana (~2.4 s a 30fps) y el
- * retardo de confirmación (~0.4 s), con tolerancia.
- */
-function expectBeatCount(peakTimes: number[], bpm: number, seconds: number, tol = 2.5) {
-  const usable = seconds - 3; // warm-up de ventana + confirmación
+function expectBeatCount(peakTimes: number[], bpm: number, seconds: number, tol = 2) {
+  const usable = seconds - 1.2; // warm-up mínimo de las medias móviles causales
   const expected = (bpm / 60) * usable;
   expect(peakTimes.length).toBeGreaterThanOrEqual(Math.floor(expected - tol));
-  expect(peakTimes.length).toBeLessThanOrEqual(Math.ceil(expected + tol + 1));
+  expect(peakTimes.length).toBeLessThanOrEqual(Math.ceil(expected + tol));
 }
 
-describe('StreamingBeatDetector (Elgendi fiel + emisión por confirmación)', () => {
+describe('StreamingBeatDetector (Elgendi causal incremental)', () => {
   it('detecta ~la cantidad correcta en señal limpia 72 BPM', () => {
     const { peakTimes } = runDetector(72, 30, 16);
     expectBeatCount(peakTimes, 72, 16);
+  });
+
+  it('arranca a detectar RÁPIDO (sin esperar segundos de warm-up de ventana batch)', () => {
+    const { peakTimes } = runDetector(72, 30, 4);
+    // A 72bpm en 4s hay ~4.8 latidos; con el detector causal deberían verse ≥2
+    // ya en los primeros segundos (antes exigía ventana batch de ~2.4s + confirmLag).
+    expect(peakTimes.length).toBeGreaterThanOrEqual(2);
   });
 
   it('NO produce latidos pegados (cada RR ≥ mindelay)', () => {
@@ -80,7 +96,7 @@ describe('StreamingBeatDetector (Elgendi fiel + emisión por confirmación)', ()
     }
   });
 
-  it('emisión ÚNICA: los tiempos de pico son estrictamente crecientes y sin repetición', () => {
+  it('emisión ÚNICA: tiempos de pico estrictamente crecientes', () => {
     const { peakTimes } = runDetector(72, 30, 16);
     for (let i = 1; i < peakTimes.length; i++) {
       expect(peakTimes[i]).toBeGreaterThan(peakTimes[i - 1]);
@@ -113,9 +129,24 @@ describe('StreamingBeatDetector (Elgendi fiel + emisión por confirmación)', ()
     expect(Math.abs(a.peakTimes.length - b.peakTimes.length)).toBeLessThanOrEqual(2);
   });
 
-  it('ROBUSTO a ruido (SNR bajo): no sub-detecta con noise=0.2', () => {
+  it('ROBUSTO a ruido estacionario (SNR bajo)', () => {
     const { peakTimes } = runDetector(72, 30, 18, { amp: 1, noise: 0.2, seed: 7 });
-    expectBeatCount(peakTimes, 72, 18, 3.5);
+    expectBeatCount(peakTimes, 72, 18, 3);
+  });
+
+  it('ROBUSTO a RUIDO NO ESTACIONARIO (ráfaga): no pierde latidos fuera de la ráfaga '
+    + 'ni deja de recuperarse después (causa raíz del bug de re-cómputo batch)', () => {
+    const { peakTimes } = runDetector(72, 30, 20, {
+      noise: 0.05,
+      burstAt: { fromSec: 8, toSec: 11, noise: 0.9 },
+      seed: 5,
+    });
+    // Antes de la ráfaga (0-8s) y después (12-20s) debe seguir latiendo con
+    // normalidad — el umbral causal no debe quedar "roto" por la ráfaga.
+    const before = peakTimes.filter((t) => t < 1000 + 7000);
+    const after = peakTimes.filter((t) => t > 1000 + 13000);
+    expect(before.length).toBeGreaterThanOrEqual(6);
+    expect(after.length).toBeGreaterThanOrEqual(5);
   });
 
   it('ROBUSTO a modulación respiratoria de amplitud', () => {
@@ -131,6 +162,42 @@ describe('StreamingBeatDetector (Elgendi fiel + emisión por confirmación)', ()
   it('tolera bradicardia (48 BPM) sin perder latidos', () => {
     const { peakTimes } = runDetector(48, 30, 22);
     expectBeatCount(peakTimes, 48, 22);
+  });
+
+  it('tolera taquicardia (150 BPM) sin fusionar latidos en un bloque', () => {
+    const { peakTimes } = runDetector(150, 30, 12);
+    expectBeatCount(peakTimes, 150, 12, 3);
+  });
+
+  it('DOBLE GIBA: separa dos latidos muy pegados con valle superficial (no cruza umbral)', () => {
+    // Construye directamente dos gibas dentro de una ventana angosta con un
+    // valle que NO cae por debajo del umbral (simulado con una señal sintética
+    // de dos picos separados por ~350ms con un valle a mitad de altura).
+    const det = new StreamingBeatDetector();
+    const fs = 30;
+    let clock = 1000;
+    const push = (v: number) => {
+      const r = det.process(v, clock, fs);
+      clock += 1000 / fs;
+      return r;
+    };
+    // Warm-up con latidos normales para calibrar el umbral/EMA.
+    const { x: warm, t: warmT } = synthPpg(72, fs, 6);
+    for (let i = 0; i < warm.length; i++) { det.process(warm[i], warmT[i], fs); clock = warmT[i]; }
+
+    // Dos gibas pegadas: sube, baja a mitad (no bajo el umbral), sube de nuevo, baja.
+    const shape = [0, 0.3, 0.7, 1.0, 0.7, 0.55, 0.5, 0.6, 0.9, 1.0, 0.65, 0.3, 0.05];
+    const peaksHere: number[] = [];
+    for (const v of shape) {
+      const r = push(v * 1.0 - 0.15);
+      if (r.isPeak) peaksHere.push(r.peakTimeMs);
+    }
+    // Deja que el bloque cierre.
+    for (let k = 0; k < 5; k++) {
+      const r = push(-0.2);
+      if (r.isPeak) peaksHere.push(r.peakTimeMs);
+    }
+    expect(peaksHere.length).toBeGreaterThanOrEqual(2);
   });
 
   it('reset limpia el estado', () => {
