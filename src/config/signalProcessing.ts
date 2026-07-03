@@ -140,7 +140,7 @@ export const DSP_CONSTANTS = {
  */
 export const ENVELOPE_EQ = {
   /** A/B: apagado por defecto. true = ecualiza el canal de detección. */
-  ENABLED: false,
+  ENABLED: true,
   /** Envolvente rápida SIMÉTRICA y lenta (attack≈release): casi plana dentro del
    * latido (no corre la ubicación del pico → timing RR intacto) pero varía en la
    * escala respiratoria. Un attack alto corre el pico y distorsiona el RR; por
