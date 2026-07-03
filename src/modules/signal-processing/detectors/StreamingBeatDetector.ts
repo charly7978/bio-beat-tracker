@@ -87,14 +87,14 @@ export interface StreamingBeatDetectorConfig {
 }
 
 export const STREAMING_BEAT_DEFAULTS: StreamingBeatDetectorConfig = {
-  peakWindowMs: PEAK_DETECTION_DEFAULTS.peakWindowMs,
-  beatWindowMs: PEAK_DETECTION_DEFAULTS.beatWindowMs,
-  beatOffset: PEAK_DETECTION_DEFAULTS.beatOffset,
+  peakWindowMs: 80,   // Reduced from 111ms for better high-HR support
+  beatWindowMs: 450,  // Reduced from 667ms (was > 1 RR at 150 BPM)
+  beatOffset: 0.005,  // Much lower (threshold ≈ MA_beat, almost no mean offset)
   energyMeanTauMs: 5000,
   minDelayMs: PEAK_DETECTION_DEFAULTS.peakEmitRefractoryMinMs,
   refractoryRrFrac: 0.5,
-  maxBlockMs: 900,
-  humpHysteresisFrac: 0.3,
+  maxBlockMs: 550,    // ~1.4x of max expected RR (taquicardia ~400ms), force closure before beat merge
+  humpHysteresisFrac: 0.25, // Slightly tighter to trigger double-gib more easily
 };
 
 interface RunningBoxcar {
@@ -195,8 +195,10 @@ export class StreamingBeatDetector {
 
   private effectiveMinDelayMs(): number {
     const anchorRr = this.expectedRrMs > 0 ? this.expectedRrMs : this.median(this.recentRr);
-    const adaptive = anchorRr > 0 ? anchorRr * this.cfg.refractoryRrFrac : 0;
-    return Math.max(this.cfg.minDelayMs, adaptive);
+    // Adaptive refractary: 50% of RR, but not less than the absolute minimum
+    // and not more than a reasonable maximum even if RR is erratic.
+    const adaptive = anchorRr > 0 ? Math.max(100, anchorRr * this.cfg.refractoryRrFrac) : 0;
+    return Math.max(this.cfg.minDelayMs, Math.min(adaptive, 400));
   }
 
   /**
@@ -355,8 +357,10 @@ export class StreamingBeatDetector {
     if (val <= 0 || !Number.isFinite(val) || time <= 0) {
       return { emit: false, score: 0, reason: 'NON_POSITIVE_PEAK' };
     }
-    // Ancho mínimo del bloque = peakwindow canónico (rechaza flickers de ruido).
-    if (widthMs < this.cfg.peakWindowMs * 0.6) {
+    // Ancho mínimo del bloque = fracción de peakwindow (rechaza flickers de ruido).
+    // Más lenient en high-HR: permite bloques más estrechos.
+    const minWidth = Math.max(30, this.cfg.peakWindowMs * 0.4);
+    if (widthMs < minWidth) {
       return { emit: false, score: 0, reason: 'BLOCK_TOO_NARROW' };
     }
 
