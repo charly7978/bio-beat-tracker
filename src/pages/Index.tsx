@@ -20,8 +20,7 @@ import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
 import { isNative } from "@/lib/device/platform";
 import type { ContactState } from "@/types/signal";
 import { usePerfTelemetry } from "@/hooks/usePerfTelemetry";
-import { triggerCalibrationCompleteHaptic, triggerFingerLockHaptic, triggerFingerLostHaptic } from "@/utils/haptics";
-import FingerPlacementOnboarding from "@/components/FingerPlacementOnboarding";
+import { triggerCalibrationCompleteHaptic } from "@/utils/haptics";
 import { createLogger } from "@/utils/logger";
 
 const log = createLogger('Index');
@@ -202,21 +201,6 @@ const Index = () => {
       cameraRef.current?.optimizeForFinger?.(lastRawRedRef.current);
     }
   }, [lastSignal?.contactState]);
-
-  // Feedback háptico de colocación: confirma con vibración cuando el contacto
-  // se vuelve estable, y avisa si se pierde en medio de una medición, para que
-  // el usuario no dependa solo de la vista para saber si está bien puesto.
-  const wasStableContactRef = useRef(false);
-  useEffect(() => {
-    const cs = lastSignal?.contactState;
-    const isStable = cs === 'STABLE_CONTACT';
-    if (isStable && !wasStableContactRef.current) {
-      triggerFingerLockHaptic().catch(() => undefined);
-    } else if (!isStable && wasStableContactRef.current && session.isMonitoring) {
-      triggerFingerLostHaptic().catch(() => undefined);
-    }
-    wasStableContactRef.current = isStable;
-  }, [lastSignal?.contactState, session.isMonitoring]);
 
   // Sincronizar resultados post-medición
   useEffect(() => {
@@ -796,9 +780,6 @@ const Index = () => {
           />
         </div>
 
-        {/* TUTORIAL DE COLOCACIÓN DEL DEDO (una sola vez) */}
-        {session.isFullscreen && <FingerPlacementOnboarding />}
-
         {/* AJUSTES */}
         <button
           type="button"
@@ -856,7 +837,6 @@ const Index = () => {
               onStartMeasurement={handleToggleMonitoring}
               onReset={handleReset}
               isMonitoring={session.isMonitoring}
-              getVideoElement={() => cameraRef.current?.getVideoElement?.() ?? null}
               arrhythmiaStatus={router.vitalSigns.arrhythmia.value?.status ?? ''}
               rawArrhythmiaData={router.lastArrhythmiaData.current}
               preserveResults={session.showResults}

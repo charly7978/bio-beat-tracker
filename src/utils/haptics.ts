@@ -74,43 +74,6 @@ export async function triggerSessionStartHaptic(): Promise<void> {
 }
 
 /**
- * Vibración corta y suave: se confirma que el dedo quedó bien colocado y el
- * contacto es estable (transición a STABLE_CONTACT). Refuerzo háptico para que
- * el usuario no dependa solo de la vista para saber que "ya está".
- */
-export async function triggerFingerLockHaptic(): Promise<void> {
-  try {
-    await Haptics.impact({ style: ImpactStyle.Light });
-  } catch {
-    try {
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        navigator.vibrate(35);
-      }
-    } catch {
-      logWarn(HAPTICS_SCOPE, 'Vibrate fallback failed for finger lock');
-    }
-  }
-}
-
-/**
- * Vibración doble y corta: se perdió el contacto estable del dedo durante una
- * medición en curso, para alertar sin necesidad de mirar la pantalla.
- */
-export async function triggerFingerLostHaptic(): Promise<void> {
-  try {
-    await Haptics.impact({ style: ImpactStyle.Medium });
-  } catch {
-    try {
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        navigator.vibrate([40, 60, 40]);
-      }
-    } catch {
-      logWarn(HAPTICS_SCOPE, 'Vibrate fallback failed for finger lost');
-    }
-  }
-}
-
-/**
  * Activa una vibración especial para indicar que la sesión de monitoreo finalizó correctamente.
  */
 export async function triggerSessionEndHaptic(): Promise<void> {
@@ -123,42 +86,6 @@ export async function triggerSessionEndHaptic(): Promise<void> {
       }
     } catch {
       logWarn(HAPTICS_SCOPE, 'Vibrate fallback failed for session end');
-    }
-  }
-}
-
-/**
- * Vibración de confirmación: el dedo está PERFECTAMENTE posicionado y centrado
- * en el círculo guía. Feedback táctil suave pero claro para indicar la posición óptima.
- */
-export async function triggerPerfectPositioningHaptic(): Promise<void> {
-  try {
-    await Haptics.impact({ style: ImpactStyle.Light });
-  } catch {
-    try {
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        navigator.vibrate(30);
-      }
-    } catch {
-      logWarn(HAPTICS_SCOPE, 'Vibrate fallback failed for perfect positioning');
-    }
-  }
-}
-
-/**
- * Vibración de alerta: el dedo se salió del área óptima del círculo guía.
- * Feedback táctil para alertar que necesita reajustar la posición.
- */
-export async function triggerPositioningAdjustmentHaptic(): Promise<void> {
-  try {
-    await Haptics.impact({ style: ImpactStyle.Medium });
-  } catch {
-    try {
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        navigator.vibrate([40, 40]);
-      }
-    } catch {
-      logWarn(HAPTICS_SCOPE, 'Vibrate fallback failed for positioning adjustment');
     }
   }
 }

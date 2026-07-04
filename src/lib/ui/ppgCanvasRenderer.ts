@@ -350,8 +350,6 @@ export interface PpgRenderState {
   traceRevealed: boolean;
   /** Fuerza pulsátil real [0..1]: comprime la altura de la onda (objeto inerte → plana). */
   signalStrength: number;
-  /** Opacidad actual del "vidrio" del monitor [0..1] (ver drawBackground/cameraPeek). */
-  monitorOpacity?: number;
   /**
    * Capa de presentación 3D (perspectiva pura en canvas 2D). Si `enabled`, la grilla
    * se dibuja como piso en perspectiva y la onda como cinta extruida. La onda reusa
@@ -360,123 +358,14 @@ export interface PpgRenderState {
   threeD?: { enabled: boolean; intensity?: number };
 }
 
-/**
- * Fondo del monitor. `monitorOpacity` (0..1) permite que la cámara trasera se
- * asome "detrás del vidrio" del monitor (efecto esmerilado): 0 = cámara a la
- * vista completa (para apuntar el dedo), 1 = monitor opaco tradicional. Se usa
- * un gradiente radial en vez de un relleno plano para que el centro (zona del
- * dedo) sea algo más transparente que los bordes, sin sacrificar la lectura de
- * los paneles (header/métricas/footer pintan su propio fondo semi-opaco encima).
- */
-export function drawBackground(
-  ctx: CanvasRenderingContext2D,
-  W: number,
-  H: number,
-  monitorOpacity: number = 1,
-): void {
-  // Con alpha:true el canvas no se resetea solo entre frames: si no se limpia
-  // aquí, los rellenos semi-transparentes de cada frame se van acumulando unos
-  // sobre otros y el "vidrio" termina viéndose opaco al cabo de pocos segundos.
-  ctx.clearRect(0, 0, W, H);
-
-  const op = Math.max(0, Math.min(1, monitorOpacity));
-  const edgeAlpha = op;
-  const centerAlpha = Math.max(0, op - 0.14);
-
-  const cx = W / 2;
-  const cy = H * 0.52;
-  const radius = Math.max(W, H) * 0.65;
-  const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
-  gradient.addColorStop(0, `rgba(6, 9, 15, ${centerAlpha})`);
-  gradient.addColorStop(1, `rgba(2, 4, 9, ${edgeAlpha})`);
-  ctx.fillStyle = gradient;
+export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: number): void {
+  ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, W, H);
 
   ctx.fillStyle = COLORS.SCANLINE;
   for (let y = 0; y < H; y += 3) {
     ctx.fillRect(0, y, W, 1);
   }
-}
-
-/**
- * Anillo guía de colocación del dedo. A diferencia de un círculo decorativo,
- * su posición y radio (`geometry`) están mapeados 1:1 a los píxeles REALES
- * que el algoritmo muestrea (ver `computeRoiScreenRect` en `cameraPeek.ts`,
- * que replica el ROI cuadrado de `PPGSignalProcessor.ts` a través del recorte
- * `object-fit: cover` del `<video>`). Si no hay geometría real disponible
- * todavía (metadata del video no cargó), cae a un círculo centrado en el
- * panel como aproximación razonable. Color/pulso/leyenda traducen el estado
- * ya calculado por el pipeline (contactState/placementStable/acquisitionStage)
- * en una señal continua: solo pasa a verde con "¡Perfecto! Quedate quieto"
- * cuando el dedo REALMENTE está sostenido en esa posición exacta.
- */
-export function drawFingerGuideRing(
-  ctx: CanvasRenderingContext2D,
-  state: PpgRenderState,
-  guide: { guideLevel: string; guideColor: string; glowColor: string; caption: string },
-  geometry?: { cx: number; cy: number; r: number } | null,
-): void {
-  if (guide.guideLevel === 'ready') return;
-  const { plot } = state.layout;
-  const fallbackCx = plot.x + plot.w / 2;
-  const fallbackCy = plot.y + plot.h * 0.42;
-  const fallbackR = Math.min(plot.w, plot.h) * 0.24;
-
-  const cx = geometry?.cx ?? fallbackCx;
-  const cy = geometry?.cy ?? fallbackCy;
-  const baseR = geometry?.r ?? fallbackR;
-  const isPerfect = guide.guideLevel === 'perfect';
-  const pulse = (Math.sin(state.now / (isPerfect ? 900 : 550)) + 1) / 2;
-  const r = baseR + pulse * (isPerfect ? 2 : 6);
-
-  ctx.save();
-
-  ctx.beginPath();
-  ctx.arc(cx, cy, r * 1.35, 0, Math.PI * 2);
-  ctx.fillStyle = guide.glowColor;
-  ctx.fill();
-
-  if (isPerfect) {
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = guide.guideColor;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // Check central: refuerzo visual inequívoco de "ahí, exactamente ahí".
-    ctx.strokeStyle = guide.guideColor;
-    ctx.lineWidth = 4;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(cx - r * 0.32, cy + r * 0.02);
-    ctx.lineTo(cx - r * 0.08, cy + r * 0.26);
-    ctx.lineTo(cx + r * 0.34, cy - r * 0.28);
-    ctx.stroke();
-  } else {
-    ctx.setLineDash([10, 8]);
-    ctx.lineDashOffset = -(state.now / 30) % 18;
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = guide.guideColor;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  if (guide.caption) {
-    ctx.font = `bold 12px ${FONT_MONO}`;
-    ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(2, 6, 12, 0.55)';
-    const textY = Math.min(cy + r + 26, plot.y + plot.h - 10);
-    const metrics = ctx.measureText(guide.caption);
-    const padX = 10;
-    ctx.fillRect(cx - metrics.width / 2 - padX, textY - 14, metrics.width + padX * 2, 20);
-    ctx.fillStyle = guide.guideColor;
-    ctx.fillText(guide.caption, cx, textY);
-  }
-
-  ctx.restore();
 }
 
 export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
@@ -945,40 +834,33 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   // Reusa las MISMAS coords honestas → forma, amplitud y tiempo idénticos al 2D.
   drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
 
-  // El tachograma y el panel de ritmo clínico solo tienen sentido con dedo
-  // detectado: sin contacto, `buildRhythmPanel` cae en su estado por defecto
-  // ("RITMO SINUSAL REGULAR") sin datos reales detrás, lo cual es engañoso.
-  // Además, al ocultarlos aquí, la ventana de previsualización de cámara
-  // (fondo semi-transparente + anillo guía) queda visible mientras se busca
-  // el dedo, en vez de taparse con un panel opaco sin información real.
-  if (p.isFingerDetected) {
-    // Tachogram (panel clínico: 2D en ambos modos)
-    const tachoY = plot.y + plot.h - RR_TACHO_H + 4;
-    ctx.fillStyle = 'rgba(8, 14, 26, 0.85)';
-    ctx.fillRect(plot.x + 2, tachoY - 4, plot.w - 4, RR_TACHO_H);
-    ctx.font = `bold 8px ${FONT_MONO}`;
-    ctx.fillStyle = COLORS.TEXT_DIM;
-    ctx.textAlign = 'left';
-    ctx.fillText('TACHOGRAMA RR (IBI)', plot.x + 8, tachoY + 8);
 
-    const rhythm = buildRhythmPanel(p.arrhythmiaStatus, p.arrhythmiaCount ?? 0, p.rrIntervals ?? [], state.hrv);
-    const panelH = 56;
-    const panelY = plot.y + 8;
-    ctx.fillStyle = 'rgba(8, 14, 26, 0.88)';
-    ctx.strokeStyle = rhythm.level === 'danger' ? 'rgba(239, 68, 68, 0.55)' : rhythm.level === 'warn' ? 'rgba(245, 158, 11, 0.45)' : 'rgba(34, 197, 94, 0.35)';
-    ctx.lineWidth = 1;
-    ctx.fillRect(plot.x + 8, panelY, Math.min(plot.w - 16, 340), panelH);
-    ctx.strokeRect(plot.x + 8, panelY, Math.min(plot.w - 16, 340), panelH);
-    ctx.textAlign = 'left';
-    ctx.font = `bold 11px ${FONT_MONO}`;
-    ctx.fillStyle = levelColor(rhythm.level);
-    ctx.fillText(rhythm.title, plot.x + 16, panelY + 16);
-    ctx.font = `9px ${FONT_MONO}`;
-    ctx.fillStyle = '#cbd5e1';
-    ctx.fillText(rhythm.detail, plot.x + 16, panelY + 30);
-    ctx.fillStyle = '#94a3b8';
-    ctx.fillText(rhythm.guidance, plot.x + 16, panelY + 44);
-  }
+  // Tachogram (panel clínico: 2D en ambos modos)
+  const tachoY = plot.y + plot.h - RR_TACHO_H + 4;
+  ctx.fillStyle = 'rgba(8, 14, 26, 0.85)';
+  ctx.fillRect(plot.x + 2, tachoY - 4, plot.w - 4, RR_TACHO_H);
+  ctx.font = `bold 8px ${FONT_MONO}`;
+  ctx.fillStyle = COLORS.TEXT_DIM;
+  ctx.textAlign = 'left';
+  ctx.fillText('TACHOGRAMA RR (IBI)', plot.x + 8, tachoY + 8);
+
+  const rhythm = buildRhythmPanel(p.arrhythmiaStatus, p.arrhythmiaCount ?? 0, p.rrIntervals ?? [], state.hrv);
+  const panelH = 56;
+  const panelY = plot.y + 8;
+  ctx.fillStyle = 'rgba(8, 14, 26, 0.88)';
+  ctx.strokeStyle = rhythm.level === 'danger' ? 'rgba(239, 68, 68, 0.55)' : rhythm.level === 'warn' ? 'rgba(245, 158, 11, 0.45)' : 'rgba(34, 197, 94, 0.35)';
+  ctx.lineWidth = 1;
+  ctx.fillRect(plot.x + 8, panelY, Math.min(plot.w - 16, 340), panelH);
+  ctx.strokeRect(plot.x + 8, panelY, Math.min(plot.w - 16, 340), panelH);
+  ctx.textAlign = 'left';
+  ctx.font = `bold 11px ${FONT_MONO}`;
+  ctx.fillStyle = levelColor(rhythm.level);
+  ctx.fillText(rhythm.title, plot.x + 16, panelY + 16);
+  ctx.font = `9px ${FONT_MONO}`;
+  ctx.fillStyle = '#cbd5e1';
+  ctx.fillText(rhythm.detail, plot.x + 16, panelY + 30);
+  ctx.fillStyle = '#94a3b8';
+  ctx.fillText(rhythm.guidance, plot.x + 16, panelY + 44);
 
   if (p.isMonitoring) {
     ctx.fillStyle = 'rgba(239, 68, 68, 0.85)';

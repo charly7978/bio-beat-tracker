@@ -145,12 +145,8 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
-  // Fondo detrás de la grilla. Usa la misma opacidad que el fondo general del
-  // monitor (`monitorOpacity`, ver ppgCanvasRenderer.drawBackground) para no
-  // tapar por completo la ventana de previsualización de cámara que se asoma
-  // "detrás del vidrio" mientras se busca/ajusta la colocación del dedo.
-  const floorOpacity = state.monitorOpacity ?? 1;
-  ctx.fillStyle = `rgba(0, 0, 0, ${Math.max(0, Math.min(1, floorOpacity))})`;
+  // Fondo NEGRO sólido detrás de la grilla.
+  ctx.fillStyle = '#000000';
   ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
 
   // Línea de horizonte (tenue, marca el punto de fuga).
