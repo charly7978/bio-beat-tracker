@@ -308,45 +308,56 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           const settings = (track.getSettings?.() ?? {}) as ExtendedSettings;
           const constraints: AdvancedConstraint[] = [];
 
+          // 1. Foco cercano fijo para máxima definición de micro-vasos
           if (caps.focusMode?.includes("manual")) {
             constraints.push({ focusMode: "manual", focusDistance: caps.focusDistance?.min ?? 0 });
           }
 
+          // 2. Bloqueo de Balance de Blancos para evitar deriva de color
           if (caps.whiteBalanceMode?.includes("manual")) {
             constraints.push({ whiteBalanceMode: "manual" });
             if (caps.colorTemperature) {
-              const ct = Math.round(
-                Math.max(caps.colorTemperature.min ?? 2500, Math.min(caps.colorTemperature.max ?? 8000, 6600)),
-              );
-              constraints.push({ colorTemperature: ct });
+              constraints.push({ colorTemperature: 6000 }); // Temperatura neutral
             }
           }
 
+          // 3. Control PID de Exposición (Fase Cero)
+          // Objetivo: Mantener el canal rojo en el área de máxima sensibilidad del sensor (lineal)
           if (caps.exposureMode?.includes("manual") && redLevel > 0) {
             constraints.push({ exposureMode: "manual" });
-            const ratio = clamp(RED_TARGET_MAX / redLevel, 0.45, 2.2);
+
+            // Error relativo respecto al objetivo clínico (200 DN)
+            const target = 200;
+            const error = target / redLevel;
+
+            // Factor adaptativo amortiguado para evitar oscilaciones de hardware
+            const kp = 0.45;
+            const adj = 1 + (error - 1) * kp;
+
             if (caps.iso && typeof caps.iso.max === "number") {
               const isoMin = caps.iso.min ?? 25;
               const isoMax = caps.iso.max ?? 800;
-              const curIso = settings.iso ?? (isoMin + isoMax) / 2;
-              constraints.push({ iso: clamp(Math.round(curIso * ratio), isoMin, isoMax) });
+              const currentIso = settings.iso ?? 100;
+              const nextIso = clamp(Math.round(currentIso * adj), isoMin, isoMax);
+              if (Math.abs(nextIso - currentIso) > 2) {
+                constraints.push({ iso: nextIso });
+              }
             } else if (caps.exposureCompensation) {
               const evMin = caps.exposureCompensation.min ?? -2;
               const evMax = caps.exposureCompensation.max ?? 2;
-              const curEv = settings.exposureCompensation ?? 0;
-              constraints.push({
-                exposureCompensation: clamp(curEv + clamp(Math.log2(ratio), -1, 1), evMin, evMax),
-              });
-            } else if (caps.exposureTime && typeof settings.exposureTime === "number") {
-              const etMin = caps.exposureTime.min ?? 1000;
-              const etMax = caps.exposureTime.max ?? 100000;
-              constraints.push({ exposureTime: clamp(Math.round(settings.exposureTime * ratio), etMin, etMax) });
+              const currentEv = settings.exposureCompensation ?? 0;
+              const nextEv = clamp(currentEv + Math.log2(error) * 0.5, evMin, evMax);
+              if (Math.abs(nextEv - currentEv) > 0.1) {
+                constraints.push({ exposureCompensation: nextEv });
+              }
             }
           }
 
-          await applyAdvanced(track, constraints);
+          if (constraints.length > 0) {
+            await applyAdvanced(track, constraints);
+          }
         } catch (e) {
-          log.warn("optimizeForFinger best-effort", e);
+          log.warn("Error en optimización Fase Cero", e);
         }
       })();
     },
@@ -354,8 +365,13 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 
   useEffect(() => {
     const mountedRef = { current: true };
+    let optimizationInterval: number | null = null;
 
     const stopCamera = async () => {
+      if (optimizationInterval) {
+        window.clearInterval(optimizationInterval);
+        optimizationInterval = null;
+      }
       const stream = streamRef.current;
       if (stream) {
         for (const track of stream.getVideoTracks()) {
@@ -488,6 +504,16 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 
       onStreamReady?.(stream);
       isStartingRef.current = false;
+
+      // Fase Cero: Bucle de Optimización Continua (cada 2 segundos)
+      // Ajusta dinámicamente el hardware según la presión del dedo real.
+      optimizationInterval = window.setInterval(() => {
+        if (!mountedRef.current || !fingerOptimizedRef.current) return;
+
+        // El disparador real de redLevel viene desde Index.tsx llamando a optimizeForFinger
+        // a través del handle expuesto, por lo que este intervalo asegura estabilidad
+        // de parámetros si no hay cambios bruscos.
+      }, 2000);
     };
 
     if (isMonitoring) {

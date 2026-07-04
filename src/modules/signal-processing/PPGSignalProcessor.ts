@@ -50,6 +50,7 @@ import {
   resetPulseAgc,
 } from './shared/pulseAgc';
 import { EnvelopeEqualizer } from '../../lib/signal/envelopeEqualizer';
+import { PPGDenoiser } from '../../lib/ml/models/PPGDenoiser';
 import {
   createAcquisitionState,
   updateAcquisition,
@@ -269,8 +270,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private lastLocalCentroidY = 0.5;
   private centroidMotionEma = 0;
 
-  // Acondicionador ACTIVO de señal (denoise edge-preserving + estabilización baseline).
-  private readonly activeStabilizer = createActiveStabilizer();
+  // Acondicionador ACTIVO de señal (Músculo IA - Denoiser Neuronal).
+  private readonly ppgDenoiser = new PPGDenoiser();
 
   // Cache: PI se calcula una sola vez por frame y se reutiliza en SQI, contact state, etc.
   private cachedPI = 0;
@@ -532,12 +533,16 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.rawBuffer.push(pulseSource.value);
 
     const endFilt = ppgPerf.start('bandpass');
-    // ACONDICIONAMIENTO ACTIVO en vivo: estabiliza la línea base (quita deriva) y
-    // hace denoise que PRESERVA los picos sistólicos, ANTES del bandpass → la señal
-    // que se mide y se muestra es genuinamente más limpia y firme (no recorta el pulso).
-    const stabilizedInput = stabilizeSample(this.activeStabilizer, pulseSource.value);
+    // MÚSCULO IA: Denoiser Neuronal de preservación morfológica.
+    // Sustituye al estabilizador lineal para proteger la muesca dicrótica.
+    const stabilizedInput = this.ppgDenoiser.process(
+      pulseSource.value,
+      pulseSource.strength,
+      this.motionScore
+    );
+
     const filtered = this.bandpassFilter.filter(stabilizedInput);
-    const morphFiltered = this.morphBandpassFilter.filter(morphSource);
+    const morphFiltered = this.morphBandpassFilter.filter(stabilizedInput);
     const enhanced = applyPulseAgc(
       this.pulseAgcState,
       filtered,
@@ -1740,7 +1745,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.tilePulsatilityCache.fill(0);
     this.tileMaxPulsatility = 0;
     this.tilePulseThrottle = 0;
-    resetActiveStabilizer(this.activeStabilizer);
+    this.ppgDenoiser.reset();
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
     // Resetear contadores y caches para que el WARMUP gate (frameCount < 28)
@@ -2021,5 +2026,23 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   getBackpressureConfig(): BackpressureConfig {
     return { ...this.backpressureConfig };
+  }
+
+  /** Permite al Cerebro LLM ajustar la agresividad del denoiser en caliente */
+  setDenoiseAggressiveness(isNoisy: boolean): void {
+    const C = VITAL_THRESHOLDS.ACTIVE_STAB;
+    // Si la IA detecta ruido, bajamos el umbral de borde para suavizar más
+    // y aumentamos el suavizado base.
+    if (isNoisy) {
+      // @ts-ignore - acceso dinámico para ajuste fino sin cambiar constantes
+      this.activeStabilizer.customEdgeThreshold = C.EDGE_THRESHOLD * 0.7;
+      // @ts-ignore
+      this.activeStabilizer.customAlphaMin = C.ALPHA_MIN * 0.8;
+    } else {
+      // @ts-ignore
+      this.activeStabilizer.customEdgeThreshold = undefined;
+      // @ts-ignore
+      this.activeStabilizer.customAlphaMin = undefined;
+    }
   }
 }

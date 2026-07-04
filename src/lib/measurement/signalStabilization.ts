@@ -27,6 +27,9 @@ export interface StabilizationSample {
   /** Movimiento (IMU + señal) 0..~2. */
   motionScore: number;
   nowMs: number;
+  /** Veredicto opcional del Cerebro LLM */
+  brainVerdict?: import('../ml/SignalBrain').SignalVerdict;
+  brainConfidence?: number;
 }
 
 export interface StabilizationState {
@@ -159,13 +162,42 @@ export function updateStabilization(
     if (v > bmax) bmax = v;
   }
   const spread = n > 0 ? bmax - bmin : Infinity;
+
+  // Criterio de convergencia matemático básico
   const converged =
     n >= minSamples && span >= minWindowMs && spread <= bpmSpreadMax;
+
+  // Criterio de Calidad Sostenida
   const qualitySustained = state.qualityStreak >= qualityDwellFrames;
 
-  if (converged && qualitySustained) state.stabilized = true; // latch
+  // SUPERVISIÓN POR IA (Cerebro Llama 3.2)
+  // La estabilización ya no es un timer; es un veredicto de veracidad clínica.
+  let brainAllow = true;
+  let brainPenalty = 0;
+  let brainReason = '';
 
-  // 6) Progreso = el PEOR de los criterios (eslabón débil) → honesto.
+  if (s.brainVerdict === 'NOISE_ARTIFACT') {
+    brainAllow = false;
+    brainReason = 'IA: ARTEFACTO DETECTADO';
+    brainPenalty = 0.05; // Retroceso físico de la barra
+  } else if (s.brainVerdict === 'FAKE_SIGNAL') {
+    brainAllow = false;
+    brainReason = 'IA: SEÑAL NO HUMANA';
+    brainPenalty = 0.15; // Penalización severa
+  } else if (s.brainVerdict === 'UNCERTAIN') {
+    brainAllow = false;
+    brainReason = 'IA: ANALIZANDO VERACIDAD...';
+    brainPenalty = 0.01;
+  }
+
+  if (converged && qualitySustained && brainAllow) {
+    state.stabilized = true;
+  } else {
+    // Si la IA detecta fraude o ruido, impedimos el Latch de estabilidad
+    state.stabilized = false;
+  }
+
+  // 6) Progreso Honesto (No Monótono)
   let target: number;
   let reason: string;
   if (state.stabilized) {
@@ -176,13 +208,17 @@ export function updateStabilization(
     const pSamples = clamp01(n / minSamples);
     const pConv = n >= 4 ? clamp01(1 - (spread - bpmSpreadMax) / (bpmSpreadMax * 2)) : 0;
     const pQual = clamp01(state.qualityStreak / qualityDwellFrames);
-    target = Math.min(pSpan, pSamples, pConv, pQual);
-    reason =
+
+    // El objetivo se reduce por la penalización de la IA
+    target = Math.max(0, Math.min(pSpan, pSamples, pConv, pQual) - brainPenalty);
+
+    reason = brainReason || (
       pQual <= pConv && pQual <= pSpan && pQual <= pSamples
         ? 'WAIT_QUALITY'
         : pConv <= pSpan && pConv <= pSamples
           ? 'WAIT_CONVERGENCE'
-          : 'WAIT_BEATS';
+          : 'WAIT_BEATS'
+    );
   }
 
   // Suavizado del progreso (sube algo más rápido de lo que baja).

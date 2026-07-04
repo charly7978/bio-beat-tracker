@@ -26,6 +26,7 @@ import {
 import { createDefaultVitalSignsResult } from '@/lib/vitals/defaultVitalSignsResult';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import { VitalsSanityChecker } from '@/lib/sanity/vitalsSanity';
+import { signalBrain, type BrainReasoning } from '@/lib/ml/SignalBrain';
 import {
   getActiveProfileId,
   getCustomOverrides,
@@ -154,6 +155,9 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   // mantiene durante toda la sesión de contacto.
   const acqReadyLatchRef = useRef(false);
   const stabilizationRef = useRef(createStabilizationState());
+  const lastBrainReasoningRef = useRef<BrainReasoning | null>(null);
+  const brainAuditIntervalRef = useRef<number | null>(null);
+
   // Buffer elástico de "buenos frames" para colocación robusta: desacopla el
   // ritmo de captura del de consumo y aporta una COBERTURA suavizada por
   // ventana (goodCoverage) tolerante a microdescuadres. Solo alimenta la UX de
@@ -200,10 +204,17 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   // Cleanup: cancela cualquier timer pendiente al desmontar para evitar
   // setBeatMarker sobre un componente desmontado.
   useEffect(() => {
+    // Inicializar Cerebro IA con Llama 3.2 1B (Máxima potencia de razonamiento clínico)
+    void signalBrain.initialize();
+
     return () => {
       if (beatMarkerTimerRef.current) {
         window.clearTimeout(beatMarkerTimerRef.current);
         beatMarkerTimerRef.current = null;
+      }
+      if (brainAuditIntervalRef.current) {
+        window.clearInterval(brainAuditIntervalRef.current);
+        brainAuditIntervalRef.current = null;
       }
     };
   }, []);
@@ -449,6 +460,30 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const bpmOut =
       hasUsableContact && fingerConfirmed && bpmLive > 0 ? bpmLive : 0;
 
+    // Auditoría periódica por el Cerebro LLM (cada 3 segundos)
+    if (hasUsableContact && bpmLive > 0 && !brainAuditIntervalRef.current) {
+      brainAuditIntervalRef.current = window.setInterval(async () => {
+        if (!hasUsableContact || bpmLive <= 0) return;
+
+        const reasoning = await signalBrain.auditSignal({
+          bpm: bpmLive,
+          sqi: rawSqi,
+          pi: lastSignal.perfusionIndex ?? 0,
+          periodicity: typeof sqm.periodicity === 'number' ? sqm.periodicity : 0,
+          motion: typeof sqm.motionScore === 'number' ? sqm.motionScore : 0,
+          snr: typeof sqm.snr === 'number' ? sqm.snr : 0,
+          skewness: typeof sqm.skewness === 'number' ? sqm.skewness : undefined,
+        });
+
+        lastBrainReasoningRef.current = reasoning;
+        log.info(`LLM Reasoning: ${reasoning.verdict} - ${reasoning.thought}`);
+      }, 3000);
+    } else if (!hasUsableContact && brainAuditIntervalRef.current) {
+      window.clearInterval(brainAuditIntervalRef.current);
+      brainAuditIntervalRef.current = null;
+      lastBrainReasoningRef.current = null;
+    }
+
     // ESTABILIZACIÓN POR CONVERGENCIA (criterio REAL, reemplaza el warm-up fijo).
     // La señal está estable cuando la LECTURA DE HR convergió (dejó de moverse) y
     // la calidad se sostiene — el tiempo lo dicta la señal, no un reloj. Robusto a
@@ -462,6 +497,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       periodicity: typeof sqm.periodicity === 'number' ? sqm.periodicity : 0,
       motionScore: typeof sqm.motionScore === 'number' ? sqm.motionScore : 0,
       nowMs: nowT,
+      brainVerdict: lastBrainReasoningRef.current?.verdict,
+      brainConfidence: lastBrainReasoningRef.current?.confidence,
     });
     if (stab.stabilized) acqReadyLatchRef.current = true;
     const acqStabilized = acqReadyLatchRef.current;
@@ -473,6 +510,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     md.acquisitionStage = hasUsableContact ? stab.stage : 'SEARCHING';
     md.acquisitionProgress = stab.progress;
     md.stabilizationReason = stab.reason;
+    md.brainThought = lastBrainReasoningRef.current?.thought;
+    md.brainVerdict = lastBrainReasoningRef.current?.verdict;
 
     // Buffer elástico de colocación: calidad de contacto por frame (primitiva ya
     // probada) → reservorio → cobertura suavizada tolerante a microdescuadres.
@@ -551,6 +590,31 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     if (hasUsableContact && lastPeakTimestampRef.current > 0) {
       const elapsed = nowT - lastPeakTimestampRef.current;
       const ampScale = lastPeakAmplitudeRef.current;
+
+      const maxPeak = 10.0 * ampScale;
+      const minPeak = -4.0 * ampScale;
+      const peakRange = maxPeak - minPeak; // 14.0 * ampScale
+
+      // EEG-style heartbeat spike:
+      // 0ms: reached maximum peak (+10.0 * scale) at the exact moment of peak detection
+      // 0ms - 60ms: instant descent from maxPeak to minPeak (below baseline)
+      // 60ms - 170ms: return from minPeak to 0.0
+      // > 170ms: rest at 0.0
+      if (elapsed >= 0 && elapsed < 60) {
+        const t = elapsed / 60;
+        eegValue = maxPeak - t * peakRange;
+      } else if (elapsed >= 60 && elapsed < 170) {
+        const t = (elapsed - 60) / 110;
+        eegValue = minPeak + t * Math.abs(minPeak);
+      } else {
+        eegValue = 0.0;
+      }
+    }
+
+    let eegValue = 0;
+    if (hasUsableContact && lastPeakTimestampRef.current > 0) {
+      const elapsed = nowT - lastPeakTimestampRef.current;
+      const ampScale = lastPeakAmplitudeRef.current;
       
       const maxPeak = 8.0 * ampScale;
       const minPeak = -3.2 * ampScale;
@@ -575,6 +639,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const showWaveform = hasUsableContact;
 
     if (ppgMeterRef?.current) {
+      // Revertido: mantenemos la onda estilo EEG estética original por petición del usuario.
       ppgMeterRef.current.pushSignal(showWaveform ? eegValue : 0, Date.now());
     }
 

@@ -51,9 +51,14 @@ export function stabilizeSample(state: ActiveStabilizerState, x: number): number
   //    recibe ALPHA_MIN (más suavizado que lineal); bordes (ad ≫ midpoint) reciben
   //    alpha→1 (mejor seguimiento de flancos). Transición más nítida que lineal.
   const delta = detrended - state.ema;
-  const ad = Math.abs(delta) / Math.max(1e-9, C.EDGE_THRESHOLD);
+  // @ts-ignore
+  const edgeThreshold = state.customEdgeThreshold ?? C.EDGE_THRESHOLD;
+  // @ts-ignore
+  const alphaMin = state.customAlphaMin ?? C.ALPHA_MIN;
+
+  const ad = Math.abs(delta) / Math.max(1e-9, edgeThreshold);
   const sigmoid = 1 / (1 + Math.exp(-6 * (ad - 0.5)));
-  const alpha = C.ALPHA_MIN + (1 - C.ALPHA_MIN) * sigmoid;
+  const alpha = alphaMin + (1 - alphaMin) * sigmoid;
   state.ema = state.ema * (1 - alpha) + detrended * alpha;
   return state.ema;
 }

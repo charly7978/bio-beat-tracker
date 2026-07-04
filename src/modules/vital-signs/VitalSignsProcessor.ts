@@ -267,15 +267,10 @@ export class VitalSignsProcessor {
     if (rrData?.intervals && rrData.intervals.length > 0) {
       this.lastRrIntervals = rrData.intervals;
     }
-
     // Canal 2 (SpO2 AC/DC): si disponible, actualiza rgbData con los canales limpios del splitter
     if (splitterChannels?.spo2Channels) {
       const { acRed, dcRed, acGreen, dcGreen, acBlue, dcBlue } = splitterChannels.spo2Channels;
       if (dcRed > 0 && dcGreen > 0) {
-        // RGBData usa redAC/redDC/greenAC/greenDC (no acRed/dcRed). El canal AZUL
-        // del splitter (banda 0.5–3.5 Hz limpia + DEMA-DC) es usado por SpO2Calculator
-        // para la PI azul y como referencia espectral — fuente única vs. el rgbData
-        // pre-existente (que venía de la cámara sin filtrar).
         const hasBlue =
           typeof acBlue === 'number' && Number.isFinite(acBlue) &&
           typeof dcBlue === 'number' && Number.isFinite(dcBlue) && dcBlue > 0;
@@ -289,19 +284,22 @@ export class VitalSignsProcessor {
         };
       }
     }
-    // Control de calibración
-    if (this.isCalibrating) {
-      this.calibrationSamples++;
-      if (this.calibrationSamples >= this.CALIBRATION_REQUIRED) {
-        this.isCalibrating = false;
-      }
-    }
 
     const effectiveSqi = Math.max(
       signalQuality,
       sqmBundle?.sqi ?? 0,
       this.lastSqmBundle?.sqi ?? 0,
     );
+
+    // Control de calibración HONESTO: solo avanza si la señal es usable.
+    // Se elimina el conteo de frames ciego. La calibración ahora es un estado de confianza.
+    if (this.isCalibrating && SignalQualityIndex.isAdequateForLiveVitals(effectiveSqi, perfusionIndexFromPpg ?? 0)) {
+      this.calibrationSamples++;
+      if (this.calibrationSamples >= this.CALIBRATION_REQUIRED) {
+        this.isCalibrating = false;
+      }
+    }
+
     this.measurements.signalQuality = effectiveSqi;
     if (sqmBundle) {
       this.lastSqmBundle = SignalQualityIndex.enrichMetrics(
