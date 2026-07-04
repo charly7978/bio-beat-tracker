@@ -846,22 +846,57 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.fillText('TACHOGRAMA RR (IBI)', plot.x + 8, tachoY + 8);
 
   const rhythm = buildRhythmPanel(p.arrhythmiaStatus, p.arrhythmiaCount ?? 0, p.rrIntervals ?? [], state.hrv);
-  const panelH = 56;
+
+  // --- IA TRUTH CONSOLE (Pensamientos de Llama 3.2) ---
+  const brainThought = (p.diagnostics as any)?.brainThought;
+  const brainVerdict = (p.diagnostics as any)?.brainVerdict;
+
+  const panelH = brainThought ? 82 : 56;
   const panelY = plot.y + 8;
-  ctx.fillStyle = 'rgba(8, 14, 26, 0.88)';
-  ctx.strokeStyle = rhythm.level === 'danger' ? 'rgba(239, 68, 68, 0.55)' : rhythm.level === 'warn' ? 'rgba(245, 158, 11, 0.45)' : 'rgba(34, 197, 94, 0.35)';
-  ctx.lineWidth = 1;
-  ctx.fillRect(plot.x + 8, panelY, Math.min(plot.w - 16, 340), panelH);
-  ctx.strokeRect(plot.x + 8, panelY, Math.min(plot.w - 16, 340), panelH);
+  ctx.fillStyle = 'rgba(8, 14, 26, 0.95)';
+
+  let borderColor = 'rgba(34, 197, 94, 0.35)';
+  if (brainVerdict === 'FAKE_SIGNAL' || rhythm.level === 'danger') borderColor = 'rgba(239, 68, 68, 0.65)';
+  else if (brainVerdict === 'UNCERTAIN' || rhythm.level === 'warn') borderColor = 'rgba(245, 158, 11, 0.55)';
+
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = 1.5;
+  ctx.fillRect(plot.x + 8, panelY, Math.min(plot.w - 16, 400), panelH);
+  ctx.strokeRect(plot.x + 8, panelY, Math.min(plot.w - 16, 400), panelH);
+
   ctx.textAlign = 'left';
   ctx.font = `bold 11px ${FONT_MONO}`;
   ctx.fillStyle = levelColor(rhythm.level);
   ctx.fillText(rhythm.title, plot.x + 16, panelY + 16);
-  ctx.font = `9px ${FONT_MONO}`;
-  ctx.fillStyle = '#cbd5e1';
-  ctx.fillText(rhythm.detail, plot.x + 16, panelY + 30);
-  ctx.fillStyle = '#94a3b8';
-  ctx.fillText(rhythm.guidance, plot.x + 16, panelY + 44);
+
+  if (brainThought) {
+    ctx.font = `italic 10px ${FONT_MONO}`;
+    ctx.fillStyle = '#67e8f9'; // Cyan para la IA
+    ctx.fillText('🧠 IA PENSANDO:', plot.x + 16, panelY + 30);
+
+    ctx.font = `9px ${FONT_MONO}`;
+    ctx.fillStyle = '#f8fafc';
+    // Split text if too long
+    const words = brainThought.split(' ');
+    let line = '';
+    let y = panelY + 42;
+    for (const word of words) {
+      if ((line + word).length > 60) {
+        ctx.fillText(line, plot.x + 16, y);
+        line = word + ' ';
+        y += 10;
+      } else {
+        line += word + ' ';
+      }
+    }
+    ctx.fillText(line, plot.x + 16, y);
+  } else {
+    ctx.font = `9px ${FONT_MONO}`;
+    ctx.fillStyle = '#cbd5e1';
+    ctx.fillText(rhythm.detail, plot.x + 16, panelY + 30);
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText(rhythm.guidance, plot.x + 16, panelY + 44);
+  }
 
   if (p.isMonitoring) {
     ctx.fillStyle = 'rgba(239, 68, 68, 0.85)';

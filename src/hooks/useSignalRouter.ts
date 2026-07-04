@@ -552,8 +552,9 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     md.acquisitionStage = hasUsableContact ? stab.stage : 'SEARCHING';
     md.acquisitionProgress = stab.progress;
     md.stabilizationReason = stab.reason;
-    md.brainThought = lastOrchestratorVerdict.current?.ui?.speak;
-    md.brainVerdict = lastOrchestratorVerdict.current?.ui?.status === 'ready' ? 'REAL_BEAT' : 'UNCERTAIN';
+    md.brainThought = lastOrchestratorVerdict.current?.ui?.thoughtProcess || lastOrchestratorVerdict.current?.ui?.speak;
+    md.brainVerdict = lastOrchestratorVerdict.current?.ui?.status === 'ready' ? 'REAL_BEAT' :
+                      lastOrchestratorVerdict.current?.ui?.status === 'error' ? 'FAKE_SIGNAL' : 'UNCERTAIN';
 
     // Buffer elástico de colocación: calidad de contacto por frame (primitiva ya
     // probada) → reservorio → cobertura suavizada tolerante a microdescuadres.

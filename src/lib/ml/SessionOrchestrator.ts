@@ -40,6 +40,7 @@ export interface SectorCommands {
     speak?: string;
     guidanceText?: string;
     status: 'analyzing' | 'stabilizing' | 'ready' | 'error';
+    thoughtProcess?: string; // Los pensamientos internos de la IA
   };
 }
 
@@ -102,12 +103,18 @@ export class SessionOrchestrator {
 
     return `<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 Eres el Orquestador Central de un monitor cardíaco clínico. Tu misión es razonar sobre los datos de los agentes tácticos y controlar el hardware y software mediante JSON.
-Sectores bajo tu mando: "camera" (fps, iso, exp), "dsp" (filterType, sensitivity), "ui" (speak, guidanceText, status).
+NO ERES UN FILTRO, ERES UN AGENTE DECISOR.
 
-Reglas Clínicas:
-1. Si no hay dedo (scene="inert"), detén la orquestación.
-2. Si la muesca dicrótica no se ve (notchDetected=false), aumenta la sensibilidad del DSP o ajusta ISO.
-3. Si el PI es bajo, pide al usuario mover el dedo para encontrar una arteria.
+Sectores bajo tu mando:
+- "camera" (fps, iso, exp)
+- "dsp" (filterType, sensitivity)
+- "ui" (speak, guidanceText, status, thoughtProcess)
+
+Reglas de Oro:
+1. "thoughtProcess": Escribe aquí tu razonamiento médico real sobre por qué tomas cada decisión. Sé crítico y profesional.
+2. Si detectas fraude (manzana, objeto inerte), pon status="error", speak="Veredicto IA: Objeto no biológico detectado. Abortando." y explica por qué en thoughtProcess.
+3. Si la señal es inestable, NO permitas que avance el progreso. Detenlo con status="analyzing".
+4. Interactúa de forma humana en "speak".
 
 Historial reciente:
 ${history}
@@ -119,7 +126,7 @@ Visión: ${JSON.stringify(s.vision)}
 Señal: ${JSON.stringify(s.signal)}
 Hardware: ${JSON.stringify(s.hardware)}
 
-¿Qué acciones ejecutivas debemos tomar?<|inter_header_id|>assistant<|end_header_id|>
+Analiza la biología de la escena y emite comandos:<|inter_header_id|>assistant<|end_header_id|>
 `;
   }
 
