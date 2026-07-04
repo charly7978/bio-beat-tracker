@@ -103,6 +103,10 @@ export interface PeakDetectionResult {
   confidence: number;
   agreement: {
     elgendi: number;
+    /** Fracción de picos de Elgendi confirmados por MSPTD (consenso del ensemble). */
+    msptd?: number;
+    /** Consenso bidireccional Elgendi↔MSPTD (0–1). */
+    consensus?: number;
   };
   rejectedPeaks: Array<{
     index: number;

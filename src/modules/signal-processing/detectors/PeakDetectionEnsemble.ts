@@ -10,6 +10,7 @@ import { isPhysiologicalRR } from '../../../utils/physio';
 import { computeDetectorCalibration } from '../../../lib/measurement/detectorCalibration';
 import { scorePeakCandidate } from '../../../lib/measurement/peakScoring';
 import { ElgendiPeakDetector } from './ElgendiPeakDetector';
+import { MsptdPeakDetector, type MsptdPeakDetectorOutput } from './MsptdPeakDetector';
 
 export interface PeakDetectionEnsembleInput {
   signal: number[];
@@ -98,8 +99,30 @@ export class PeakDetectionEnsemble {
       .map((t, i) => ({ t, i }))
       .sort((a, b) => a.t - b.t)
       .map((o) => o.i);
-    const sortedIdx = order.map((i) => peakIdx[i]!);
-    const sortedTimes = order.map((i) => peakTimes[i]!);
+    const elgendiIdx = order.map((i) => peakIdx[i]!);
+    const elgendiTimes = order.map((i) => peakTimes[i]!);
+
+    // === SEGUNDO DETECTOR DEL ENSEMBLE: MSPTD/AMPD ===
+    // Corre en paralelo a Elgendi sobre la misma señal y se fusiona por consenso
+    // temporal. Confirmación mutua ⇒ más precisión; rescate en huecos ⇒ más
+    // recall (latidos que el umbral de Elgendi perdió). Ver PEAK_DETECTION_DEFAULTS.MSPTD.
+    const M = PEAK_DETECTION_DEFAULTS.MSPTD;
+    const ms = M.ENABLED
+      ? MsptdPeakDetector.detect({ signal, timestampsMs, samplingRateHz: fsEffective, sqi })
+      : null;
+    const msTimes = ms?.peakTimes ?? [];
+
+    let consensusCount = 0;
+    if (msTimes.length && elgendiTimes.length) {
+      for (const t of elgendiTimes) {
+        if (msTimes.some((mt) => Math.abs(mt - t) <= M.FUSE_TOLERANCE_MS)) consensusCount++;
+      }
+    }
+    const consensusRatio = elgendiTimes.length ? consensusCount / elgendiTimes.length : 0;
+
+    const fused = fuseDetectors({ elgendiIdx, elgendiTimes, ms, timestampsMs, sqi: sqi ?? 0 });
+    const sortedIdx = fused.fusedIdx;
+    const sortedTimes = fused.fusedTimes;
 
     const rr: number[] = [];
     for (let i = 1; i < sortedTimes.length; i++) {
@@ -111,10 +134,15 @@ export class PeakDetectionEnsemble {
 
     const nE = el.peaks.length || 1;
     const agreeEl = clamp(sortedTimes.length / nE, 0, 1);
+    const agreeMs = msTimes.length ? clamp(consensusCount / Math.max(1, msTimes.length), 0, 1) : 0;
 
     let confidence =
       agreeEl * 0.50 +
       clamp(el.confidence, 0, 1) * 0.50;
+
+    // Bonus por consenso: latidos vistos por AMBOS detectores son más fiables.
+    // Sólo suma (nunca penaliza) → no degrada casos ya buenos ni el ruido.
+    confidence = clamp(confidence + consensusRatio * M.CONSENSUS_CONF_BONUS, 0, 1);
 
     if (typeof sqi === 'number' && sqi < PEAK_DETECTION_DEFAULTS.minSQI) {
       confidence *= 0.8;
@@ -172,6 +200,8 @@ export class PeakDetectionEnsemble {
       confidence: clamp(confidence, 0, 1),
       agreement: {
         elgendi: agreeEl,
+        msptd: agreeMs,
+        consensus: consensusRatio,
       },
       rejectedPeaks: log,
       diagnostics: {
@@ -182,10 +212,131 @@ export class PeakDetectionEnsemble {
         elgendiConfidence: el.confidence,
         fusedPeakTimes: sortedTimes,
         elgendiPeakTimes: el.peakTimes,
+        msptd: ms?.diagnostics,
+        msptdReason: ms?.reason,
+        msptdPeakTimes: msTimes,
+        msptdConfidence: ms?.confidence ?? 0,
+        consensusCount,
+        consensusRatio,
+        recoveredBeats: fused.recovered,
+        adoptedMsptd: fused.adopted,
         fsDeclared: samplingRateHz,
         fsEffective,
         fsAdapted,
       },
     };
   }
+}
+
+interface FuseInput {
+  elgendiIdx: number[];
+  elgendiTimes: number[];
+  ms: MsptdPeakDetectorOutput | null;
+  timestampsMs: number[];
+  sqi: number;
+}
+
+interface FuseResult {
+  fusedIdx: number[];
+  fusedTimes: number[];
+  /** Nº de latidos rescatados de huecos por MSPTD. */
+  recovered: number;
+  /** true si se adoptó el set de MSPTD (Elgendi demasiado débil). */
+  adopted: boolean;
+}
+
+/**
+ * Fusiona los picos de Elgendi (base) con los de MSPTD:
+ *  - Elgendi débil (<2 picos) + MSPTD con set periódico fiable ⇒ ADOPTA MSPTD.
+ *  - En huecos > 1.5× la mediana RR se RESCATA el pico de MSPTD mejor colocado
+ *    (RR plausible con ambos vecinos, fuera de tolerancia de un pico ya presente).
+ * Sin señal usable (SQI bajo) se devuelve Elgendi tal cual → nunca inventa picos.
+ */
+function fuseDetectors(input: FuseInput): FuseResult {
+  const { elgendiIdx, elgendiTimes, ms, timestampsMs, sqi } = input;
+  const base: FuseResult = {
+    fusedIdx: [...elgendiIdx],
+    fusedTimes: [...elgendiTimes],
+    recovered: 0,
+    adopted: false,
+  };
+  const M = PEAK_DETECTION_DEFAULTS.MSPTD;
+  if (!ms || ms.peakTimes.length === 0 || sqi < PEAK_DETECTION_DEFAULTS.minSQI) return base;
+
+  // Adopción: Elgendi casi no vio nada pero MSPTD sí (caso difícil).
+  if (
+    elgendiTimes.length < 2 &&
+    ms.peakTimes.length >= 3 &&
+    ms.confidence >= M.ADOPT_MIN_CONFIDENCE
+  ) {
+    return { fusedIdx: [...ms.peaks], fusedTimes: [...ms.peakTimes], recovered: 0, adopted: true };
+  }
+
+  if (elgendiTimes.length < 2) return base;
+
+  // Rescate en huecos.
+  const sortedRr = [...elgendiTimes]
+    .slice(1)
+    .map((t, i) => t - elgendiTimes[i])
+    .filter((d) => d > 0)
+    .sort((a, b) => a - b);
+  const medRr = sortedRr.length ? sortedRr[Math.floor(sortedRr.length / 2)]! : 0;
+  if (medRr <= 0) return base;
+
+  const minRr = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS;
+  const outTimes = [...elgendiTimes];
+  const outIdx = [...elgendiIdx];
+  let recovered = 0;
+
+  for (let i = 1; i < elgendiTimes.length; i++) {
+    const tA = elgendiTimes[i - 1]!;
+    const tB = elgendiTimes[i]!;
+    if (tB - tA <= medRr * M.GAP_RECOVERY_RR_FACTOR) continue;
+
+    // Mejor candidato MSPTD dentro del hueco, con RR plausible a ambos lados.
+    let bestT = 0;
+    let bestErr = Infinity;
+    for (const mt of ms.peakTimes) {
+      if (mt <= tA + minRr || mt >= tB - minRr) continue;
+      if (Math.abs(mt - tA) < M.FUSE_TOLERANCE_MS || Math.abs(mt - tB) < M.FUSE_TOLERANCE_MS) continue;
+      // Cercanía al latido esperado (tA + medianRR) → el más fisiológico.
+      const err = Math.abs(mt - (tA + medRr));
+      if (err < bestErr) {
+        bestErr = err;
+        bestT = mt;
+      }
+    }
+    if (bestT > 0) {
+      outTimes.push(bestT);
+      outIdx.push(nearestIndexByTime(timestampsMs, bestT));
+      recovered++;
+    }
+  }
+
+  if (recovered === 0) return base;
+
+  const ord = outTimes
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => a.t - b.t)
+    .map((o) => o.i);
+  return {
+    fusedIdx: ord.map((i) => outIdx[i]!),
+    fusedTimes: ord.map((i) => outTimes[i]!),
+    recovered,
+    adopted: false,
+  };
+}
+
+/** Índice de `timestamps` más cercano en tiempo a `t`. */
+function nearestIndexByTime(timestamps: number[], t: number): number {
+  let best = 0;
+  let bestDiff = Infinity;
+  for (let i = 0; i < timestamps.length; i++) {
+    const d = Math.abs(timestamps[i] - t);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = i;
+    }
+  }
+  return best;
 }
