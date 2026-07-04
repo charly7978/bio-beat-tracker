@@ -54,24 +54,45 @@ export class SessionOrchestrator {
   private generator: TextGenerationPipeline | null = null;
   private isInitializing = false;
   private mentalModel: string[] = [];
+  private loadProgress = 0;
+  private loadStatus: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
+
+  getStatus() {
+    return { status: this.loadStatus, progress: this.loadProgress };
+  }
 
   async initialize() {
     if (this.generator || this.isInitializing) return;
     this.isInitializing = true;
+    this.loadStatus = 'loading';
 
     try {
-      // Intentamos cargar Llama 3.2 3B. Si falla (memoria), fallback a 1B.
-      this.generator = await pipeline('text-generation', 'onnx-community/Llama-3.2-3B-Instruct', {
+      // Usamos un modelo más realista para móvil (Qwen 0.5B) para asegurar que "Exista"
+      // Llama 3.2 3B es demasiado pesado para la mayoría de navegadores móviles.
+      this.generator = await pipeline('text-generation', 'onnx-community/Qwen2.5-0.5B-Instruct', {
         device: 'webgpu',
         dtype: 'q4',
+        progress_callback: (p: any) => {
+          if (p.status === 'progress') {
+            this.loadProgress = p.progress;
+          }
+        }
       }) as TextGenerationPipeline;
-      log.info('Orchestrator: Llama 3.2 3B Loaded');
+
+      this.loadStatus = 'ready';
+      log.info('Orchestrator: Qwen 0.5B Ready');
     } catch (e) {
-      log.warn('Orchestrator: 3B failed, falling back to 1B', e);
-      this.generator = await pipeline('text-generation', 'onnx-community/Llama-3.2-1B-Instruct', {
-        device: 'webgpu',
-        dtype: 'q4',
-      }) as TextGenerationPipeline;
+      log.warn('Orchestrator: WebGPU failed, falling back to WASM', e);
+      try {
+        this.generator = await pipeline('text-generation', 'onnx-community/Qwen2.5-0.5B-Instruct', {
+          device: 'wasm',
+          dtype: 'q8',
+        }) as TextGenerationPipeline;
+        this.loadStatus = 'ready';
+      } catch (err) {
+        this.loadStatus = 'error';
+        log.error('Total failure in SessionOrchestrator', err);
+      }
     } finally {
       this.isInitializing = false;
     }

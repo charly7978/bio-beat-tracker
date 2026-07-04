@@ -447,12 +447,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const underInstant = r < 15 && g < 12 ? 1 : 0;
     this.underexposureEma = this.underexposureEma * 0.92 + underInstant * 0.08;
     
-    const isGrisly = Math.abs(r - g) < 5 && Math.abs(r - b) < 5 && r < 40;
+    // Desviación estándar RGB: si los canales son idénticos, es ruido de sensor (gris), no sangre.
+    const avg = (r + g + b) / 3;
+    const stdRgb = Math.sqrt(((r - avg) ** 2 + (g - avg) ** 2 + (b - avg) ** 2) / 3);
+    const isGrisly = stdRgb < 4 && r < 50;
 
     if (r > 253 && g > 252) rejectionStatus = "SATURATED";
     else if (
       r < (this.cameraHints.constrained ? 12 : 20) ||
-      isGrisly // Ruido grisáceo típico del aire
+      isGrisly
     ) {
       rejectionStatus = "UNDEREXPOSED";
     }

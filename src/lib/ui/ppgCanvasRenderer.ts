@@ -318,6 +318,7 @@ export interface PpgRenderProps {
     isCentered?: boolean;
     brainThought?: string;
     brainVerdict?: string;
+    brainStatus?: { status: string; progress: number };
     sqm?: { fpsEffective?: number; timestampJitterMs?: number; underexposureRatio?: number };
     peakDetection?: {
       confidence?: number;
@@ -398,6 +399,28 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.fillStyle = COLORS.TEXT_PRIMARY;
   ctx.textAlign = 'left';
   ctx.fillText(state.props.isMonitoring ? 'MONITOREANDO' : (state.props.preserveResults ? 'RESULTADOS' : 'EN ESPERA'), 28, header.y + 22);
+
+  // --- AI HUD (ESTADO DE CARGA) ---
+  const aiStatus = diagnostics?.brainStatus;
+  if (aiStatus && aiStatus.status !== 'ready') {
+    const barW = header.w * 0.35;
+    const barH = 3;
+    const barX = header.x + header.w - barW - 12;
+    const barY = header.y + 18;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+    ctx.fillRect(barX, barY, barW, barH);
+
+    ctx.fillStyle = aiStatus.status === 'error' ? COLORS.TEXT_DANGER : '#67e8f9';
+    ctx.fillRect(barX, barY, barW * (aiStatus.progress / 100), barH);
+
+    ctx.font = `8px ${FONT_MONO}`;
+    ctx.textAlign = 'right';
+    const msg = aiStatus.status === 'loading'
+      ? `CARGANDO IA: ${Math.round(aiStatus.progress)}%`
+      : 'ERROR CARGA IA';
+    ctx.fillText(msg, barX + barW, barY - 4);
+  }
 
   const d = new Date(state.now);
   const hh = String(d.getHours()).padStart(2, '0');
