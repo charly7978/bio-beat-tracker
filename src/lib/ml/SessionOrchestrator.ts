@@ -72,8 +72,8 @@ export class SessionOrchestrator {
       this.generator = await pipeline('text-generation', 'onnx-community/Qwen2.5-0.5B-Instruct', {
         device: 'webgpu',
         dtype: 'q4',
-        progress_callback: (p: { status: string; progress: number }) => {
-          if (p.status === 'progress') {
+        progress_callback: (p: any) => {
+          if (p.status === 'progress' && typeof p.progress === 'number') {
             this.loadProgress = p.progress;
           }
         }
