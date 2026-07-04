@@ -1,24 +1,19 @@
-# Gestión de Tareas - Sistema de Precisión Clínica con Cerebro IA
+# Gestión de Tareas - Orquestador Agéntico Bio-Beat
 
-## Fase 1: Investigación Médica y Eliminación de Simulaciones
-- [x] Estudiar morfología clínica PPG (Pico sistólico, muesca dicrótica)
-- [x] Auditoría de archivos para eliminar temporizadores fijos (Index.tsx, VitalSignsProcessor.ts)
-- [x] Eliminar lógica de calibración basada en conteo de frames ciegos
+## Fase 1: El Gran Cerebro (Orquestador Central)
+- [ ] Configurar Llama 3.2 3B en Transformers.js v4 con WebGPU
+- [ ] Diseñar el protocolo de "Comandos JSON" para control de sectores
+- [ ] Implementar el "Modelo Mental" de la sesión de medición
 
-## Fase 2: Fase Cero (Hardware)
-- [x] Implementar Bucle PID de optimización de SNR en CameraView
-- [ ] Sincronizar ajuste de exposición con la fase sistólica detectada
+## Fase 2: El Centinela del Lente (Vision Agent)
+- [ ] Implementar agente de visión biológica (Clasificador biológico vs mecánico)
+- [ ] Integrar lógica de "transparencia de tejido" y "tipo de piel"
 
-## Fase 3: IA de Limpieza (El Músculo)
-- [/] Implementar Denoiser Neuronal (DAE/MLP) para preservación de muesca dicrótica
-- [ ] Entrenar/Configurar pesos del modelo con patrones de PulseDB
+## Fase 3: Diálogo de Guía y Voz
+- [ ] Implementar sistema de Guía en Vivo (Chat & Voz) orquestado por IA
+- [ ] Crear base de conocimientos médicos para el razonamiento de guía
 
-## Fase 4: Cerebro IA (El Juez)
-- [x] Integrar Llama 3.2 1B (Transformers.js + WebGPU)
-- [ ] Diseñar Prompt de "Razonamiento Médico" para auditoría de señal
-- [ ] Implementar bucle de decisión IA (Veredicto de Veracidad)
-
-## Fase 5: Estabilización Final
-- [ ] Overhaul de la lógica de convergencia en signalStabilization.ts
-- [ ] Implementar progreso no monótono (retroceso por ruido)
-- [ ] Verificación final con señales de estrés real
+## Fase 4: Orquestación Total de Sectores
+- [ ] Conectar la IA con el sector de Hardware (Cámara dinámica)
+- [ ] Conectar la IA con el sector DSP (Filtros adaptativos dinámicos)
+- [ ] Eliminar cualquier lógica de control estática que no pase por la IA

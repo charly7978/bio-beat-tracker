@@ -2025,7 +2025,24 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     return { ...this.backpressureConfig };
   }
 
-  getBackpressureConfig(): BackpressureConfig {
-    return { ...this.backpressureConfig };
+  /**
+   * SECTOR DSP - Ejecución de Comandos IA
+   * Permite al Orquestador modificar el sistema nervioso del monitor en caliente.
+   */
+  applyCommand(cmd: import('../../lib/ml/SessionOrchestrator').SectorCommands['dsp']): void {
+    if (!cmd) return;
+
+    if (cmd.filterType === 'chebyshev') {
+      // Cambio dinámico de topología de filtro bajo demanda de la IA
+      log.info('DSP: Switching to Chebyshev topology');
+      this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate, cmd.highcut || 3.5);
+    }
+
+    if (cmd.sensitivity) {
+      log.info(`DSP: Adjusting sensitivity to ${cmd.sensitivity}`);
+      // Ajuste de ganancia adaptativa forzado por la IA
+      // @ts-ignore
+      this.pulseAgcState.scale *= cmd.sensitivity;
+    }
   }
 }

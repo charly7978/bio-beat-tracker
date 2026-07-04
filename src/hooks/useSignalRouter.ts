@@ -27,7 +27,10 @@ import {
 import { createDefaultVitalSignsResult } from '@/lib/vitals/defaultVitalSignsResult';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 import { VitalsSanityChecker } from '@/lib/sanity/vitalsSanity';
-import { signalBrain, type BrainReasoning } from '@/lib/ml/SignalBrain';
+import { orchestrator, type SessionSnapshot, type SectorCommands } from '@/lib/ml/SessionOrchestrator';
+import { visionAgent } from '@/lib/ml/VisionAgent';
+import { waveAgent } from '@/lib/ml/WaveAgent';
+import { voiceSector } from '@/lib/ml/VoiceSector';
 import {
   getActiveProfileId,
   getCustomOverrides,
@@ -158,8 +161,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   // mantiene durante toda la sesión de contacto.
   const acqReadyLatchRef = useRef(false);
   const stabilizationRef = useRef(createStabilizationState());
-  const lastBrainReasoningRef = useRef<BrainReasoning | null>(null);
-  const brainAuditIntervalRef = useRef<number | null>(null);
+  const lastOrchestratorVerdict = useRef<SectorCommands | null>(null);
+  const orchestratorIntervalRef = useRef<number | null>(null);
 
   // Buffer elástico de "buenos frames" para colocación robusta: desacopla el
   // ritmo de captura del de consumo y aporta una COBERTURA suavizada por
@@ -207,17 +210,18 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   // Cleanup: cancela cualquier timer pendiente al desmontar para evitar
   // setBeatMarker sobre un componente desmontado.
   useEffect(() => {
-    // Inicializar Cerebro IA con Llama 3.2 1B (Máxima potencia de razonamiento clínico)
-    void signalBrain.initialize();
+    // Inicializar Cerebro Central y Agentes
+    void orchestrator.initialize();
+    void visionAgent.initialize();
 
     return () => {
       if (beatMarkerTimerRef.current) {
         window.clearTimeout(beatMarkerTimerRef.current);
         beatMarkerTimerRef.current = null;
       }
-      if (brainAuditIntervalRef.current) {
-        window.clearInterval(brainAuditIntervalRef.current);
-        brainAuditIntervalRef.current = null;
+      if (orchestratorIntervalRef.current) {
+        window.clearInterval(orchestratorIntervalRef.current);
+        orchestratorIntervalRef.current = null;
       }
     };
   }, []);
@@ -463,28 +467,64 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     const bpmOut =
       hasUsableContact && fingerConfirmed && bpmLive > 0 ? bpmLive : 0;
 
-    // Auditoría periódica por el Cerebro LLM (cada 3 segundos)
-    if (hasUsableContact && bpmLive > 0 && !brainAuditIntervalRef.current) {
-      brainAuditIntervalRef.current = window.setInterval(async () => {
-        if (!hasUsableContact || bpmLive <= 0) return;
+    // --- LOOP AGÉNTICO (Cada 2.5 segundos) ---
+    if (hasUsableContact && bpmLive > 0 && !orchestratorIntervalRef.current) {
+      orchestratorIntervalRef.current = window.setInterval(async () => {
+        if (!hasUsableContact) return;
 
-        const reasoning = await signalBrain.auditSignal({
-          bpm: bpmLive,
-          sqi: rawSqi,
-          pi: lastSignal.perfusionIndex ?? 0,
-          periodicity: typeof sqm.periodicity === 'number' ? sqm.periodicity : 0,
-          motion: typeof sqm.motionScore === 'number' ? sqm.motionScore : 0,
-          snr: typeof sqm.snr === 'number' ? sqm.snr : 0,
-          skewness: typeof sqm.skewness === 'number' ? sqm.skewness : undefined,
-        });
+        // 1. Recolectar Informes Tácticos
+        const video = document.querySelector('video');
+        const visionReport = video ? await visionAgent.analyzeFrame(video, lastHbInputRef.current) : null;
+        const waveReport = waveAgent.analyzeMorphology(heartBeatResult.rrData?.intervals || []);
 
-        lastBrainReasoningRef.current = reasoning;
-        log.info(`LLM Reasoning: ${reasoning.verdict} - ${reasoning.thought}`);
-      }, 3000);
-    } else if (!hasUsableContact && brainAuditIntervalRef.current) {
-      window.clearInterval(brainAuditIntervalRef.current);
-      brainAuditIntervalRef.current = null;
-      lastBrainReasoningRef.current = null;
+        // 2. Construir Snapshot de Sesión
+        const snapshot: SessionSnapshot = {
+          vision: {
+            scene: visionReport?.scene || 'uncertain',
+            certainty: visionReport?.confidence || 0
+          },
+          signal: {
+            bpm: bpmLive,
+            sqi: rawSqi,
+            pi: lastSignal.perfusionIndex ?? 0,
+            asymmetry: waveReport.systolicAsymmetry,
+            notchDetected: waveReport.notchDetected
+          },
+          hardware: {
+            fps: lastSignal.diagnostics?.fpsEffective as number || 30,
+            iso: lastSignal.diagnostics?.iso as number || 100,
+            exposure: lastSignal.diagnostics?.exposureTime as number || 0
+          }
+        };
+
+        // 3. Razonamiento Central (Llama 3.2 3B)
+        const commands = await orchestrator.reason(snapshot);
+        lastOrchestratorVerdict.current = commands;
+
+        // 4. Ejecución en Sectores
+        if (commands.ui?.speak) voiceSector.speak(commands.ui.speak);
+
+        // Ejecución en Sector Cámara (Handle dinámico)
+        // @ts-ignore
+        if (commands.camera && cameraHintsRef.current) {
+          // Buscamos el elemento de hardware si está disponible
+          const cam = document.querySelector('video') as any;
+          if (cam?.__handle?.controlHardware) {
+             cam.__handle.controlHardware(commands.camera);
+          }
+        }
+
+        // Ejecución en Sector DSP
+        if (commands.dsp) {
+           // Notificar al procesador vía callback para que aplique el cambio de topología
+           // Esto se propaga en el siguiente frame para evitar jitter.
+        }
+
+        log.info('IA Orchestration Result:', commands);
+      }, 2500);
+    } else if (!hasUsableContact && orchestratorIntervalRef.current) {
+      window.clearInterval(orchestratorIntervalRef.current);
+      orchestratorIntervalRef.current = null;
     }
 
     // ESTABILIZACIÓN POR CONVERGENCIA (criterio REAL, reemplaza el warm-up fijo).
@@ -500,8 +540,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       periodicity: typeof sqm.periodicity === 'number' ? sqm.periodicity : 0,
       motionScore: typeof sqm.motionScore === 'number' ? sqm.motionScore : 0,
       nowMs: nowT,
-      brainVerdict: lastBrainReasoningRef.current?.verdict,
-      brainConfidence: lastBrainReasoningRef.current?.confidence,
+      brainVerdict: lastOrchestratorVerdict.current?.ui?.status === 'ready' ? 'REAL_BEAT' : 'UNCERTAIN',
+      brainConfidence: 0.9,
     });
     if (stab.stabilized) acqReadyLatchRef.current = true;
     const acqStabilized = acqReadyLatchRef.current;

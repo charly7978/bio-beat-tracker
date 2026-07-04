@@ -361,6 +361,26 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
         }
       })();
     },
+
+    controlHardware: (cmd: import('@/lib/ml/SessionOrchestrator').SectorCommands['camera']) => {
+      const track = streamRef.current?.getVideoTracks?.()[0];
+      if (!track || !cmd) return;
+
+      void (async () => {
+        try {
+          const constraints: AdvancedConstraint[] = {};
+          if (cmd.fps) constraints.frameRate = cmd.fps;
+          if (cmd.exposureCompensation) constraints.exposureCompensation = cmd.exposureCompensation;
+
+          if (Object.keys(constraints).length > 0) {
+            log.info('Camera Sector: Applying IA commands', constraints);
+            await applyAdvanced(track, [constraints]);
+          }
+        } catch (e) {
+          log.warn('Camera Sector: Command execution failed', e);
+        }
+      })();
+    }
   }), []);
 
   useEffect(() => {
