@@ -7,6 +7,13 @@
       "pattern": "MATH_RANDOM",
       "reason": "React internals (event listener key, fiber id) and @supabase localStorage probe use Math.random for non-medical, non-signal-path identifier generation. Verified: zero references reach src/modules/signal-processing/** or src/modules/vital-signs/**.",
       "ref": "GUARDRAIL-DIST-RUNTIME"
+    },
+    {
+      "file": "dist/*",
+      "dist": true,
+      "pattern": "FAKE_DATA",
+      "reason": "The 'FAKE_SIGNAL' veredict in SignalBrain.ts is part of the clinical audit logic to detect fraudulent inputs. It is not a simulation generator but a detection label. Minification preserves this string literal.",
+      "ref": "AI-SIGNAL-AUDIT-DIST"
     }
   ]
 }
