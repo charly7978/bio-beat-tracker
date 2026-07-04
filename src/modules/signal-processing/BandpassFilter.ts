@@ -26,7 +26,7 @@ export class BandpassFilter {
   private lpfX: [number, number] = [0, 0];
   private lpfY: [number, number] = [0, 0];
 
-  readonly sampleRate: number;
+  sampleRate: number;
   private highCutFreq: number;
   private lowCutFreq: number;
 
