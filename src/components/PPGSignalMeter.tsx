@@ -18,11 +18,13 @@ import {
   drawPressureGauge,
   drawSignal,
   drawAcquisitionOverlay,
+  drawFingerGuideRing,
   drawTrendStrip,
   drawFooter,
 } from '@/lib/ui/ppgCanvasRenderer';
 import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
+import { computeCameraPeekState, guideCaption } from '@/lib/ui/cameraPeek';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
 
@@ -295,7 +297,9 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     canvas.height = Math.floor(cssH * dpr);
     canvas.style.width = `${cssW}px`;
     canvas.style.height = `${cssH}px`;
-    const ctx = canvas.getContext('2d', { alpha: false });
+    // alpha:true — el canvas del monitor deja de ser opaco para que la cámara
+    // trasera se asome "detrás del vidrio" (ventana de previsualización del dedo).
+    const ctx = canvas.getContext('2d', { alpha: true });
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const header = { x: 0, y: 0, w: cssW, h: 36 };
@@ -348,7 +352,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         animationRef.current = requestAnimationFrame(render);
         return;
       }
-      const ctx = canvas.getContext('2d', { alpha: false });
+      const ctx = canvas.getContext('2d', { alpha: true });
       if (!ctx) {
         animationRef.current = requestAnimationFrame(render);
         return;
@@ -395,6 +399,16 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         : 0;
 
 
+      const diagStage = (p.diagnostics as { acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY' } | undefined)?.acquisitionStage;
+      const placementStable = (p.diagnostics as { placementStable?: boolean } | undefined)?.placementStable;
+      const peek = computeCameraPeekState({
+        isMonitoring: p.isMonitoring,
+        contactState: p.contactState,
+        acquisitionStage: diagStage,
+        quality: p.quality ?? 0,
+        placementStable,
+      });
+
       const renderState: PpgRenderState = {
         layout: layoutRef.current,
         props: {
@@ -426,12 +440,21 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         arrActiveUntil: arrActiveUntilRef.current,
         traceRevealed: traceRevealedRef.current,
         signalStrength: signalStrengthNow,
+        monitorOpacity: peek.monitorOpacity,
       };
 
-      drawBackground(ctx, layoutRef.current.width, layoutRef.current.height);
+      drawBackground(ctx, layoutRef.current.width, layoutRef.current.height, peek.monitorOpacity);
       drawHeader(ctx, renderState);
       drawMetricsBar(ctx, renderState);
       drawGrid3D(ctx, renderState);
+      if (p.isMonitoring) {
+        drawFingerGuideRing(ctx, renderState, {
+          guideLevel: peek.guideLevel,
+          guideColor: peek.guideColor,
+          glowColor: peek.glowColor,
+          caption: guideCaption(peek.guideLevel, p.diagnostics?.placementHint),
+        });
+      }
       drawPressureGauge(ctx, renderState);
       drawSignal(ctx, renderState);
       drawAcquisitionOverlay(ctx, renderState);
@@ -477,10 +500,21 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   }, [onReset]);
 
   return (
-    <div ref={containerRef} className="fixed inset-0 bg-slate-950 overflow-hidden">
+    // Sin fondo opaco propio: el canvas (drawBackground) controla la opacidad
+    // del "vidrio" del monitor frame a frame, para dejar asomar la cámara
+    // trasera detrás cuando corresponda (ventana de previsualización del dedo).
+    <div ref={containerRef} className="fixed inset-0 overflow-hidden">
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
+        style={{
+          // Vidrio esmerilado: la cámara trasera (detrás, ya en el DOM) se ve
+          // difuminada y tenue a través de las zonas transparentes del canvas,
+          // sin afectar la nitidez de la onda ni de los paneles de datos, que
+          // pintan su propio fondo semi-opaco encima en cada frame.
+          backdropFilter: 'blur(3px) saturate(1.15)',
+          WebkitBackdropFilter: 'blur(3px) saturate(1.15)',
+        }}
       />
       <PulseIndicator showPulse={showPulse} />
       <ActionButtons
