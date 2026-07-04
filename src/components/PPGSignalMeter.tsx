@@ -15,6 +15,7 @@ import {
   drawBackground,
   drawHeader,
   drawMetricsBar,
+  drawFingerPlacementCircle,
   drawPressureGauge,
   drawSignal,
   drawAcquisitionOverlay,
@@ -431,6 +432,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       drawBackground(ctx, layoutRef.current.width, layoutRef.current.height);
       drawHeader(ctx, renderState);
       drawMetricsBar(ctx, renderState);
+      drawFingerPlacementCircle(ctx, renderState);
       drawGrid3D(ctx, renderState);
       drawPressureGauge(ctx, renderState);
       drawSignal(ctx, renderState);

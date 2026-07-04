@@ -314,6 +314,8 @@ export interface PpgRenderProps {
     placementCoverage?: number;
     /** La colocación se sostiene estable según el buffer elástico. */
     placementStable?: boolean;
+    fingerCentroid?: { x: number; y: number };
+    isCentered?: boolean;
     sqm?: { fpsEffective?: number; timestampJitterMs?: number; underexposureRatio?: number };
     peakDetection?: {
       confidence?: number;
@@ -359,11 +361,12 @@ export interface PpgRenderState {
 }
 
 export function drawBackground(ctx: CanvasRenderingContext2D, W: number, H: number): void {
-  ctx.fillStyle = '#000000';
+  // Fondo semi-transparente para ver la cámara
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
   ctx.fillRect(0, 0, W, H);
 
-  ctx.fillStyle = COLORS.SCANLINE;
-  for (let y = 0; y < H; y += 3) {
+  ctx.fillStyle = 'rgba(0, 255, 100, 0.03)'; // SCANLINE más suave para no tapar preview
+  for (let y = 0; y < H; y += 4) {
     ctx.fillRect(0, y, W, 1);
   }
 }
@@ -454,17 +457,15 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     }
   } else if (
     detected &&
-    diag?.placementStable === true &&
+    (diag?.isCentered || diag?.placementStable === true) &&
     !hardBlocker &&
     (!diag?.status || diag.status === 'VALID' || diag.status === 'WARMUP')
   ) {
-    // Refuerzo positivo: la colocación se sostiene estable según el buffer
-    // elástico (tolerante a microdescuadres). Da confianza al usuario en vez de
-    // parpadear a "sin dedo" ante un frame malo suelto.
+    // Refuerzo positivo: centrado o estable
     ctx.fillStyle = '#22c55e';
     ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.textAlign = 'center';
-    ctx.fillText('✓ COLOCACIÓN ESTABLE', header.w / 2, header.y + 12);
+    ctx.fillText(diag?.isCentered ? '✓ CENTRADO PERFECTO' : '✓ COLOCACIÓN ESTABLE', header.w / 2, header.y + 12);
   } else if (placementHint && detected && stage === 'READY') {
     ctx.fillStyle = COLORS.TEXT_INFO;
     ctx.font = `9px ${FONT_MONO}`;
@@ -881,6 +882,60 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   const contact = formatContactState(p.contactState);
   ctx.fillStyle = '#94a3b8';
   ctx.fillText(contact, plot.x + plot.w - 12, plot.y + 66);
+
+  ctx.restore();
+}
+
+export function drawFingerPlacementCircle(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
+  const { isFingerDetected: detected, diagnostics: diag } = state.props;
+  if (!detected || state.traceRevealed) return;
+
+  const W = state.layout.width;
+  const H = state.layout.height;
+  const cx = W / 2;
+  const cy = H / 2;
+  const radius = Math.min(W, H) * 0.18;
+
+  const centered = diag?.isCentered === true;
+
+  ctx.save();
+
+  // 1) Círculo de referencia (Target)
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.strokeStyle = centered ? 'rgba(34, 197, 94, 0.8)' : 'rgba(255, 255, 255, 0.3)';
+  ctx.lineWidth = centered ? 3 : 2;
+  if (centered) {
+    const pulse = (Math.sin(state.now / 150) + 1) / 2;
+    ctx.shadowBlur = 10 + pulse * 10;
+    ctx.shadowColor = 'rgba(34, 197, 94, 0.6)';
+  }
+  ctx.stroke();
+
+  // 2) Punto del dedo (Centroid)
+  if (diag?.fingerCentroid) {
+    const fx = diag.fingerCentroid.x * W;
+    const fy = diag.fingerCentroid.y * H;
+
+    // Línea tenue hacia el centro si no está centrado
+    if (!centered) {
+      ctx.beginPath();
+      ctx.setLineDash([3, 3]);
+      ctx.moveTo(fx, fy);
+      ctx.lineTo(cx, cy);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    ctx.beginPath();
+    ctx.arc(fx, fy, 6, 0, Math.PI * 2);
+    ctx.fillStyle = centered ? '#22c55e' : '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
 
   ctx.restore();
 }

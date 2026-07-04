@@ -66,6 +66,10 @@ export interface ProcessedSignal {
     placementCoverage?: number;
     /** La colocación se sostiene estable según el buffer elástico. */
     placementStable?: boolean;
+    /** Posición normalizada (0-1) del centroide del dedo en el frame */
+    fingerCentroid?: { x: number; y: number };
+    /** Indica si el dedo está centrado en el ROI óptimo */
+    isCentered?: boolean;
   };
 }
 

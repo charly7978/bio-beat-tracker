@@ -78,6 +78,8 @@ interface ROIMetrics {
   roiH: number;
   roiW: number;
   centroidMotion: number;
+  centroidX: number;
+  centroidY: number;
 }
 
 /**
@@ -1069,6 +1071,22 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   ) {
     const coverageRatio = roi.coverageRatio;
     const fingerPressure = this.estimateFingerPressure(roi);
+
+    // Detección de centrado: distancia al centro (0.5, 0.5) en coordenadas de frame
+    const dx = roi.centroidX - 0.5;
+    const dy = roi.centroidY - 0.5;
+    const distToCenter = Math.sqrt(dx * dx + dy * dy);
+    const isCentered = this.contactState !== 'NO_CONTACT' && distToCenter < 0.08;
+
+    let placementHint = placementHintText(this.placementMode, extras?.perfusionIndex);
+    if (this.contactState !== 'NO_CONTACT') {
+      if (isCentered) {
+        placementHint = "Perfecto, déjelo quieto";
+      } else {
+        placementHint = "Centrar yema en el círculo";
+      }
+    }
+
     return {
       message:
         extras?.message ??
@@ -1077,12 +1095,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       pulsatilityValue: extras?.pulsatilityValue ?? 0,
       coverageRatio,
       placementMode: extras?.placementMode,
-      placementHint: extras?.placementHint,
+      placementHint: placementHint || extras?.placementHint,
       fingerPressure,
       status,
       acquisitionStage: this.acquisitionState.stage,
       acquisitionConfidence: this.acquisitionState.confidence,
       acquisitionProgress: this.acquisitionState.progress,
+      fingerCentroid: { x: roi.centroidX, y: roi.centroidY },
+      isCentered,
     };
   }
 
@@ -1340,6 +1360,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       roiW,
       roiH,
       centroidMotion,
+      centroidX: targetX,
+      centroidY: targetY,
     };
   }
 
