@@ -59,6 +59,8 @@ export interface PPGSignalMeterProps {
     hasPulsatility?: boolean;
     acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY';
     acquisitionProgress?: number;
+    brainThought?: string;
+    brainVerdict?: string;
     sqm?: {
       fpsEffective?: number;
       timestampJitterMs?: number;

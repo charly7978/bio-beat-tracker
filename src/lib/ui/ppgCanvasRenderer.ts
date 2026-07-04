@@ -316,6 +316,8 @@ export interface PpgRenderProps {
     placementStable?: boolean;
     fingerCentroid?: { x: number; y: number };
     isCentered?: boolean;
+    brainThought?: string;
+    brainVerdict?: string;
     sqm?: { fpsEffective?: number; timestampJitterMs?: number; underexposureRatio?: number };
     peakDetection?: {
       confidence?: number;
@@ -848,8 +850,8 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   const rhythm = buildRhythmPanel(p.arrhythmiaStatus, p.arrhythmiaCount ?? 0, p.rrIntervals ?? [], state.hrv);
 
   // --- IA TRUTH CONSOLE (Pensamientos de Llama 3.2) ---
-  const brainThought = (p.diagnostics as any)?.brainThought;
-  const brainVerdict = (p.diagnostics as any)?.brainVerdict;
+  const brainThought = p.diagnostics?.brainThought;
+  const brainVerdict = p.diagnostics?.brainVerdict;
 
   const panelH = brainThought ? 82 : 56;
   const panelY = plot.y + 8;
