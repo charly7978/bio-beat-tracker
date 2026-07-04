@@ -96,20 +96,21 @@ Conocimiento base:
 - La periodicidad alta (>0.7) indica ritmo biológico estable.
 - El movimiento alto (>0.6) corrompe la morfología y genera falsos picos.
 - La perfusión (PI) baja indica mala colocación o señal falsa.
+- IMPORTANTE: El ruido térmico del sensor (apuntando al aire) puede ser periódico pero carece de la morfología asimétrica del pulso humano.
 
 Responde estrictamente en JSON: {"verdict": "REAL_BEAT" | "NOISE_ARTIFACT" | "FAKE_SIGNAL", "confidence": 0-1, "reason": "explicación clínica corta"}<|eot_id|>
 <|start_header_id|>user<|end_header_id|>
-Audita estos datos:
+Audita estos datos técnicos:
 - Frecuencia: ${f.bpm} BPM
 - Calidad Técnica (SQI): ${f.sqi}
 - Perfusión (PI): ${f.pi.toFixed(5)}
 - Periodicidad: ${f.periodicity.toFixed(2)}
 - Movimiento: ${f.motion.toFixed(2)}
 - SNR: ${f.snr.toFixed(2)}
-- Skewness: ${f.skewness?.toFixed(2) ?? 'N/A'}
+- Skewness: ${f.skewness?.toFixed(2) ?? 'N/A'} (Fundamental: Positiva=Humano, Cerca de Cero=Ruido)
 - Kurtosis: ${f.kurtosis?.toFixed(2) ?? 'N/A'}
 
-¿Es este un latido humano legítimo y estable?<|inter_header_id|>assistant<|end_header_id|>
+¿Es este un latido humano legítimo o es ruido de sensor/aire?<|inter_header_id|>assistant<|end_header_id|>
 `;
   }
 

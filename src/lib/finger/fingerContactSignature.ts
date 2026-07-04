@@ -124,24 +124,30 @@ export function hasFingerHemoglobinSignature(s: FingerRgbSnapshot): boolean {
   const g = Math.max(1, s.green);
   const b = Math.max(1, s.blue);
   const total = r + g + b;
-  if (total < F.ACQUIRE_SOFT_INTENSITY_MIN) return false;
+
+  // 1. Piso de intensidad absoluta — un dedo real con flash SIEMPRE tiene brillo
+  if (total < F.ACQUIRE_INTENSITY_MIN * 0.8) return false;
 
   const redDominance = r - (g + b) / 2;
   const rg = r / g;
   const rb = r / b;
 
+  // 2. Firma Espectral de la Sangre (Hemoglobina)
+  // El tejido humano absorbe el verde y el azul masivamente, dejando el rojo como dominante.
+  // Sin dedo (apuntando al aire), el ruido del sensor suele ser grisáceo (RG/RB cerca de 1).
   if (r < F.MIN_RED_INTENSITY) return false;
-  if (rg < F.MIN_RG_RATIO) return false;
-  if (rb < F.HEMOGLOBIN_MIN_RB) return false;
-  if (redDominance < F.MIN_RED_DOMINANCE) return false;
+  if (rg < 1.15) return false; // El rojo debe ser al menos 15% superior al verde
+  if (rb < 1.35) return false; // El rojo debe ser al menos 35% superior al azul
+  if (redDominance < 15) return false;
 
-  if (rg < 1.14 && rb < 1.28) return false;
-  if (g > 95 && b > 80 && redDominance < 30) return false;
-  if (total > 200 && rb < 1.38) return false;
-  if (total > 120 && rb < 1.42 && rg < 1.2) return false;
+  // 3. Rechazo de ruido de sensor de alta ganancia (ISO alto apuntando a la nada)
+  // En la oscuridad, el sensor sube el ISO y genera ruido "sal y pimienta" que puede
+  // parecer pulso. Un dedo real es una masa homogénea de color.
+  if (g > 100 && b > 90 && redDominance < 25) return false;
 
+  // 4. Cobertura Espacial
   return (
-    s.coverage >= F.MIN_COVERAGE * 0.95 &&
-    s.fingerScore >= F.ACQUIRE_SOFT_FINGER_SCORE_ROI * 0.9
+    s.coverage >= F.MIN_COVERAGE &&
+    s.fingerScore >= F.ACQUIRE_SMOOTHED_FINGER_MIN
   );
 }

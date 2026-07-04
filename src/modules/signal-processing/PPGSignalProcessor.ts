@@ -436,18 +436,21 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     // GATES DE RECHAZO ESTRICTOS (Phase 3C)
+    // El rechazo por UNDEREXPOSED debe ser implacable para evitar procesar ruido térmico.
     let rejectionStatus: MeasurementStatus | null = null;
     const r = this.smoothedRed;
     const g = this.smoothedGreen;
-    const _b = this.smoothedBlue;
+    const b = this.smoothedBlue;
 
-    const underInstant = r < 12 && g < 10 ? 1 : 0;
+    const underInstant = r < 15 && g < 12 ? 1 : 0;
     this.underexposureEma = this.underexposureEma * 0.92 + underInstant * 0.08;
     
+    const isGrisly = Math.abs(r - g) < 5 && Math.abs(r - b) < 5 && r < 40;
+
     if (r > 253 && g > 252) rejectionStatus = "SATURATED";
     else if (
-      r < (this.cameraHints.constrained ? 8 : 15) &&
-      g < (this.cameraHints.constrained ? 6 : 10)
+      r < (this.cameraHints.constrained ? 12 : 20) ||
+      isGrisly // Ruido grisáceo típico del aire
     ) {
       rejectionStatus = "UNDEREXPOSED";
     }
