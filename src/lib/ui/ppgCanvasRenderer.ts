@@ -426,38 +426,26 @@ export function drawFingerGuideRing(
   const cy = geometry?.cy ?? fallbackCy;
   const baseR = geometry?.r ?? fallbackR;
   const isPerfect = guide.guideLevel === 'perfect';
-  const isAdjusting = guide.guideLevel === 'adjusting';
-
-  // Pulso diferenciado según estado:
-  // - searching: pulso más lento (sin contacto)
-  // - adjusting: pulso moderado (contacto inestable)
-  // - perfect: pulso rápido (contacto estable/bien centrado)
-  const pulseSpeed = isPerfect ? 500 : isAdjusting ? 650 : 800;
-  const pulse = (Math.sin(state.now / pulseSpeed) + 1) / 2;
-  const pulseAmplitude = isPerfect ? 2.5 : isAdjusting ? 5 : 6;
-  const r = baseR + pulse * pulseAmplitude;
+  const pulse = (Math.sin(state.now / (isPerfect ? 900 : 550)) + 1) / 2;
+  const r = baseR + pulse * (isPerfect ? 2 : 6);
 
   ctx.save();
 
-  // Halo más brillante cuando está perfectamente centrado
   ctx.beginPath();
   ctx.arc(cx, cy, r * 1.35, 0, Math.PI * 2);
-  ctx.fillStyle = isPerfect
-    ? guide.glowColor.replace('0.', '0.35') // Glow más brillante cuando perfecto
-    : guide.glowColor;
+  ctx.fillStyle = guide.glowColor;
   ctx.fill();
 
   if (isPerfect) {
-    // Anillo principal: más grueso cuando perfecto
-    ctx.lineWidth = 3.5;
+    ctx.lineWidth = 3;
     ctx.strokeStyle = guide.guideColor;
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Check central: refuerzo visual inequívoco de "ahí, exactamente ahí"
+    // Check central: refuerzo visual inequívoco de "ahí, exactamente ahí".
     ctx.strokeStyle = guide.guideColor;
-    ctx.lineWidth = 4.5;
+    ctx.lineWidth = 4;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.beginPath();
@@ -465,45 +453,17 @@ export function drawFingerGuideRing(
     ctx.lineTo(cx - r * 0.08, cy + r * 0.26);
     ctx.lineTo(cx + r * 0.34, cy - r * 0.28);
     ctx.stroke();
-
-    // Punto central pulsante: referencia visual exacta del centro
-    const centerPulse = (Math.sin(state.now / 400) + 1) / 2;
-    const centerDotSize = 3 + centerPulse * 2;
-    ctx.fillStyle = guide.guideColor;
-    ctx.beginPath();
-    ctx.arc(cx, cy, centerDotSize, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Anillo interno: zona de aceptación
-    ctx.setLineDash([3, 4]);
-    ctx.lineDashOffset = -(state.now / 50) % 7;
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = guide.guideColor.replace('0.95', '0.5');
-    ctx.beginPath();
-    ctx.arc(cx, cy, baseR * 0.7, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
   } else {
-    // Anillo punteado para searching/adjusting
     ctx.setLineDash([10, 8]);
     ctx.lineDashOffset = -(state.now / 30) % 18;
-    ctx.lineWidth = isAdjusting ? 3 : 2.5;
+    ctx.lineWidth = 2.5;
     ctx.strokeStyle = guide.guideColor;
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
-
-    // Punto central sutil (referencia constante)
-    if (isAdjusting) {
-      ctx.fillStyle = guide.guideColor.replace('0.95', '0.4');
-      ctx.beginPath();
-      ctx.arc(cx, cy, 2, 0, Math.PI * 2);
-      ctx.fill();
-    }
   }
 
-  // Caption: instrucción clara para el usuario
   if (guide.caption) {
     ctx.font = `bold 12px ${FONT_MONO}`;
     ctx.textAlign = 'center';
