@@ -1,3 +1,4 @@
+import { createLogger } from '@/utils/logger';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { ProcessedSignal, ContactState, FingerPlacementMode } from '@/types/signal';
 import type { VitalSignsResult, RGBData } from '@/modules/vital-signs/VitalSignsProcessor';
@@ -98,6 +99,8 @@ interface UseSignalRouterInput {
   cameraHintsRef: React.MutableRefObject<CameraRuntimeHints>;
   ppgMeterRef?: React.RefObject<import('@/components/PPGSignalMeter').PPGSignalMeterHandle | null>;
 }
+
+const log = createLogger("useSignalRouter");
 
 // Frame-gates de contacto y throttles/cadencia DSP — fuente única en VITAL_THRESHOLDS.
 // A scope de módulo: react-hooks los reconoce como constantes estables (no deps).

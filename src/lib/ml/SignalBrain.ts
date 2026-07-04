@@ -77,7 +77,7 @@ export class SignalBrain {
         temperature: 0.1, // Casi determinista para veracidad clínica
         do_sample: false,
         return_full_text: false,
-      });
+      }) as any;
 
       const response = (Array.isArray(output) ? output[0].generated_text : output.generated_text) as string;
       return this.parseMedicalResponse(response);

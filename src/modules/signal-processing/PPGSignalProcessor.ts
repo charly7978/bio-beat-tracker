@@ -1067,6 +1067,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       pulsatilityValue?: number;
       placementMode?: FingerPlacementMode;
       placementHint?: string;
+      perfusionIndex?: number;
     },
   ) {
     const coverageRatio = roi.coverageRatio;
@@ -1313,6 +1314,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         roiW,
         roiH,
         centroidMotion: 0,
+        centroidX: 0.5,
+        centroidY: 0.5,
       };
     }
 
