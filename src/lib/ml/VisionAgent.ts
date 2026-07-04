@@ -150,7 +150,7 @@ export class VisionAgent {
   private classifyFromDescription(description: string, redLevel: number): VisionReport['scene'] {
     const d = description.toLowerCase();
 
-    const inertSignals = ['apple', 'fruit', 'plastic', 'object', 'table', 'inanimate', 'not a finger', 'no skin', 'fraud', 'fake'];
+    const inertSignals = ['apple', 'fruit', 'plastic', 'object', 'table', 'inanimate', 'not a finger', 'no skin', 'fraud', 'fake']; // anti-sim-allow: reason="Fraud-detection vocabulary matched against real VLM output, not simulated data" ref="PR-14"
     const humanSignals = ['finger', 'skin', 'blood', 'perfusion', 'human', 'flesh', 'tissue'];
     const airSignals = ['no contact', 'empty', 'nothing', 'air', 'no lens coverage', 'dark', 'black frame'];
 
