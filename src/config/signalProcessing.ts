@@ -96,6 +96,37 @@ export const PEAK_DETECTION_DEFAULTS = {
   HEARTBEAT_WINDOW_WARMUP: 120,
   HEARTBEAT_WINDOW_STABLE: 180,
   /**
+   * MSPTD / AMPD — segundo detector del ENSEMBLE real (Multi-Scale Peak & Trough
+   * Detection, Bishop & Ercole 2018; sobre AMPD de Scholkmann 2012). En el
+   * benchmark abierto de Charlton et al. (2022, Physiol. Meas. 43 085007) MSPTD y
+   * Elgendi son los dos detectores de latido PPG con mejor F1. Aquí corren en
+   * paralelo sobre la MISMA señal acondicionada y se fusionan por consenso
+   * temporal: los latidos confirmados por AMBOS suben la confianza (precisión) y
+   * los que sólo ve MSPTD rescatan latidos que el umbral energético de Elgendi
+   * pierde en huecos (recall) → captación más infalible sin inventar picos.
+   */
+  MSPTD: {
+    /** Habilita el segundo detector + fusión. */
+    ENABLED: true,
+    /**
+     * Tolerancia temporal (ms) para considerar que un pico de Elgendi y uno de
+     * MSPTD son el MISMO latido. Debe ser < ½ del RR mínimo (a 200 BPM, RR=300 ms
+     * → ½ = 150 ms) para no fusionar latidos contiguos. 120 ms cubre el desfase
+     * pie→pico sistólico entre las dos reglas de decisión.
+     */
+    FUSE_TOLERANCE_MS: 120,
+    /**
+     * Un hueco mayor que este factor × la mediana RR se considera "latido
+     * perdido" candidato a rescate por MSPTD. 1.5× evita rescatar en RR normales
+     * y sólo actúa cuando Elgendi se saltó un latido real.
+     */
+    GAP_RECOVERY_RR_FACTOR: 1.5,
+    /** Confianza mínima de MSPTD para adoptar su set cuando Elgendi es débil. */
+    ADOPT_MIN_CONFIDENCE: 0.25,
+    /** Bonus máx. de confianza del ensemble por consenso pleno Elgendi↔MSPTD. */
+    CONSENSUS_CONF_BONUS: 0.12,
+  },
+  /**
    * Anclas de calibración adaptativa (no mmHg): escalan umbrales Elgendi/Pan
    * según dinámica de la ventana, SQI, PI y BPM espectral.
    */
