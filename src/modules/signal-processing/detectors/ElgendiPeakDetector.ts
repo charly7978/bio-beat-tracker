@@ -19,7 +19,7 @@
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../../../config/vitalThresholds';
 import { clamp } from '../../../utils/math';
-import { median, skewness } from '../../../utils/stats';
+import { skewness } from '../../../utils/stats';
 import {
   bandpassOffline,
   detrendLinear,
