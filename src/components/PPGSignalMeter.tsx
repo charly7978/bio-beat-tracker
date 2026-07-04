@@ -18,17 +18,11 @@ import {
   drawPressureGauge,
   drawSignal,
   drawAcquisitionOverlay,
-  drawFingerGuideRing,
   drawTrendStrip,
   drawFooter,
 } from '@/lib/ui/ppgCanvasRenderer';
 import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
-import { computeCameraPeekState, computeRoiScreenRect, guideCaption } from '@/lib/ui/cameraPeek';
-import {
-  createPositioningFeedbackState,
-  processFeedback,
-} from '@/lib/finger/fingerPositioningFeedback';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
 
@@ -39,13 +33,6 @@ export interface PPGSignalMeterProps {
   onStartMeasurement: () => void;
   onReset: () => void;
   isMonitoring?: boolean;
-  /**
-   * Da acceso al elemento <video> de la cámara para mapear el ROI real que
-   * muestrea el algoritmo (ver `computeRoiScreenRect`) a coordenadas de
-   * pantalla, y así el anillo guía coincida con los píxeles exactos
-   * procesados en vez de ser un círculo decorativo.
-   */
-  getVideoElement?: () => HTMLVideoElement | null;
   arrhythmiaStatus?: string;
   rawArrhythmiaData?: {
     timestamp: number;
@@ -111,7 +98,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   onStartMeasurement,
   onReset,
   isMonitoring = false,
-  getVideoElement,
   arrhythmiaStatus,
   rawArrhythmiaData,
   preserveResults = false,
@@ -140,8 +126,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus,
     contactState, acquisitionStatus, diagnostics,
   });
-  const getVideoElementRef = useRef(getVideoElement);
-  getVideoElementRef.current = getVideoElement;
 
   const lastPeakTimeRef = useRef(0);
   const lastPeakProcessedRef = useRef(0);
@@ -167,9 +151,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const displaySysRef = useRef(0);
   const displayDiaRef = useRef(0);
   const waveGainRef = useRef(4.5);
-
-  // Estado de feedback de posicionamiento: trackea haptics y transiciones
-  const positioningFeedbackRef = useRef(createPositioningFeedbackState());
 
   useImperativeHandle(ref, () => ({
     pushSignal: (val: number, _ts: number) => {
@@ -314,9 +295,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     canvas.height = Math.floor(cssH * dpr);
     canvas.style.width = `${cssW}px`;
     canvas.style.height = `${cssH}px`;
-    // alpha:true — el canvas del monitor deja de ser opaco para que la cámara
-    // trasera se asome "detrás del vidrio" (ventana de previsualización del dedo).
-    const ctx = canvas.getContext('2d', { alpha: true });
+    const ctx = canvas.getContext('2d', { alpha: false });
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const header = { x: 0, y: 0, w: cssW, h: 36 };
@@ -369,7 +348,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         animationRef.current = requestAnimationFrame(render);
         return;
       }
-      const ctx = canvas.getContext('2d', { alpha: true });
+      const ctx = canvas.getContext('2d', { alpha: false });
       if (!ctx) {
         animationRef.current = requestAnimationFrame(render);
         return;
@@ -416,20 +395,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         : 0;
 
 
-      const diagStage = (p.diagnostics as { acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY' } | undefined)?.acquisitionStage;
-      const placementStable = (p.diagnostics as { placementStable?: boolean } | undefined)?.placementStable;
-
-      const peek = computeCameraPeekState({
-        isMonitoring: p.isMonitoring,
-        contactState: p.contactState,
-        acquisitionStage: diagStage,
-        quality: p.quality ?? 0,
-        placementStable,
-      });
-
-      // Procesa feedback háptico basado en la transición real de guideLevel
-      void processFeedback(peek.guideLevel, now, positioningFeedbackRef.current);
-
       const renderState: PpgRenderState = {
         layout: layoutRef.current,
         props: {
@@ -461,35 +426,12 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         arrActiveUntil: arrActiveUntilRef.current,
         traceRevealed: traceRevealedRef.current,
         signalStrength: signalStrengthNow,
-        monitorOpacity: peek.monitorOpacity,
       };
 
-      drawBackground(ctx, layoutRef.current.width, layoutRef.current.height, peek.monitorOpacity);
+      drawBackground(ctx, layoutRef.current.width, layoutRef.current.height);
       drawHeader(ctx, renderState);
       drawMetricsBar(ctx, renderState);
       drawGrid3D(ctx, renderState);
-      if (p.isMonitoring) {
-        const video = getVideoElementRef.current?.();
-        const roiGeometry = video
-          ? computeRoiScreenRect(
-              video.videoWidth,
-              video.videoHeight,
-              layoutRef.current.width,
-              layoutRef.current.height,
-            )
-          : null;
-        drawFingerGuideRing(
-          ctx,
-          renderState,
-          {
-            guideLevel: peek.guideLevel,
-            guideColor: peek.guideColor,
-            glowColor: peek.glowColor,
-            caption: guideCaption(peek.guideLevel, p.diagnostics?.placementHint),
-          },
-          roiGeometry,
-        );
-      }
       drawPressureGauge(ctx, renderState);
       drawSignal(ctx, renderState);
       drawAcquisitionOverlay(ctx, renderState);
@@ -535,21 +477,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   }, [onReset]);
 
   return (
-    // Sin fondo opaco propio: el canvas (drawBackground) controla la opacidad
-    // del "vidrio" del monitor frame a frame, para dejar asomar la cámara
-    // trasera detrás cuando corresponda (ventana de previsualización del dedo).
-    <div ref={containerRef} className="fixed inset-0 overflow-hidden">
+    <div ref={containerRef} className="fixed inset-0 bg-slate-950 overflow-hidden">
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
-        style={{
-          // Vidrio esmerilado: la cámara trasera (detrás, ya en el DOM) se ve
-          // difuminada y tenue a través de las zonas transparentes del canvas,
-          // sin afectar la nitidez de la onda ni de los paneles de datos, que
-          // pintan su propio fondo semi-opaco encima en cada frame.
-          backdropFilter: 'blur(3px) saturate(1.15)',
-          WebkitBackdropFilter: 'blur(3px) saturate(1.15)',
-        }}
       />
       <PulseIndicator showPulse={showPulse} />
       <ActionButtons
