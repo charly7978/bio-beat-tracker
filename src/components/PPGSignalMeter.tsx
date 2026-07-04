@@ -26,6 +26,10 @@ import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
 import { computeCameraPeekState, computeRoiScreenRect, guideCaption } from '@/lib/ui/cameraPeek';
 import { calculateFingerCenteringMetrics } from '@/lib/finger/fingerPositioningValidator';
+import {
+  createPositioningFeedbackState,
+  processFeedback,
+} from '@/lib/finger/fingerPositioningFeedback';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
 
@@ -164,6 +168,9 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const displaySysRef = useRef(0);
   const displayDiaRef = useRef(0);
   const waveGainRef = useRef(4.5);
+
+  // Estado de feedback de posicionamiento: trackea haptics y transiciones
+  const positioningFeedbackRef = useRef(createPositioningFeedbackState());
 
   useImperativeHandle(ref, () => ({
     pushSignal: (val: number, _ts: number) => {
@@ -433,6 +440,14 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         placementStable,
         centeringMetrics,
       });
+
+      // Procesa feedback háptico y visual basado en cambios de estado
+      void processFeedback(
+        peek.guideLevel,
+        centeringMetrics?.centeringScore ?? 0,
+        now,
+        positioningFeedbackRef.current,
+      );
 
       const renderState: PpgRenderState = {
         layout: layoutRef.current,
