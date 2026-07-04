@@ -319,6 +319,15 @@ export class HeartBeatProcessor {
         isPeak = true;
         emitReason = decision.reason;
         const wScore = decision.weightedScore ?? 0;
+
+        // Feedback del latido: beep + vibración disparados por el MISMO evento
+        // (pico emitido) que revela la onda y el pulso en el monitor. La
+        // genuinidad ya la garantiza decidePeakEmit (score>=minScore, refractario
+        // ~300ms, plausibilidad RR, confianza), así que no se aplica un segundo
+        // umbral divergente: audio, háptico y visual quedan 1:1 y en armonía.
+        this.vibrate();
+        this.playBeep();
+
         const prevEmitted = this.lastEmittedPeakTime;
         this.lastEmittedPeakTime = decision.peakTimeMs;
         this.lastPeakTime = decision.peakTimeMs;
@@ -355,11 +364,6 @@ export class HeartBeatProcessor {
               this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
             }
           }
-        }
-
-        if (wScore >= 0.4 && this.rrIntervals.length >= 1) {
-          this.vibrate();
-          this.playBeep();
         }
       }
 
