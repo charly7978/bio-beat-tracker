@@ -1,35 +1,20 @@
-name: Aplicar mejoras y construir APK
+name: Build APK
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  apply-and-build:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout main
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Aplicar parche con el codigo real
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [ -f biobeatmejorasyapk.patch ] && git apply --check biobeatmejorasyapk.patch 2>/dev/null; then
-            git apply biobeatmejorasyapk.patch
-            rm -f .github/workflows/build-apk.yml
-            git rm -f biobeatmejorasyapk.patch ridethroughdedoimpecable.patch 2>/dev/null || true
-            git add -A
-            git commit -m "feat(ppg): aplica ride-through + biofeedback"
-            git push origin main
-          else
-            echo "Ya estaba aplicado. Continuo al build."
-          fi
 
       - name: Setup Node
         uses: actions/setup-node@v4
