@@ -611,31 +611,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       }
     }
 
-    let eegValue = 0;
-    if (hasUsableContact && lastPeakTimestampRef.current > 0) {
-      const elapsed = nowT - lastPeakTimestampRef.current;
-      const ampScale = lastPeakAmplitudeRef.current;
-      
-      const maxPeak = 8.0 * ampScale;
-      const minPeak = -3.2 * ampScale;
-      const peakRange = maxPeak - minPeak; // 11.2 * ampScale
-
-      // EEG-style heartbeat spike:
-      // 0ms: reached maximum peak (+10.0 * scale) at the exact moment of peak detection
-      // 0ms - 60ms: instant descent from maxPeak to minPeak (below baseline)
-      // 60ms - 170ms: return from minPeak to 0.0
-      // > 170ms: rest at 0.0
-      if (elapsed >= 0 && elapsed < 60) {
-        const t = elapsed / 60;
-        eegValue = maxPeak - t * peakRange;
-      } else if (elapsed >= 60 && elapsed < 170) {
-        const t = (elapsed - 60) / 110;
-        eegValue = minPeak + t * Math.abs(minPeak);
-      } else {
-        eegValue = 0.0;
-      }
-    }
-
     const showWaveform = hasUsableContact;
 
     if (ppgMeterRef?.current) {

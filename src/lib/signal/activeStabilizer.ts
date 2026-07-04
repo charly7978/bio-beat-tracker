@@ -51,9 +51,9 @@ export function stabilizeSample(state: ActiveStabilizerState, x: number): number
   //    recibe ALPHA_MIN (más suavizado que lineal); bordes (ad ≫ midpoint) reciben
   //    alpha→1 (mejor seguimiento de flancos). Transición más nítida que lineal.
   const delta = detrended - state.ema;
-  // @ts-ignore
+  // @ts-expect-error - Acceso a propiedad dinámica de estabilización IA
   const edgeThreshold = state.customEdgeThreshold ?? C.EDGE_THRESHOLD;
-  // @ts-ignore
+  // @ts-expect-error - Acceso a propiedad dinámica de estabilización IA
   const alphaMin = state.customAlphaMin ?? C.ALPHA_MIN;
 
   const ad = Math.abs(delta) / Math.max(1e-9, edgeThreshold);

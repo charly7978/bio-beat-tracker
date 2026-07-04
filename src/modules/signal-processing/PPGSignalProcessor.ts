@@ -57,11 +57,6 @@ import {
   type AcquisitionState,
 } from '../../lib/acquisition/AcquisitionStabilizer';
 import { tilePulsatility, pulsatilityBoost } from '../../lib/signal/tileFusion';
-import {
-  createActiveStabilizer,
-  stabilizeSample,
-  resetActiveStabilizer,
-} from '../../lib/signal/activeStabilizer';
 import { bandLimitedDominantFreq } from './shared/dsp';
 import { RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
 
@@ -523,7 +518,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       motionArtifact,
       this.placementMode,
     );
-    const morphSource = this.extractMorphologySignal(
+    const _morphSource = this.extractMorphologySignal(
       roi.rawRed,
       roi.rawGreen,
       roi.rawBlue,
@@ -2026,23 +2021,5 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   getBackpressureConfig(): BackpressureConfig {
     return { ...this.backpressureConfig };
-  }
-
-  /** Permite al Cerebro LLM ajustar la agresividad del denoiser en caliente */
-  setDenoiseAggressiveness(isNoisy: boolean): void {
-    const C = VITAL_THRESHOLDS.ACTIVE_STAB;
-    // Si la IA detecta ruido, bajamos el umbral de borde para suavizar más
-    // y aumentamos el suavizado base.
-    if (isNoisy) {
-      // @ts-ignore - acceso dinámico para ajuste fino sin cambiar constantes
-      this.activeStabilizer.customEdgeThreshold = C.EDGE_THRESHOLD * 0.7;
-      // @ts-ignore
-      this.activeStabilizer.customAlphaMin = C.ALPHA_MIN * 0.8;
-    } else {
-      // @ts-ignore
-      this.activeStabilizer.customEdgeThreshold = undefined;
-      // @ts-ignore
-      this.activeStabilizer.customAlphaMin = undefined;
-    }
   }
 }

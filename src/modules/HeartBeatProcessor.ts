@@ -235,7 +235,7 @@ export class HeartBeatProcessor {
     }
 
     const windowLen = this.consecutivePeaks < 3 ? 90 : 150;
-    const { normalizedValue, range } = this.normalizeSignal(filteredValue, windowLen);
+    const { normalizedValue, range: _range } = this.normalizeSignal(filteredValue, windowLen);
 
     // Eliminamos duplicados: SQI y periodicidad ya vienen calculados del PPGSignalProcessor
     this.internalSqi = this.ppgSqi;

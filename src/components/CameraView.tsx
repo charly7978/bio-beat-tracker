@@ -326,8 +326,8 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
           if (caps.exposureMode?.includes("manual") && redLevel > 0) {
             constraints.push({ exposureMode: "manual" });
 
-            // Error relativo respecto al objetivo clínico (200 DN)
-            const target = 200;
+            // Error relativo respecto al objetivo clínico (RED_TARGET_MAX DN)
+            const target = RED_TARGET_MAX;
             const error = target / redLevel;
 
             // Factor adaptativo amortiguado para evitar oscilaciones de hardware
