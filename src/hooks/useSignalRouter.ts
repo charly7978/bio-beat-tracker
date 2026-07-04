@@ -164,6 +164,29 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, applyDspC
   const stabilizationRef = useRef(createStabilizationState());
   const lastOrchestratorVerdict = useRef<SectorCommands | null>(null);
   const orchestratorIntervalRef = useRef<number | null>(null);
+  const orchestratorBusyRef = useRef(false);
+  // Estado LIVE del último frame procesado — el loop agéntico lee de acá, nunca
+  // de un closure congelado, así el cerebro siempre razona sobre el frame más
+  // reciente y no sobre una foto vieja capturada al crear el intervalo.
+  const liveFrameStateRef = useRef<{
+    hasUsableContact: boolean;
+    bpmLive: number;
+    rawSqi: number;
+    perfusionIndex: number;
+    rrIntervals: number[];
+    fps: number;
+    iso: number;
+    exposure: number;
+  }>({
+    hasUsableContact: false,
+    bpmLive: 0,
+    rawSqi: 0,
+    perfusionIndex: 0,
+    rrIntervals: [],
+    fps: 30,
+    iso: 100,
+    exposure: 0,
+  });
 
   // Buffer elástico de "buenos frames" para colocación robusta: desacopla el
   // ritmo de captura del de consumo y aporta una COBERTURA suavizada por
@@ -215,6 +238,66 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, applyDspC
     void orchestrator.initialize();
     void visionAgent.initialize();
 
+    // --- LOOP AGÉNTICO EN VIVO ---
+    // Se crea UNA sola vez al montar y corre durante toda la vida del componente.
+    // En cada tick lee el estado MÁS RECIENTE desde refs (liveFrameStateRef),
+    // nunca desde un closure capturado — así el cerebro siempre analiza el frame
+    // actual, no uno congelado del momento en que arrancó el contacto.
+    const AGENT_TICK_MS = 900;
+    orchestratorIntervalRef.current = window.setInterval(async () => {
+      const live = liveFrameStateRef.current;
+      if (!live.hasUsableContact || orchestratorBusyRef.current) return;
+
+      orchestratorBusyRef.current = true;
+      try {
+        const video = document.querySelector('video');
+        const visionReport = video ? await visionAgent.analyzeFrame(video, 0) : null;
+        const waveReport = waveAgent.analyzeMorphology(live.rrIntervals);
+
+        const snapshot: SessionSnapshot = {
+          vision: {
+            scene: visionReport?.scene || 'uncertain',
+            certainty: visionReport?.confidence || 0,
+            description: visionReport?.description,
+          },
+          signal: {
+            bpm: live.bpmLive,
+            sqi: live.rawSqi,
+            pi: live.perfusionIndex,
+            asymmetry: waveReport.systolicAsymmetry,
+            notchDetected: waveReport.notchDetected,
+          },
+          hardware: {
+            fps: live.fps,
+            iso: live.iso,
+            exposure: live.exposure,
+          },
+        };
+
+        const commands = await orchestrator.reason(snapshot);
+        lastOrchestratorVerdict.current = commands;
+
+        if (commands.ui?.speak) voiceSector.speak(commands.ui.speak);
+
+        if (commands.camera) {
+          const cam = document.querySelector('video') as unknown as {
+            __handle?: { controlHardware: (cmd: SectorCommands['camera']) => void };
+          };
+          cam?.__handle?.controlHardware?.(commands.camera);
+        }
+
+        if (commands.dsp) {
+          applyDspCommand(commands.dsp);
+        }
+
+        log.info('IA Orchestration Result:', commands);
+      } catch (e) {
+        log.warn('Agentic loop tick failed', e);
+      } finally {
+        orchestratorBusyRef.current = false;
+      }
+    }, AGENT_TICK_MS);
+
     return () => {
       if (beatMarkerTimerRef.current) {
         window.clearTimeout(beatMarkerTimerRef.current);
@@ -225,7 +308,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, applyDspC
         orchestratorIntervalRef.current = null;
       }
     };
-  }, []);
+  }, [applyDspCommand]);
 
   const applyLiveDisplaySmooth = useCallback((vitals: VitalSignsResult): VitalSignsResult => {
     const hr = vitals.heartRate.value ?? 0;
@@ -468,63 +551,20 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, applyDspC
     const bpmOut =
       hasUsableContact && fingerConfirmed && bpmLive > 0 ? bpmLive : 0;
 
-    // --- LOOP AGÉNTICO (Cada 2.5 segundos) ---
-    if (hasUsableContact && bpmLive > 0 && !orchestratorIntervalRef.current) {
-      orchestratorIntervalRef.current = window.setInterval(async () => {
-        if (!hasUsableContact) return;
-
-        // 1. Recolectar Informes Tácticos
-        const video = document.querySelector('video');
-        const visionReport = video ? await visionAgent.analyzeFrame(video, lastHbInputRef.current) : null;
-        const waveReport = waveAgent.analyzeMorphology(heartBeatResult.rrData?.intervals || []);
-
-        // 2. Construir Snapshot de Sesión
-        const snapshot: SessionSnapshot = {
-          vision: {
-            scene: visionReport?.scene || 'uncertain',
-            certainty: visionReport?.confidence || 0
-          },
-          signal: {
-            bpm: bpmLive,
-            sqi: rawSqi,
-            pi: lastSignal.perfusionIndex ?? 0,
-            asymmetry: waveReport.systolicAsymmetry,
-            notchDetected: waveReport.notchDetected
-          },
-          hardware: {
-            fps: lastSignal.diagnostics?.sqm?.fpsEffective || 30,
-            iso: lastSignal.diagnostics?.sqm?.iso as number || 100,
-            exposure: lastSignal.diagnostics?.sqm?.exposureTime as number || 0
-          }
-        };
-
-        // 3. Razonamiento Central (Llama 3.2 3B)
-        const commands = await orchestrator.reason(snapshot);
-        lastOrchestratorVerdict.current = commands;
-
-        // 4. Ejecución en Sectores
-        if (commands.ui?.speak) voiceSector.speak(commands.ui.speak);
-
-        // Ejecución en Sector Cámara (Handle dinámico)
-        if (commands.camera && cameraHintsRef.current) {
-          // Buscamos el elemento de hardware si está disponible
-          const cam = document.querySelector('video') as unknown as { __handle?: { controlHardware: (cmd: import('@/lib/ml/SessionOrchestrator').SectorCommands['camera']) => void } };
-          if (cam?.__handle?.controlHardware) {
-             cam.__handle.controlHardware(commands.camera);
-          }
-        }
-
-        // Ejecución en Sector DSP
-        if (commands.dsp) {
-           applyDspCommand(commands.dsp);
-        }
-
-        log.info('IA Orchestration Result:', commands);
-      }, 2500);
-    } else if (!hasUsableContact && orchestratorIntervalRef.current) {
-      window.clearInterval(orchestratorIntervalRef.current);
-      orchestratorIntervalRef.current = null;
-    }
+    // --- ESTADO VIVO PARA EL LOOP AGÉNTICO ---
+    // Publicamos el frame más reciente en un ref; el intervalo (montado una sola
+    // vez en el efecto de arriba) lo lee en cada tick, así el cerebro nunca
+    // razona sobre datos congelados de un frame viejo.
+    liveFrameStateRef.current = {
+      hasUsableContact,
+      bpmLive,
+      rawSqi,
+      perfusionIndex: lastSignal.perfusionIndex ?? 0,
+      rrIntervals: heartBeatResult.rrData?.intervals || [],
+      fps: (lastSignal.diagnostics?.sqm?.fpsEffective as number) || 30,
+      iso: (lastSignal.diagnostics?.sqm?.iso as number) || 100,
+      exposure: (lastSignal.diagnostics?.sqm?.exposureTime as number) || 0,
+    };
 
     // ESTABILIZACIÓN POR CONVERGENCIA (criterio REAL, reemplaza el warm-up fijo).
     // La señal está estable cuando la LECTURA DE HR convergió (dejó de moverse) y
@@ -956,7 +996,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, applyDspC
   }, [
     processHeartBeat,
     processVitalSigns,
-    applyDspCommand,
     cameraHintsRef,
     resetFingerContactSession,
     applyLiveDisplaySmooth,

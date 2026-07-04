@@ -10,6 +10,7 @@ export interface SessionSnapshot {
     scene: string;
     certainty: number;
     tissueTransparency?: number;
+    description?: string;
   };
   signal: {
     bpm: number;
@@ -143,7 +144,8 @@ ${history}
 Responde EXCLUSIVAMENTE con un objeto JSON válido.<|eot_id|>
 <|start_header_id|>user<|end_header_id|>
 Snapshot actual:
-Visión: ${JSON.stringify(s.vision)}
+Visión (descripción libre del Agente Centinela VLM sobre el frame real de la cámara): "${s.vision.description || 'sin descripción'}"
+Visión (resumen estructurado): ${JSON.stringify(s.vision)}
 Señal: ${JSON.stringify(s.signal)}
 Hardware: ${JSON.stringify(s.hardware)}
 
