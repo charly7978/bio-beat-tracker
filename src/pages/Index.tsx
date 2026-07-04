@@ -13,6 +13,8 @@ import { useFrameLoop } from "@/hooks/useFrameLoop";
 import { useSignalRouter } from "@/hooks/useSignalRouter";
 import { useMeasurementSession } from "@/hooks/useMeasurementSession";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
+import FingerAcquisitionGuide from "@/components/FingerAcquisitionGuide";
+import type { ContactHintKind } from "@/lib/finger/fingerContactScore";
 import { PoincarePlot } from "@/components/PoincarePlot";
 import { WebrtcCallWidget } from "@/components/WebrtcCallWidget";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
@@ -194,7 +196,13 @@ const Index = () => {
       exposureLockedRef.current = false;
       return;
     }
-    if (!exposureLockedRef.current && cs === 'STABLE_CONTACT') {
+    // Bloquea EN CUANTO hay contacto (UNSTABLE o STABLE), no solo al estabilizar:
+    // así el auto-exposure deja de derivar mientras el usuario aún ajusta la
+    // colocación, y el rojo del dedo sobrevive para que el pulso emerja rápido.
+    if (
+      !exposureLockedRef.current &&
+      (cs === 'STABLE_CONTACT' || cs === 'UNSTABLE_CONTACT')
+    ) {
       exposureLockedRef.current = true;
       // Acción concreta sobre el hardware: foco cercano + WB bloqueado + exposición
       // auto-optimizada según el nivel REAL del rojo del dedo (no un valor fijo).
@@ -683,6 +691,16 @@ const Index = () => {
     return () => window.removeEventListener('camera-error', handler);
   }, []);
 
+  // GUÍA DE COLOCACIÓN: fase de adquisición (antes de estabilizar) + contacto
+  // universal continuo. Mientras dure, el monitor se vuelve transparente para
+  // revelar la cámara y se muestra el medidor de proximidad "caliente/frío".
+  const diagRec = router.currentDiagnostics as Record<string, unknown> | null;
+  const acqStage = diagRec?.acquisitionStage as string | undefined;
+  const contactScore =
+    typeof diagRec?.contactScore === 'number' ? (diagRec.contactScore as number) : 0;
+  const contactHint = (diagRec?.contactHint as ContactHintKind | undefined) ?? 'searching';
+  const acquiring = session.isMonitoring && !session.showResults && acqStage !== 'READY';
+
   const handleToggleMonitoring = () => {
     if (session.isMonitoring) {
       session.finalizeMeasurement();
@@ -841,6 +859,7 @@ const Index = () => {
               rawArrhythmiaData={router.lastArrhythmiaData.current}
               preserveResults={session.showResults}
               isPeak={router.beatMarker === 1}
+              acquiring={acquiring}
               bpm={router.vitalSigns.heartRate.value ?? null}
               spo2={router.vitalSigns.spo2.value || 0}
               arrhythmiaCount={router.vitalSigns.arrhythmia.value?.count ?? 0}
@@ -864,6 +883,14 @@ const Index = () => {
               diagnostics={router.currentDiagnostics as unknown as import('@/components/PPGSignalMeter').PPGSignalMeterProps['diagnostics']}
             />
           </div>
+
+          {/* GUÍA DE COLOCACIÓN — medidor de proximidad "caliente/frío" sobre la
+              cámara revelada, durante la fase de adquisición. */}
+          <FingerAcquisitionGuide
+            visible={acquiring}
+            contactScore={contactScore}
+            contactHint={contactHint}
+          />
 
           {/* STATUS BAR — sobre los botones INICIAR/RESET (h-12) y a la izquierda del toggle 3D */}
           <div 

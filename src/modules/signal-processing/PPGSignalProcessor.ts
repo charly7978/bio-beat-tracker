@@ -25,6 +25,11 @@ import {
   resetZlo,
 } from '../../lib/finger/fingerContactSignature';
 import {
+  computeContactScore,
+  CONTACT_ACQUIRE_THRESHOLD,
+  type ContactHintKind,
+} from '../../lib/finger/fingerContactScore';
+import {
   isExposureFlickerNotFingerPulse,
   isOpenFlashWithoutContact,
   passesFingerAcquire,
@@ -78,6 +83,11 @@ interface ROIMetrics {
   roiH: number;
   roiW: number;
   centroidMotion: number;
+  /** Uniformidad espacial del rojo [0..1] (dedo cubriendo = homogéneo). */
+  redUniformity: number;
+  /** Sesgo de cobertura: dirección [-1..1] hacia donde el dedo debe moverse para centrarse. */
+  coverageBiasX: number;
+  coverageBiasY: number;
 }
 
 /**
@@ -230,6 +240,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private readonly roiRedPulseRing = new RingF32(VITAL_THRESHOLDS.FINGER.ROI_PULSE_BUFFER);
   private lastRoiRedCv = 0;
 
+  /** Contacto universal (rojo uniforme sobre la lente): puntaje 0–1 suavizado + hint. */
+  private contactScoreEma = 0;
+  private contactHint: ContactHintKind = 'searching';
+
   /** Skewness y relative power cacheados para SQI (recalculados periódicamente) */
   private cachedSkewness = 0;
   private cachedKurtosis = 0;
@@ -352,6 +366,26 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const endRoi = ppgPerf.start('roi');
     const roi = this.extractROI(imageData);
     endRoi();
+
+    // Contacto universal (device-agnostic): rojo profundo + uniforme sobre la
+    // lente. Es la señal física más robusta de "el dedo cubre lente+flash" y no
+    // depende de la firma de color estricta (que falla por WB/exposición). Guía
+    // el medidor de proximidad y una vía de adquisición tolerante.
+    const contact = computeContactScore({
+      red: roi.rawRed,
+      green: roi.rawGreen,
+      blue: roi.rawBlue,
+      coverage: roi.coverageRatio,
+      redUniformity: roi.redUniformity,
+      coverageBias: { x: roi.coverageBiasX, y: roi.coverageBiasY },
+    });
+    // Suavizado asimétrico: sube rápido (sentir el contacto al instante), baja
+    // más lento (no parpadear ante un micro-descuadre).
+    this.contactScoreEma =
+      contact.score > this.contactScoreEma
+        ? this.contactScoreEma * 0.4 + contact.score * 0.6
+        : this.contactScoreEma * 0.8 + contact.score * 0.2;
+    this.contactHint = contact.hint;
 
     this.roiRedPulseRing.push(roi.rawRed);
     const Fpulse = VITAL_THRESHOLDS.FINGER;
@@ -975,6 +1009,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (this.motionScore > F.ACQUIRE_MAX_MOTION_SOFT) return false;
     if (raw.red > 254 && raw.green > 254 && raw.blue > 254) return false;
 
+    // VÍA UNIVERSAL DE CONTACTO: rojo profundo y UNIFORME cubriendo la lente. Es
+    // device-agnostic (no depende de la firma de color estricta que falla por
+    // balance de blancos/exposición) → admite el dedo dondequiera que cubra la
+    // lente y elimina la búsqueda del "punto exacto". El pulso/SQI refinan luego
+    // la calidad; esto solo confirma la PRESENCIA física del dedo.
+    if (this.contactScoreEma >= CONTACT_ACQUIRE_THRESHOLD) return true;
+
     const placementInstant = classifyFingerPlacement({
       coverageRatio: spatial.coverageRatio,
       roiRedCv: this.lastRoiRedCv,
@@ -1083,6 +1124,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       acquisitionStage: this.acquisitionState.stage,
       acquisitionConfidence: this.acquisitionState.confidence,
       acquisitionProgress: this.acquisitionState.progress,
+      // Guía de colocación universal (medidor de proximidad + hint direccional).
+      contactScore: this.contactScoreEma,
+      contactHint: this.contactHint,
+      coverageBiasX: roi.coverageBiasX,
+      coverageBiasY: roi.coverageBiasY,
     };
   }
 
@@ -1160,6 +1206,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     let sumWeight = 0;
     let sumX = 0;
     let sumY = 0;
+    // Acumuladores para la uniformidad espacial del rojo (media/varianza de red
+    // por celda válida) — firma robusta de "dedo cubriendo la lente".
+    let redSum = 0;
+    let redSqSum = 0;
 
     for (let i = 0; i < N; i++) {
       const t = tiles[i];
@@ -1203,6 +1253,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       m.total = total; m.redDominance = redDominance; m.rednessRatio = rednessRatio;
       m.centerBias = centerBias; m.frameScore = frameScore; m.combinedScore = combinedScore;
       m.valid = true;
+      redSum += red;
+      redSqSum += red * red;
       m.isFinger =
         red > F.TILE_MIN_RED &&
         total > F.TILE_MIN_TOTAL &&
@@ -1293,7 +1345,29 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         roiW,
         roiH,
         centroidMotion: 0,
+        redUniformity: 0,
+        coverageBiasX: 0,
+        coverageBiasY: 0,
       };
+    }
+
+    // Uniformidad espacial del rojo: coef. de variación bajo = rojo homogéneo
+    // (dedo). Se mapea a [0..1] (1 = totalmente uniforme).
+    const redMean = redSum / validCount;
+    const redVar = Math.max(0, redSqSum / validCount - redMean * redMean);
+    const redCv = redMean > 1 ? Math.sqrt(redVar) / redMean : 1;
+    const redUniformity = clamp(1 - redCv / 0.6, 0, 1);
+
+    // Sesgo de cobertura: hacia dónde mover el dedo para centrarlo. Si las celdas
+    // de dedo se agrupan a la izquierda (centroide < 0.5), hay que mover a la
+    // derecha (biasX > 0). Solo con suficientes celdas de dedo para ser fiable.
+    let coverageBiasX = 0;
+    let coverageBiasY = 0;
+    if (fingerCount >= F.MIN_FINGER_TILES_FOR_WEIGHTING && sumWeight > 0 && this.TILE_COLUMNS > 1) {
+      const fcNormX = (sumX / sumWeight) / (this.TILE_COLUMNS - 1);
+      const fcNormY = (sumY / sumWeight) / (this.TILE_ROWS - 1);
+      coverageBiasX = clamp((0.5 - fcNormX) * 2, -1, 1);
+      coverageBiasY = clamp((0.5 - fcNormY) * 2, -1, 1);
     }
 
     const useFingerOnly = fingerCount >= F.MIN_FINGER_TILES_FOR_WEIGHTING;
@@ -1340,6 +1414,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       roiW,
       roiH,
       centroidMotion,
+      redUniformity,
+      coverageBiasX,
+      coverageBiasY,
     };
   }
 
@@ -1761,6 +1838,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.stableContactCount = 0;
     this.instantLostStreak = 0;
     this.lastInstantFinger = false;
+    this.contactScoreEma = 0;
+    this.contactHint = 'searching';
     this.accelRespRing.reset();
     this.gravityEmaInit = false;
     this.accelRespEstimate = null;

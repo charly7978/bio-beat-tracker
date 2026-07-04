@@ -66,6 +66,17 @@ export interface ProcessedSignal {
     placementCoverage?: number;
     /** La colocación se sostiene estable según el buffer elástico. */
     placementStable?: boolean;
+    /**
+     * Puntaje de contacto universal [0..1] (rojo profundo y uniforme sobre la
+     * lente). Alimenta el medidor de proximidad "caliente/frío" de la guía de
+     * colocación. Independiente de la firma de color estricta.
+     */
+    contactScore?: number;
+    /** Hint de colocación accionable (dirección/presión) derivado del contacto. */
+    contactHint?: import('../lib/finger/fingerContactScore').ContactHintKind;
+    /** Sesgo de cobertura [-1..1]: dirección para centrar el dedo. */
+    coverageBiasX?: number;
+    coverageBiasY?: number;
   };
 }
 

@@ -41,6 +41,12 @@ export interface PPGSignalMeterProps {
   } | null;
   preserveResults?: boolean;
   isPeak?: boolean;
+  /**
+   * Fase de colocación (antes de estabilizar): el lienzo se limpia a transparente
+   * para revelar la cámara real por detrás y el usuario ve su dedo mientras la
+   * guía de proximidad lo centra. Al estabilizar vuelve el monitor opaco.
+   */
+  acquiring?: boolean;
   bpm?: number | null;
   spo2?: number;
   rrIntervals?: number[];
@@ -102,6 +108,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   rawArrhythmiaData,
   preserveResults = false,
   isPeak = false,
+  acquiring = false,
   bpm = null,
   spo2 = 0,
   rrIntervals = [],
@@ -122,7 +129,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
 
   const propsRef = useRef({
     value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus,
-    arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals,
+    arrhythmiaCount, preserveResults, isPeak, acquiring, bpm, spo2, rrIntervals,
     rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus,
     contactState, acquisitionStatus, diagnostics,
   });
@@ -181,7 +188,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   useEffect(() => {
     propsRef.current = {
       value, quality, isFingerDetected, isMonitoring, arrhythmiaStatus,
-      arrhythmiaCount, preserveResults, isPeak, bpm, spo2, rrIntervals,
+      arrhythmiaCount, preserveResults, isPeak, acquiring, bpm, spo2, rrIntervals,
       rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus,
       contactState, acquisitionStatus, diagnostics,
     };
@@ -253,7 +260,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     }
   }, [
     value, quality, isFingerDetected, arrhythmiaStatus, preserveResults,
-    isPeak, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime,
+    isPeak, acquiring, bpm, spo2, rrIntervals, rawArrhythmiaData, elapsedTime,
     perfusionIndex, pressure, bpStatus, arrhythmiaCount, isMonitoring,
     contactState, acquisitionStatus, diagnostics,
   ]);
@@ -295,7 +302,9 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     canvas.height = Math.floor(cssH * dpr);
     canvas.style.width = `${cssW}px`;
     canvas.style.height = `${cssH}px`;
-    const ctx = canvas.getContext('2d', { alpha: false });
+    // alpha:true → durante la adquisición el lienzo puede limpiarse a transparente
+    // y dejar ver la cámara real por detrás (guía de colocación).
+    const ctx = canvas.getContext('2d', { alpha: true });
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const header = { x: 0, y: 0, w: cssW, h: 36 };
@@ -348,7 +357,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         animationRef.current = requestAnimationFrame(render);
         return;
       }
-      const ctx = canvas.getContext('2d', { alpha: false });
+      const ctx = canvas.getContext('2d', { alpha: true });
       if (!ctx) {
         animationRef.current = requestAnimationFrame(render);
         return;
@@ -356,6 +365,15 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       const now = Date.now();
 
       const p = propsRef.current;
+
+      // FASE DE COLOCACIÓN: limpiar a transparente para revelar la cámara real por
+      // detrás (la guía de proximidad se dibuja como overlay React encima). No se
+      // pinta el monitor hasta estabilizar → el usuario ve su dedo mientras centra.
+      if (p.acquiring && !p.preserveResults) {
+        ctx.clearRect(0, 0, layoutRef.current.width, layoutRef.current.height);
+        animationRef.current = requestAnimationFrame(render);
+        return;
+      }
       const fingerOn = p.isFingerDetected;
       const preserve = p.preserveResults;
       const targetBpm = !fingerOn && !preserve ? 0 : Math.max(0, p.bpm ?? 0);
@@ -477,7 +495,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   }, [onReset]);
 
   return (
-    <div ref={containerRef} className="fixed inset-0 bg-slate-950 overflow-hidden">
+    <div
+      ref={containerRef}
+      className={`fixed inset-0 overflow-hidden ${acquiring && !preserveResults ? 'bg-transparent' : 'bg-slate-950'}`}
+    >
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
