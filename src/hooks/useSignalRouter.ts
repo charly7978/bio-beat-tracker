@@ -956,6 +956,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, applyDspC
   }, [
     processHeartBeat,
     processVitalSigns,
+    applyDspCommand,
     cameraHintsRef,
     resetFingerContactSession,
     applyLiveDisplaySmooth,
