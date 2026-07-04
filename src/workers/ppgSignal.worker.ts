@@ -98,6 +98,12 @@ self.onmessage = async (event: MessageEvent) => {
         }
         break;
 
+      case 'applyDspCommand':
+        if (processor) {
+          processor.applyCommand(data);
+        }
+        break;
+
       default:
         // Tipo de mensaje no reconocido - ignorado silenciosamente
     }

@@ -257,6 +257,13 @@ export const useSignalProcessor = () => {
     return nextCfg;
   }, []);
 
+  const applyDspCommand = useCallback((cmd: import('@/lib/ml/SessionOrchestrator').SectorCommands['dsp']) => {
+    workerRef.current?.postMessage({
+      type: 'applyDspCommand',
+      data: cmd
+    });
+  }, []);
+
   const setSignalCallback = useCallback((cb: ((s: ProcessedSignal) => void) | null) => {
     realtimeCbRef.current = cb;
   }, []);
@@ -273,6 +280,7 @@ export const useSignalProcessor = () => {
     getBackpressureConfig,
     setBackpressureConfig,
     setCameraRuntimeHints,
+    applyDspCommand,
     setSignalCallback,
   };
 };

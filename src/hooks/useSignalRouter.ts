@@ -99,6 +99,7 @@ interface VitalSignsProcessorAPI {
 interface UseSignalRouterInput {
   processHeartBeat: HeartBeatProcessorAPI;
   processVitalSigns: VitalSignsProcessorAPI;
+  applyDspCommand: (cmd: import('@/lib/ml/SessionOrchestrator').SectorCommands['dsp']) => void;
   cameraHintsRef: React.MutableRefObject<CameraRuntimeHints>;
   ppgMeterRef?: React.RefObject<import('@/components/PPGSignalMeter').PPGSignalMeterHandle | null>;
 }
@@ -121,7 +122,7 @@ const {
   VITALS_PROCESS_EVERY_N_FRAMES,
 } = VITAL_THRESHOLDS.ROUTER;
 
-export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHintsRef, ppgMeterRef }: UseSignalRouterInput) {
+export function useSignalRouter({ processHeartBeat, processVitalSigns, applyDspCommand, cameraHintsRef, ppgMeterRef }: UseSignalRouterInput) {
   // Estados de salida
   const [vitalSigns, setVitalSigns] = useState<VitalSignsResult>(createDefaultVitalSignsResult);
   const [heartbeatSignal, setHeartbeatSignal] = useState(0);
@@ -515,8 +516,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
         // Ejecución en Sector DSP
         if (commands.dsp) {
-           // Notificar al procesador vía callback para que aplique el cambio de topología
-           // Esto se propaga en el siguiente frame para evitar jitter.
+           applyDspCommand(commands.dsp);
         }
 
         log.info('IA Orchestration Result:', commands);

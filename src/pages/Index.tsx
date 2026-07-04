@@ -69,6 +69,7 @@ const Index = () => {
     currentStride,
     setSignalCallback,
     setCameraRuntimeHints,
+    applyDspCommand,
   } = useSignalProcessor();
 
   const {
@@ -119,6 +120,7 @@ const Index = () => {
       setRGBData,
       getRGBStats,
     },
+    applyDspCommand,
     cameraHintsRef,
     ppgMeterRef,
   });
