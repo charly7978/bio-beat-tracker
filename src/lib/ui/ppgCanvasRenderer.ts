@@ -399,45 +399,76 @@ export function drawBackground(
 }
 
 /**
- * Anillo guía de colocación del dedo: se dibuja sobre la "ventana" de cámara
- * visible en el centro del panel de la onda. Su color/pulso traduce el estado
- * ya calculado por el pipeline (contactState/acquisitionStage/calidad) en una
- * señal continua y direccional, en vez de solo un texto reactivo pequeño.
+ * Anillo guía de colocación del dedo. A diferencia de un círculo decorativo,
+ * su posición y radio (`geometry`) están mapeados 1:1 a los píxeles REALES
+ * que el algoritmo muestrea (ver `computeRoiScreenRect` en `cameraPeek.ts`,
+ * que replica el ROI cuadrado de `PPGSignalProcessor.ts` a través del recorte
+ * `object-fit: cover` del `<video>`). Si no hay geometría real disponible
+ * todavía (metadata del video no cargó), cae a un círculo centrado en el
+ * panel como aproximación razonable. Color/pulso/leyenda traducen el estado
+ * ya calculado por el pipeline (contactState/placementStable/acquisitionStage)
+ * en una señal continua: solo pasa a verde con "¡Perfecto! Quedate quieto"
+ * cuando el dedo REALMENTE está sostenido en esa posición exacta.
  */
 export function drawFingerGuideRing(
   ctx: CanvasRenderingContext2D,
   state: PpgRenderState,
   guide: { guideLevel: string; guideColor: string; glowColor: string; caption: string },
+  geometry?: { cx: number; cy: number; r: number } | null,
 ): void {
   if (guide.guideLevel === 'ready') return;
   const { plot } = state.layout;
-  const cx = plot.x + plot.w / 2;
-  const cy = plot.y + plot.h * 0.42;
-  const baseR = Math.min(plot.w, plot.h) * 0.24;
-  const pulse = (Math.sin(state.now / 550) + 1) / 2;
-  const r = baseR + pulse * 6;
+  const fallbackCx = plot.x + plot.w / 2;
+  const fallbackCy = plot.y + plot.h * 0.42;
+  const fallbackR = Math.min(plot.w, plot.h) * 0.24;
+
+  const cx = geometry?.cx ?? fallbackCx;
+  const cy = geometry?.cy ?? fallbackCy;
+  const baseR = geometry?.r ?? fallbackR;
+  const isPerfect = guide.guideLevel === 'perfect';
+  const pulse = (Math.sin(state.now / (isPerfect ? 900 : 550)) + 1) / 2;
+  const r = baseR + pulse * (isPerfect ? 2 : 6);
 
   ctx.save();
 
   ctx.beginPath();
-  ctx.arc(cx, cy, r * 1.55, 0, Math.PI * 2);
+  ctx.arc(cx, cy, r * 1.35, 0, Math.PI * 2);
   ctx.fillStyle = guide.glowColor;
   ctx.fill();
 
-  ctx.setLineDash([10, 8]);
-  ctx.lineDashOffset = -(state.now / 30) % 18;
-  ctx.lineWidth = 2.5;
-  ctx.strokeStyle = guide.guideColor;
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  if (isPerfect) {
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = guide.guideColor;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Check central: refuerzo visual inequívoco de "ahí, exactamente ahí".
+    ctx.strokeStyle = guide.guideColor;
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.32, cy + r * 0.02);
+    ctx.lineTo(cx - r * 0.08, cy + r * 0.26);
+    ctx.lineTo(cx + r * 0.34, cy - r * 0.28);
+    ctx.stroke();
+  } else {
+    ctx.setLineDash([10, 8]);
+    ctx.lineDashOffset = -(state.now / 30) % 18;
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = guide.guideColor;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
   if (guide.caption) {
     ctx.font = `bold 12px ${FONT_MONO}`;
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(2, 6, 12, 0.55)';
-    const textY = cy + r + 26;
+    const textY = Math.min(cy + r + 26, plot.y + plot.h - 10);
     const metrics = ctx.measureText(guide.caption);
     const padX = 10;
     ctx.fillRect(cx - metrics.width / 2 - padX, textY - 14, metrics.width + padX * 2, 20);

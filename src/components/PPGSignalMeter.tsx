@@ -24,7 +24,7 @@ import {
 } from '@/lib/ui/ppgCanvasRenderer';
 import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
-import { computeCameraPeekState, guideCaption } from '@/lib/ui/cameraPeek';
+import { computeCameraPeekState, computeRoiScreenRect, guideCaption } from '@/lib/ui/cameraPeek';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
 
@@ -35,6 +35,13 @@ export interface PPGSignalMeterProps {
   onStartMeasurement: () => void;
   onReset: () => void;
   isMonitoring?: boolean;
+  /**
+   * Da acceso al elemento <video> de la cámara para mapear el ROI real que
+   * muestrea el algoritmo (ver `computeRoiScreenRect`) a coordenadas de
+   * pantalla, y así el anillo guía coincida con los píxeles exactos
+   * procesados en vez de ser un círculo decorativo.
+   */
+  getVideoElement?: () => HTMLVideoElement | null;
   arrhythmiaStatus?: string;
   rawArrhythmiaData?: {
     timestamp: number;
@@ -100,6 +107,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   onStartMeasurement,
   onReset,
   isMonitoring = false,
+  getVideoElement,
   arrhythmiaStatus,
   rawArrhythmiaData,
   preserveResults = false,
@@ -128,6 +136,8 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     rawArrhythmiaData, elapsedTime, perfusionIndex, pressure, bpStatus,
     contactState, acquisitionStatus, diagnostics,
   });
+  const getVideoElementRef = useRef(getVideoElement);
+  getVideoElementRef.current = getVideoElement;
 
   const lastPeakTimeRef = useRef(0);
   const lastPeakProcessedRef = useRef(0);
@@ -448,12 +458,26 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       drawMetricsBar(ctx, renderState);
       drawGrid3D(ctx, renderState);
       if (p.isMonitoring) {
-        drawFingerGuideRing(ctx, renderState, {
-          guideLevel: peek.guideLevel,
-          guideColor: peek.guideColor,
-          glowColor: peek.glowColor,
-          caption: guideCaption(peek.guideLevel, p.diagnostics?.placementHint),
-        });
+        const video = getVideoElementRef.current?.();
+        const roiGeometry = video
+          ? computeRoiScreenRect(
+              video.videoWidth,
+              video.videoHeight,
+              layoutRef.current.width,
+              layoutRef.current.height,
+            )
+          : null;
+        drawFingerGuideRing(
+          ctx,
+          renderState,
+          {
+            guideLevel: peek.guideLevel,
+            guideColor: peek.guideColor,
+            glowColor: peek.glowColor,
+            caption: guideCaption(peek.guideLevel, p.diagnostics?.placementHint),
+          },
+          roiGeometry,
+        );
       }
       drawPressureGauge(ctx, renderState);
       drawSignal(ctx, renderState);

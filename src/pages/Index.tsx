@@ -856,6 +856,7 @@ const Index = () => {
               onStartMeasurement={handleToggleMonitoring}
               onReset={handleReset}
               isMonitoring={session.isMonitoring}
+              getVideoElement={() => cameraRef.current?.getVideoElement?.() ?? null}
               arrhythmiaStatus={router.vitalSigns.arrhythmia.value?.status ?? ''}
               rawArrhythmiaData={router.lastArrhythmiaData.current}
               preserveResults={session.showResults}
