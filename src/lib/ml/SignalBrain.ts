@@ -127,7 +127,7 @@ Audita estos datos:
       const lower = text.toLowerCase();
       if (lower.includes('real_beat')) return { verdict: 'REAL_BEAT', confidence: 0.8, thought: text };
       if (lower.includes('noise')) return { verdict: 'NOISE_ARTIFACT', confidence: 0.8, thought: text };
-      if (lower.includes('fake')) return { verdict: 'FAKE_SIGNAL', confidence: 0.9, thought: text };
+      if (lower.includes('fake')) return { verdict: 'FAKE_SIGNAL', confidence: 0.9, thought: text }; // anti-sim-allow: reason="Internal label for AI verdict on simulated/fake inputs" ref="AI-SIGNAL-AUDIT"
 
       return { verdict: 'UNCERTAIN', confidence: 0.5, thought: text };
     }
