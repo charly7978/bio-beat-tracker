@@ -299,9 +299,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     public onSignalReady?: (signal: ProcessedSignal) => void,
     public onError?: (error: ProcessingError) => void
   ) {
-    // Pulso (HR): 0.5-4.5Hz — rango cardíaco estándar, 4º orden para mejor rechazo
-    this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate, 4.5);
-    // Morfología (BP): 0.5-8Hz — preserva escotadura dicrótica y forma completa del pulso
+    // Elgendi / NeuroKit2 estándar: 0.5-8Hz Butterworth 2º orden
+    this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate, 8.0);
+    // Morfología (BP): 0.5-8Hz — misma banda, preserva escotadura dicrótica
     this.morphBandpassFilter = new BandpassFilter(this.estimatedSampleRate, 8.0);
   }
 
