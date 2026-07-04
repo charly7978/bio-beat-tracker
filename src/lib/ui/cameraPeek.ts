@@ -1,8 +1,5 @@
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import {
-  FingerCenteringMetrics,
-  computeFingerGuideLevelFromCentering,
-} from '@/lib/finger/fingerPositioningValidator';
+import { FingerCenteringMetrics } from '@/lib/finger/fingerPositioningValidator';
 
 /**
  * Calcula cuánta "ventana" de cámara debe verse a través del monitor cardíaco

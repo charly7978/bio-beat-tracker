@@ -105,7 +105,7 @@ function computeCenteringFromSectors(
   const distanceFromCenter = Math.min(1, normalizedVariance * 0.5);
 
   // Hint de corrección
-  const correctionHint = computeCorrectionHint(sectors, centerIdx);
+  const correctionHint = computeCorrectionHint(sectors);
 
   // Rango aceptable: 70%+ de cobertura mínima
   const acceptableMinCoverage = minCoverageFactor * 0.7;
@@ -123,10 +123,7 @@ function computeCenteringFromSectors(
 /**
  * Genera un hint de corrección basado en dónde está concentrada la cobertura
  */
-function computeCorrectionHint(
-  sectors: number[][],
-  centerIdx: number,
-): FingerCenteringMetrics['correctionHint'] {
+function computeCorrectionHint(sectors: number[][]): FingerCenteringMetrics['correctionHint'] {
   // Suma de cobertura por dirección
   const topSum = sectors[0].reduce((a, b) => a + b, 0) +
                  sectors[1].reduce((a, b) => a + b, 0);
@@ -134,8 +131,6 @@ function computeCorrectionHint(
                     sectors[4].reduce((a, b) => a + b, 0);
   const leftSum = sectors[0][0] + sectors[1][0] + sectors[2][0] + sectors[3][0] + sectors[4][0];
   const rightSum = sectors[0][4] + sectors[1][4] + sectors[2][4] + sectors[3][4] + sectors[4][4];
-
-  const threshold = 0.15;
 
   // Detecta desequilibrio vertical
   if (topSum > bottomSum * 1.3) return 'move_down';

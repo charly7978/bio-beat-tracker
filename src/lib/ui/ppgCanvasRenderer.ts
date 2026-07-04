@@ -426,7 +426,6 @@ export function drawFingerGuideRing(
   const cy = geometry?.cy ?? fallbackCy;
   const baseR = geometry?.r ?? fallbackR;
   const isPerfect = guide.guideLevel === 'perfect';
-  const isSearching = guide.guideLevel === 'searching';
   const isAdjusting = guide.guideLevel === 'adjusting';
 
   // Pulso diferenciado según estado:

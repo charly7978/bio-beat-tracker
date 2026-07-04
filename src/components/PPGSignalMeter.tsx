@@ -421,14 +421,14 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       const placementStable = (p.diagnostics as { placementStable?: boolean } | undefined)?.placementStable;
 
       // Calcula métricas de centrado si hay datos de cobertura disponibles
-      const diag = p.diagnostics as any;
+      const diag = p.diagnostics as Record<string, unknown> | undefined;
       const centeringMetrics = diag?.placementCoverage !== undefined
         ? calculateFingerCenteringMetrics({
-            coverageRatio: diag.placementCoverage ?? 0,
-            sectorCoverage: diag.sectorCoverage,
-            centroidX: diag.centroidX,
-            centroidY: diag.centroidY,
-            distributionVariance: diag.distributionVariance,
+            coverageRatio: (diag.placementCoverage as number) ?? 0,
+            sectorCoverage: diag.sectorCoverage as number[][] | undefined,
+            centroidX: diag.centroidX as number | undefined,
+            centroidY: diag.centroidY as number | undefined,
+            distributionVariance: diag.distributionVariance as number | undefined,
           })
         : undefined;
 

@@ -46,8 +46,6 @@ export async function processFeedback(
   }
 
   const currentIsPerfect = currentLevel === 'perfect' && currentCenteringScore >= 0.75;
-  const levelChanged = currentLevel !== state.lastGuideLevel;
-  const scoreImproved = currentCenteringScore > state.lastCenteringScore + 0.2;
   const scoreWorsened = currentCenteringScore < state.lastCenteringScore - 0.2;
 
   // Transición a 'perfect': dedo correctamente centrado
