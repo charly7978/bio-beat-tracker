@@ -3,6 +3,8 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('SessionOrchestrator');
 
+export type SignalVerdict = 'REAL_BEAT' | 'NOISE_ARTIFACT' | 'FAKE_SIGNAL' | 'UNCERTAIN';
+
 export interface SessionSnapshot {
   vision: {
     scene: string;

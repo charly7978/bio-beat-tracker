@@ -368,7 +368,7 @@ const CameraView = forwardRef<CameraViewHandle, CameraViewProps>((
 
       void (async () => {
         try {
-          const constraints: AdvancedConstraint[] = {};
+          const constraints: AdvancedConstraint = {};
           if (cmd.fps) constraints.frameRate = cmd.fps;
           if (cmd.exposureCompensation) constraints.exposureCompensation = cmd.exposureCompensation;
 

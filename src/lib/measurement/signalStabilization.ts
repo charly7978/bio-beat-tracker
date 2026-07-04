@@ -28,7 +28,7 @@ export interface StabilizationSample {
   motionScore: number;
   nowMs: number;
   /** Veredicto opcional del Cerebro LLM */
-  brainVerdict?: import('../ml/SignalBrain').SignalVerdict;
+  brainVerdict?: import('../ml/SessionOrchestrator').SignalVerdict;
   brainConfidence?: number;
 }
 

@@ -491,9 +491,9 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
             notchDetected: waveReport.notchDetected
           },
           hardware: {
-            fps: lastSignal.diagnostics?.fpsEffective as number || 30,
-            iso: lastSignal.diagnostics?.iso as number || 100,
-            exposure: lastSignal.diagnostics?.exposureTime as number || 0
+            fps: lastSignal.diagnostics?.sqm?.fpsEffective || 30,
+            iso: lastSignal.diagnostics?.sqm?.iso as number || 100,
+            exposure: lastSignal.diagnostics?.sqm?.exposureTime as number || 0
           }
         };
 
@@ -505,7 +505,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         if (commands.ui?.speak) voiceSector.speak(commands.ui.speak);
 
         // Ejecución en Sector Cámara (Handle dinámico)
-        // @ts-expect-error - Acceso condicional a hints orquestados
         if (commands.camera && cameraHintsRef.current) {
           // Buscamos el elemento de hardware si está disponible
           const cam = document.querySelector('video') as unknown as { __handle?: { controlHardware: (cmd: import('@/lib/ml/SessionOrchestrator').SectorCommands['camera']) => void } };
@@ -553,8 +552,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     md.acquisitionStage = hasUsableContact ? stab.stage : 'SEARCHING';
     md.acquisitionProgress = stab.progress;
     md.stabilizationReason = stab.reason;
-    md.brainThought = lastBrainReasoningRef.current?.thought;
-    md.brainVerdict = lastBrainReasoningRef.current?.verdict;
+    md.brainThought = lastOrchestratorVerdict.current?.ui?.speak;
+    md.brainVerdict = lastOrchestratorVerdict.current?.ui?.status === 'ready' ? 'REAL_BEAT' : 'UNCERTAIN';
 
     // Buffer elástico de colocación: calidad de contacto por frame (primitiva ya
     // probada) → reservorio → cobertura suavizada tolerante a microdescuadres.

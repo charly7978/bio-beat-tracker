@@ -33,6 +33,10 @@ export interface SignalQualityMetrics {
   frameDropRatio: number;
   fpsEffective: number;
   timestampJitterMs: number;
+  /** ISO actual del sensor (telemetría de Fase Cero) */
+  iso?: number;
+  /** Tiempo de exposición actual en ms */
+  exposureTime?: number;
   /** Confianza interna del detector Elgendi (0–1), si disponible */
   elgendiConfidence?: number | null;
   /** Acuerdo espectral/estructural de picos (0–1) */

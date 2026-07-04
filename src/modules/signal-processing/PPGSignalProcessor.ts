@@ -206,6 +206,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private liveFingerMissStreak = 0;
   private noContactHardStreak = 0;
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
+  private lastCameraDiag: Record<string, unknown> | null = null;
   private lastInstantFinger = false;
   private readonly FINGER_CONFIRM_FRAMES = VITAL_THRESHOLDS.FINGER.FINGER_CONFIRM_FRAMES;
 
@@ -335,6 +336,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   /** Actualizar perfil según diagnóstico de CameraView (torch/FPS/jitter). */
   setCameraRuntimeHints(diag: Record<string, unknown> | null | undefined): void {
     this.cameraHints = inferCameraRuntimeHints(diag);
+    this.lastCameraDiag = diag || null;
   }
 
   processFrame(imageData: ImageData, frameTimestampMs?: number): void {
@@ -750,6 +752,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           fpsEffective: this.estimatedSampleRate,
           frameDropRatio: ppgPerf.snapshot().droppedEstimate / Math.max(1, this.frameCount),
           timestampJitterMs: ppgPerf.snapshot().jitterMs,
+          iso: typeof this.lastCameraDiag?.iso === 'number' ? this.lastCameraDiag.iso : undefined,
+          exposureTime: typeof this.lastCameraDiag?.exposureTime === 'number' ? this.lastCameraDiag.exposureTime : undefined,
         } as SignalQualityMetrics,
       },
     });
@@ -2041,7 +2045,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (cmd.sensitivity) {
       log.info(`DSP: Adjusting sensitivity to ${cmd.sensitivity}`);
       // Ajuste de ganancia adaptativa forzado por la IA
-      // @ts-expect-error - Acceso a propiedad interna de escala AGC
       this.pulseAgcState.scale *= cmd.sensitivity;
     }
   }

@@ -43,22 +43,22 @@ export class VisionAgent {
     }
 
     try {
-      const output = await this.classifier(videoElement);
+      const output = await this.classifier(videoElement as unknown as HTMLCanvasElement) as unknown as Array<{ label: string; score: number }>;
       const top = output[0];
 
       // Lógica de mapeo de clases a biología (simulada aquí, se entrenaría con el tiempo)
       let scene: VisionReport['scene'] = 'uncertain';
-      if (redLevel > 150 && top.label.includes('skin')) {
+      if (redLevel > 150 && top?.label?.includes('skin')) {
         scene = 'human_tissue';
       } else if (redLevel < 20) {
         scene = 'air';
-      } else if (top.label.includes('apple') || top.label.includes('object')) {
+      } else if (top?.label?.includes('apple') || top?.label?.includes('object')) {
         scene = 'inert_object';
       }
 
       return {
         scene,
-        confidence: top.score,
+        confidence: top?.score || 0,
         redIntensity: redLevel,
         transparency: redLevel / 255
       };
