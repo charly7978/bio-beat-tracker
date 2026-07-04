@@ -2041,7 +2041,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     if (cmd.sensitivity) {
       log.info(`DSP: Adjusting sensitivity to ${cmd.sensitivity}`);
       // Ajuste de ganancia adaptativa forzado por la IA
-      // @ts-ignore
+      // @ts-expect-error - Acceso a propiedad interna de escala AGC
       this.pulseAgcState.scale *= cmd.sensitivity;
     }
   }

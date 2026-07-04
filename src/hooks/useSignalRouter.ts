@@ -505,10 +505,10 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         if (commands.ui?.speak) voiceSector.speak(commands.ui.speak);
 
         // Ejecución en Sector Cámara (Handle dinámico)
-        // @ts-ignore
+        // @ts-expect-error - Acceso condicional a hints orquestados
         if (commands.camera && cameraHintsRef.current) {
           // Buscamos el elemento de hardware si está disponible
-          const cam = document.querySelector('video') as any;
+          const cam = document.querySelector('video') as unknown as { __handle?: { controlHardware: (cmd: import('@/lib/ml/SessionOrchestrator').SectorCommands['camera']) => void } };
           if (cam?.__handle?.controlHardware) {
              cam.__handle.controlHardware(commands.camera);
           }

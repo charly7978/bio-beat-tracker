@@ -1,6 +1,3 @@
-import { createLogger } from '@/utils/logger';
-
-const log = createLogger('WaveAgent');
 
 export interface WaveReport {
   isBiological: boolean;
