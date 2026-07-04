@@ -237,8 +237,12 @@ export class HeartBeatProcessor {
     const windowLen = this.consecutivePeaks < 3 ? 90 : 150;
     const { normalizedValue, range: _range } = this.normalizeSignal(filteredValue, windowLen);
 
-    // Eliminamos duplicados: SQI y periodicidad ya vienen calculados del PPGSignalProcessor
-    this.internalSqi = this.ppgSqi;
+    // Cross-verification: Calculamos SQI local sobre la señal ya filtrada.
+    // Esto complementa al SQI externo y asegura veracidad post-procesado.
+    if (this.frameTick % 6 === 0) {
+      this.cachedPeriodicity = this.estimatePeriodicity();
+    }
+    this.internalSqi = this.calculateSQI(_range, this.cachedPeriodicity.score);
     this.signalQualityIndex = this.internalSqi;
 
     let isPeak = false;

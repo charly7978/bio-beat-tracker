@@ -15,11 +15,11 @@ describe('SignalBrain', () => {
     };
 
     // @ts-ignore - accessing private method for test
-    const prompt = brain.buildPrompt(features);
+    const prompt = brain.buildMedicalPrompt(features);
 
-    expect(prompt).toContain('BPM: 72');
-    expect(prompt).toContain('Calidad (SQI): 80');
-    expect(prompt).toContain('Perfusión (PI): 0.0050');
+    expect(prompt).toContain('Frecuencia: 72 BPM');
+    expect(prompt).toContain('Calidad Técnica (SQI): 80');
+    expect(prompt).toContain('Perfusión (PI): 0.00500');
     expect(prompt).toContain('Periodicidad: 0.90');
     expect(prompt).toContain('Movimiento: 0.10');
     expect(prompt).toContain('SNR: 12.50');
@@ -31,7 +31,7 @@ describe('SignalBrain', () => {
     const jsonResponse = '{"verdict": "REAL_BEAT", "confidence": 0.95, "reason": "La señal es muy rítmica y limpia"}';
 
     // @ts-ignore
-    const reasoning = brain.parseResponse(jsonResponse);
+    const reasoning = brain.parseMedicalResponse(jsonResponse);
 
     expect(reasoning.verdict).toBe('REAL_BEAT');
     expect(reasoning.confidence).toBe(0.95);
@@ -43,9 +43,9 @@ describe('SignalBrain', () => {
     const textResponse = 'Parece un REAL_BEAT porque el ritmo es constante.';
 
     // @ts-ignore
-    const reasoning = brain.parseResponse(textResponse);
+    const reasoning = brain.parseMedicalResponse(textResponse);
 
     expect(reasoning.verdict).toBe('REAL_BEAT');
-    expect(reasoning.confidence).toBe(0.7);
+    expect(reasoning.confidence).toBe(0.8);
   });
 });
