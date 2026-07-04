@@ -1,8 +1,20 @@
 /**
- * Detector de picos sistólicos PPG inspirado en Elgendi et al. (TMA + bloques de interés).
- * Entrada: señal PPG (idealmente filtrada); salida: índices/tiempos con diagnóstico auditable.
+ * Detector de picos sistólicos PPG — Implementación ELGENDI et al. (2013)
+ * Exactamente como en NeuroKit2 y el paper original:
  *
- * Optimizado: sliding MA O(n) con suma acumulativa, arrays pre-asignados.
+ *   Elgendi M, Norton I, Brearley M, Abbott D, Schuurmans D (2013)
+ *   "Systolic Peak Detection in Acceleration Photoplethysmograms Measured
+ *   from Emergency Responders in Tropical Conditions"
+ *   PLoS ONE 8(10): e76585. doi:10.1371/journal.pone.0076585
+ *
+ * Pipeline:
+ *   1. Señal PPG debe venir filtrada pasa-banda 0.5–8 Hz (Elgendi estándar)
+ *   2. Amplitudes negativas → 0; elevar al cuadrado (energía)
+ *   3. MA_peak (ventana ~111 ms) y MA_beat (ventana ~667 ms)
+ *   4. THR1 = MA_beat + beatoffset × mean(energía)
+ *   5. Bloques donde MA_peak > THR1
+ *   6. Dentro de cada bloque: pico de máxima prominencia
+ *   7. Refractario mínimo (mindelay = 300 ms) entre picos
  */
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../../../config/vitalThresholds';
@@ -14,17 +26,18 @@ import {
   hampel1D,
   prepareUniformPpgWindow,
   robustNormalizeZeroCenter,
+  slidingMean,
 } from '../shared/dsp';
 
 export interface ElgendiPeakDetectorInput {
   signal: number[];
   timestampsMs: number[];
-  /** Fs efectivo (Hz); si no coincide con timestamps se re-muestrea de forma conservadora */
   samplingRateHz: number;
   sqi?: number;
   peakWindowMs?: number;
   beatWindowMs?: number;
-  offsetWeight?: number;
+  beatOffset?: number;
+  minDelayMs?: number;
   minBpm?: number;
   maxBpm?: number;
   minProminence?: number;
@@ -41,33 +54,14 @@ export interface ElgendiPeakDetectorOutput {
   parametersUsed: Record<string, number>;
 }
 
-/** MA deslizante O(n) con suma acumulativa, escribe en `out` pre-asignado. */
-function slidingMA(x: number[], win: number, out: number[]): void {
-  const n = x.length;
-  if (n === 0 || win < 1) return;
-  const half = Math.floor(win / 2);
-  let sum = 0;
-  let c = 0;
-  for (let i = -half; i <= half; i++) {
-    if (i >= 0 && i < n) { sum += x[i]; c++; }
-  }
-  out[0] = sum / c;
-  for (let i = 1; i < n; i++) {
-    const removeIdx = i - half - 1;
-    if (removeIdx >= 0) { sum -= x[removeIdx]; c--; }
-    const addIdx = i + half;
-    if (addIdx < n) { sum += x[addIdx]; c++; }
-    out[i] = c > 0 ? sum / c : x[i];
-  }
-}
-
 export class ElgendiPeakDetector {
   static detect(input: ElgendiPeakDetectorInput): ElgendiPeakDetectorOutput {
     const minBpm = input.minBpm ?? PEAK_DETECTION_DEFAULTS.minBpm;
     const maxBpm = input.maxBpm ?? PEAK_DETECTION_DEFAULTS.maxBpm;
     const peakMs = input.peakWindowMs ?? PEAK_DETECTION_DEFAULTS.peakWindowMs;
     const beatMs = input.beatWindowMs ?? PEAK_DETECTION_DEFAULTS.beatWindowMs;
-    const offsetW = input.offsetWeight ?? PEAK_DETECTION_DEFAULTS.offsetWeight;
+    const beatOffset = input.beatOffset ?? PEAK_DETECTION_DEFAULTS.beatOffset;
+    const minDelayMs = input.minDelayMs ?? PEAK_DETECTION_DEFAULTS.minDelayMs;
     const minProm = input.minProminence ?? PEAK_DETECTION_DEFAULTS.minProminence;
     const nSig = input.signal.length;
 
@@ -77,10 +71,11 @@ export class ElgendiPeakDetector {
         confidence: 0, rejectedCandidates: [],
         diagnostics: { stage: 'insufficient_input' },
         reason: 'INSUFFICIENT_WINDOW',
-        parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, minProm, fs: input.samplingRateHz },
+        parametersUsed: { minBpm, maxBpm, peakMs, beatMs, beatOffset, minProm, fs: input.samplingRateHz },
       };
     }
 
+    // 1) Remuestreo uniforme si hay jitter en timestamps
     const uniform = prepareUniformPpgWindow(input.signal, input.timestampsMs, input.samplingRateHz);
     const sig = uniform.signal;
     const ts = uniform.timestampsMs;
@@ -94,128 +89,103 @@ export class ElgendiPeakDetector {
           confidence: 0, rejectedCandidates: [],
           diagnostics: { nonFinite: true },
           reason: 'NO_VALID_SIGNAL',
-          parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, minProm, fs },
+          parametersUsed: { minBpm, maxBpm, peakMs, beatMs, beatOffset, minProm, fs },
         };
       }
     }
 
+    // 2) Hampel + detrend + bandpass 0.5–8Hz (Elgendi/NeuroKit2 estándar)
     const hampelWin = Math.max(5, Math.round(fs * 0.25) | 1);
     const cleaned = hampel1D(sig, hampelWin, 3);
     let x = bandpassOffline(detrendLinear(cleaned), fs);
     x = robustNormalizeZeroCenter(x);
 
-    // SQI por skewness (Elgendi 2016) sobre la señal filtrada — PPG limpio tiene
-    // skewness positiva; ruido/movimiento, ≈0 o negativa. Se reporta para que el
-    // ensemble lo use como penalización suave de confianza (anti falsos positivos).
+    // SQI por skewness (Elgendi 2016)
     const signalSkewness = skewness(x);
 
+    // 3) Energía al cuadrado (NeuroKit2: signal_abs[signal_abs<0]=0; sqrd = signal_abs**2)
+    const sqrd = new Array<number>(n);
+    for (let i = 0; i < n; i++) {
+      sqrd[i] = x[i] > 0 ? x[i] * x[i] : 0;
+    }
+
+    // 4) Moving averages (slidingMean O(n) con suma acumulativa)
     const w1 = Math.max(3, Math.round((peakMs / 1000) * fs));
     const w2 = Math.max(w1 + 2, Math.round((beatMs / 1000) * fs));
+    const maPeak = slidingMean(sqrd, w1);
+    const maBeat = slidingMean(sqrd, w2);
 
-    // Energy signal + MA pre-alloc
-    const energy = new Array<number>(n);
-    for (let i = 0; i < n; i++) {
-      const p = x[i] > 0 ? x[i] : 0;
-      energy[i] = p * p;
-    }
-
-    const maPeak = new Array<number>(n);
-    const maBeat = new Array<number>(n);
-    slidingMA(energy, w1, maPeak);
-    slidingMA(energy, w2, maBeat);
-
-    // Umbral Elgendi canónico (Elgendi 2013 / NeuroKit2):
-    //   THR1[n] = MA_beat[n] + β · media(energía)
-    // con β = beatOffset · (offsetW / offsetWeight_ref). La calibración por
-    // SQI/PI ajusta offsetW (β sube en señal pobre, baja en señal buena).
+    // 5) THR1 = MA_beat + beatoffset * mean(sqrd)   [Elgendi threshold 1]
     let meanEnergy = 0;
-    for (let i = 0; i < n; i++) meanEnergy += energy[i];
+    for (let i = 0; i < n; i++) meanEnergy += sqrd[i];
     meanEnergy /= n;
-    const beta =
-      PEAK_DETECTION_DEFAULTS.beatOffset * (offsetW / PEAK_DETECTION_DEFAULTS.offsetWeight);
-    const thrOffset = beta * meanEnergy;
+    const thr1 = maBeat.map((v) => v + beatOffset * meanEnergy);
 
-    const minDist = Math.max(1, Math.round((60000 / maxBpm / 1000) * fs));
-    const maxDist = Math.max(minDist + 1, Math.round((60000 / minBpm / 1000) * fs));
-    // Ancho mínimo del bloque de interés = W1 (peakwindow) — criterio canónico.
-    const minBlock = Math.max(2, w1);
-    const maxBlock = Math.ceil(maxDist * 1.25);
-    const maxPeaks = Math.ceil(n / minDist) + 2;
-
-    const thr = new Array<number>(n);
-    for (let i = 0; i < n; i++) {
-      thr[i] = maBeat[i] + thrOffset;
+    // 6) Bloques de interés (NeuroKit2: waves = ma_peak > thr1)
+    const begWaves: number[] = [];
+    const endWaves: number[] = [];
+    for (let i = 0; i < n - 1; i++) {
+      if (maPeak[i] <= thr1[i] && maPeak[i + 1] > thr1[i + 1]) begWaves.push(i + 1);
+      if (maPeak[i] > thr1[i] && maPeak[i + 1] <= thr1[i + 1]) endWaves.push(i);
     }
+    // Si la señal termina en un bloque activo, cerrarlo
+    if (maPeak[n - 1] > thr1[n - 1]) endWaves.push(n - 1);
+    // Filtrar endWaves que preceden al primer begWave
+    while (endWaves.length > 0 && begWaves.length > 0 && endWaves[0] < begWaves[0]) endWaves.shift();
 
-    // Pre-alloc block detection
-    const blocks: Array<{ start: number; end: number }> = [];
-    let i = 0;
-    while (i < n) {
-      if (maPeak[i] <= thr[i]) { i++; continue; }
-      const start = i;
-      while (i < n && maPeak[i] > thr[i]) i++;
-      const end = i - 1;
-      const len = end - start + 1;
-      if (len < minBlock || len > maxBlock) continue;
-      blocks.push({ start, end });
-    }
+    const numWaves = Math.min(begWaves.length, endWaves.length);
+    const minLen = w1; // threshold 2 del paper: bloque más corto que peakwindow se descarta
+    const minDelay = Math.round((minDelayMs / 1000) * fs);
 
-    // Pre-alloc result arrays
+    // 7) Picos dentro de cada bloque (máxima prominencia → NeuroKit2 scipy.signal.find_peaks)
     const rejectedCandidates: Array<{ index: number; reason: string }> = [];
-    const peaks = new Array<number>(maxPeaks);
-    const peakTimes = new Array<number>(maxPeaks);
-    const peakValues = new Array<number>(maxPeaks);
-    const peakProms = new Array<number>(maxPeaks);
-    let pk = 0;
+    const peaks: number[] = [];
+    const peakTimes: number[] = [];
+    const peakValues: number[] = [];
 
-    for (let bi = 0; bi < blocks.length; bi++) {
-      const b = blocks[bi];
-      let best = b.start;
-      let bestV = x[b.start];
-      for (let j = b.start + 1; j <= b.end; j++) {
-        if (x[j] > bestV) { bestV = x[j]; best = j; }
+    for (let i = 0; i < numWaves; i++) {
+      const beg = begWaves[i];
+      const end = endWaves[i];
+      const lenWave = end - beg;
+
+      if (lenWave < minLen) continue;
+
+      // Encontrar el pico de máxima prominencia dentro del bloque
+      // (equivalente a scipy.signal.find_peaks(data, prominence=(None, None)))
+      const data = x.slice(beg, end + 1);
+      const best = findMostProminentPeak(data);
+      if (best < 0) continue;
+
+      const peakIdx = beg + best;
+
+      // Refractario mínimo entre picos (mindelay = 300 ms)
+      if (peaks.length > 0 && peakIdx - peaks[peaks.length - 1] < minDelay) continue;
+
+      // Prominencia mínima (gate de seguridad adicional)
+      const prom = computeProminence(x, peakIdx, minDelay);
+      if (prom < minProm) {
+        rejectedCandidates.push({ index: peakIdx, reason: 'LOW_PROMINENCE' });
+        continue;
       }
 
-      const left = Math.max(0, best - minDist);
-      const right = Math.min(n - 1, best + minDist);
-      let localMin = x[best];
-      for (let j = left; j <= right; j++) if (x[j] < localMin) localMin = x[j];
-      const prom = bestV - localMin;
-      if (prom < minProm) continue;
-
-      if (pk > 0) {
-        const prev = peaks[pk - 1];
-        const dist = best - prev;
-        if (dist < minDist) {
-          if (x[best] > x[prev]) { pk--; }
-          else { continue; }
-        } else if (dist > maxDist) {
-          continue;
-        }
-      }
-
-      peaks[pk] = best;
-      peakTimes[pk] = ts[best] ?? ts[ts.length - 1];
-      peakValues[pk] = sig[best] ?? 0;
-      peakProms[pk] = prom;
-      pk++;
+      peaks.push(peakIdx);
+      peakTimes.push(ts[peakIdx] ?? ts[ts.length - 1]);
+      peakValues.push(sig[peakIdx] ?? 0);
     }
 
-    // Rechazo relativo de amplitud: la muesca dícrota y el ruido tienen menor
-    // prominencia que el pico sistólico. Se descartan los picos por debajo de
-    // una fracción de la prominencia mediana (validado para reducir falsos
-    // positivos sin perder latidos reales con modulación respiratoria).
+    // 8) Rechazo relativo de amplitud (Elgendi no lo hace en NK2, pero es útil para cámara)
+    const pk = peaks.length;
     if (pk >= 3) {
-      const promsSorted = peakProms.slice(0, pk).sort((a, b) => a - b);
-      const medProm = promsSorted[Math.floor(promsSorted.length / 2)] ?? 0;
-      const promFloor = medProm * PEAK_DETECTION_DEFAULTS.peakAmplitudeRejectFraction;
-      // Banda de amplitud: descarta picos demasiado bajos (dícrota/ruido) y
-      // demasiado altos (excursiones por micro-movimiento del dedo).
-      const promCeil = medProm * PEAK_DETECTION_DEFAULTS.peakAmplitudeRejectUpper;
+      const proms = new Array<number>(pk);
+      for (let i = 0; i < pk; i++) proms[i] = computeProminence(x, peaks[i], Math.round((60000 / maxBpm / 1000) * fs));
+      const sortedProms = [...proms].sort((a, b) => a - b);
+      const medProm = sortedProms[Math.floor(sortedProms.length / 2)] ?? 0;
       if (medProm > 0) {
+        const floor = medProm * PEAK_DETECTION_DEFAULTS.peakAmplitudeRejectFraction;
+        const ceil = medProm * PEAK_DETECTION_DEFAULTS.peakAmplitudeRejectUpper;
         let w = 0;
         for (let r = 0; r < pk; r++) {
-          if (peakProms[r] >= promFloor && peakProms[r] <= promCeil) {
+          if (proms[r] >= floor && proms[r] <= ceil) {
             peaks[w] = peaks[r];
             peakTimes[w] = peakTimes[r];
             peakValues[w] = peakValues[r];
@@ -223,46 +193,36 @@ export class ElgendiPeakDetector {
           } else {
             rejectedCandidates.push({
               index: peaks[r],
-              reason: peakProms[r] > promCeil ? 'HIGH_REL_AMPLITUDE' : 'LOW_REL_AMPLITUDE',
+              reason: proms[r] > ceil ? 'HIGH_REL_AMPLITUDE' : 'LOW_REL_AMPLITUDE',
             });
           }
         }
-        pk = w;
+        peaks.length = w;
+        peakTimes.length = w;
+        peakValues.length = w;
       }
     }
 
-    // Trim to actual count
-    const outPeaks = peaks.slice(0, pk);
-    const outPeakTimes = peakTimes.slice(0, pk);
-    const outPeakValues = peakValues.slice(0, pk);
-
-    // RR intervals
-    const maxRR = pk > 0 ? pk - 1 : 0;
-    const rr = new Array<number>(maxRR);
-    let rrCount = 0;
-    for (let k = 1; k < pk; k++) {
-      const d = outPeakTimes[k] - outPeakTimes[k - 1];
+    // 9) RR intervals + confidence
+    const rr: number[] = [];
+    for (let k = 1; k < peaks.length; k++) {
+      const d = peakTimes[k] - peakTimes[k - 1];
       if (d >= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS && d <= VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS) {
-        rr[rrCount++] = d;
+        rr.push(d);
       }
     }
-    const rrTrim = rr.slice(0, rrCount);
 
     let rrRegularity = 0;
-    if (rrCount >= 3) {
-      let m = 0;
-      for (let i = 0; i < rrCount; i++) m += rrTrim[i];
-      m /= rrCount;
-      let v = 0;
-      for (let i = 0; i < rrCount; i++) v += (rrTrim[i] - m) ** 2;
-      v /= rrCount;
+    if (rr.length >= 3) {
+      const m = rr.reduce((a, b) => a + b, 0) / rr.length;
+      const v = rr.reduce((a, b) => a + (b - m) ** 2, 0) / rr.length;
       const cv = Math.sqrt(v) / Math.max(1, m);
       rrRegularity = clamp(1 - cv / 0.35, 0, 1);
     }
 
-    let confidence = rrCount > 0
-      ? clamp(rrCount / 6, 0, 1) * 0.4 +
-        clamp(pk / 8, 0, 1) * 0.3 +
+    let confidence = rr.length > 0
+      ? clamp(rr.length / 6, 0, 1) * 0.4 +
+        clamp(peaks.length / 8, 0, 1) * 0.3 +
         rrRegularity * 0.3
       : 0;
     if (typeof input.sqi === 'number' && input.sqi < PEAK_DETECTION_DEFAULTS.minSQI) {
@@ -270,22 +230,55 @@ export class ElgendiPeakDetector {
     }
 
     return {
-      peaks: outPeaks,
-      peakTimes: outPeakTimes,
-      peakValues: outPeakValues,
+      peaks,
+      peakTimes,
+      peakValues,
       confidence,
       rejectedCandidates,
       diagnostics: {
-        blocks: blocks.length,
+        blocks: numWaves,
         resampled: uniform.resampled,
         fsEffective: fs,
-        rrCount,
+        rrCount: rr.length,
         meanEnergy,
-        thrOffset,
         signalSkewness,
       },
-      reason: pk > 0 ? 'OK' : 'NO_PEAKS',
-      parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, beta, minProm, fs, w1, w2 },
+      reason: peaks.length > 0 ? 'OK' : 'NO_PEAKS',
+      parametersUsed: { minBpm, maxBpm, peakMs, beatMs, beatOffset, minProm, minDelayMs, fs, w1, w2 },
     };
   }
+}
+
+function findMostProminentPeak(data: number[]): number {
+  let bestIdx = -1;
+  let bestProm = -1;
+  for (let i = 0; i < data.length; i++) {
+    if (!Number.isFinite(data[i])) continue;
+    let leftMin = data[i];
+    for (let j = i - 1; j >= 0; j--) {
+      if (data[j] < leftMin) leftMin = data[j];
+      if (data[j] > data[i]) break;
+    }
+    let rightMin = data[i];
+    for (let j = i + 1; j < data.length; j++) {
+      if (data[j] < rightMin) rightMin = data[j];
+      if (data[j] > data[i]) break;
+    }
+    const prom = data[i] - Math.max(leftMin, rightMin);
+    if (prom > bestProm) {
+      bestProm = prom;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+function computeProminence(signal: number[], idx: number, halfWindow: number): number {
+  const left = Math.max(0, idx - halfWindow);
+  const right = Math.min(signal.length - 1, idx + halfWindow);
+  let localMin = signal[idx];
+  for (let j = left; j <= right; j++) {
+    if (signal[j] < localMin) localMin = signal[j];
+  }
+  return signal[idx] - localMin;
 }

@@ -7,7 +7,6 @@ import {
   lerpDisplayValue,
 } from '@/lib/measurement/displaySmoothing';
 import {
-  TARGET_FPS,
   BUFFER_SIZE,
   TREND_WINDOW_MS,
   TREND_MAX_POINTS,
@@ -128,7 +127,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     contactState, acquisitionStatus, diagnostics,
   });
 
-  const sweepPulseRef = useRef(0);
   const lastPeakTimeRef = useRef(0);
   const lastPeakProcessedRef = useRef(0);
   const arrActiveUntilRef = useRef(0);
@@ -152,7 +150,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const displaySpo2Ref = useRef(0);
   const displaySysRef = useRef(0);
   const displayDiaRef = useRef(0);
-  const waveGainRef = useRef(4.2);
+  const waveGainRef = useRef(4.5);
 
   useImperativeHandle(ref, () => ({
     pushSignal: (val: number, _ts: number) => {
@@ -339,9 +337,9 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     if (isRunningRef.current) return;
     isRunningRef.current = true;
 
-    const frameTime = 1000 / TARGET_FPS;
-    let lastRenderTime = 0;
-
+    // Sin throttle manual: renderizamos en CADA rAF. El throttle con Date.now()
+    // + rAF (~60Hz) generaba frames "saltados" cuando el reloj y el vsync se
+    // desincronizaban (parpadeo visible en la onda). rAF ya limita al refresh.
     const render = () => {
       if (!isRunningRef.current) return;
       const canvas = canvasRef.current;
@@ -356,11 +354,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         return;
       }
       const now = Date.now();
-      if (now - lastRenderTime < frameTime) {
-        animationRef.current = requestAnimationFrame(render);
-        return;
-      }
-      lastRenderTime = now;
 
       const p = propsRef.current;
       const fingerOn = p.isFingerDetected;
@@ -425,7 +418,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         beatHistory: beatHistoryRef.current,
         amplitudeStats: amplitudeStatsRef.current,
         waveGain: waveGainRef.current,
-        sweepPulse: sweepPulseRef.current,
         ibiDisplay: ibiDisplayRef.current,
         buffer: dataBufferRef.current,
         lastArrhythmiaCount: lastArrhythmiaCountRef.current,
@@ -446,7 +438,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       drawTrendStrip(ctx, renderState);
       drawFooter(ctx, renderState);
 
-      sweepPulseRef.current = renderState.sweepPulse;
       lastPeakProcessedRef.current = renderState.lastPeakProcessedTime;
       arrActiveUntilRef.current = renderState.arrActiveUntil;
       lastArrhythmiaCountRef.current = renderState.lastArrhythmiaCount;

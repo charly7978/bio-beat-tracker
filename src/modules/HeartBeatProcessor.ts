@@ -10,6 +10,7 @@ import { VITAL_THRESHOLDS, adaptiveMotionLimit } from '../config/vitalThresholds
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
 import { autocorrDominantLag } from './signal-processing/shared/dsp';
 import { computeRrHrv } from '../utils/physio';
+import { RingF32 } from '../utils/RingBuffer';
 import {
   inferCameraRuntimeHints,
   type CameraRuntimeHints,
@@ -27,7 +28,7 @@ export class HeartBeatProcessor {
   private readonly MIN_PEAK_INTERVAL_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS;
   private readonly MAX_PEAK_INTERVAL_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS;
 
-  private signalBuffer: number[] = [];
+  private readonly signalBuffer: RingF32;
   private timestampBuffer: number[] = [];
 
   private lastPeakTime = 0;
@@ -87,6 +88,7 @@ export class HeartBeatProcessor {
   }
 
   constructor() {
+    this.signalBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
     this.setupAudio();
   }
 
@@ -205,8 +207,7 @@ export class HeartBeatProcessor {
     if (Math.abs(filteredValue) > 1e-6) {
       this.signalBuffer.push(filteredValue);
       this.timestampBuffer.push(now);
-      if (this.signalBuffer.length > DSP_CONSTANTS.BUFFER_SIZE) {
-        this.signalBuffer.shift();
+      if (this.timestampBuffer.length > DSP_CONSTANTS.BUFFER_SIZE) {
         this.timestampBuffer.shift();
       }
     } else if (
@@ -214,7 +215,7 @@ export class HeartBeatProcessor {
       this.signalBuffer.length > 0 &&
       this.signalBuffer.length < DSP_CONSTANTS.BUFFER_SIZE
     ) {
-      const hold = this.signalBuffer[this.signalBuffer.length - 1]! * 0.999;
+      const hold = this.signalBuffer.last() * 0.999;
       this.signalBuffer.push(hold);
       this.timestampBuffer.push(now);
     }
@@ -226,7 +227,7 @@ export class HeartBeatProcessor {
     this.frameTick++;
 
     if (this.frameTick % 4 === 0 || this.cachedGateRange === 0) {
-      const recentForGate = this.signalBuffer.slice(-60);
+      const recentForGate = this.signalBuffer.tail(60);
       const gSorted = [...recentForGate].sort((a, b) => a - b);
       this.cachedGateRange =
         (gSorted[Math.floor(gSorted.length * 0.9)] ?? 0) -
@@ -265,7 +266,7 @@ export class HeartBeatProcessor {
 
     if (runEnsemble) {
       const win = Math.min(DSP_CONSTANTS.BUFFER_SIZE, this.signalBuffer.length);
-      const sigRaw = this.signalBuffer.slice(-win);
+      const sigRaw = this.signalBuffer.tail(win);
       const ts = this.timestampBuffer.slice(-win);
       const sig = this.normalizeWindow(sigRaw, Math.min(150, sigRaw.length));
       const ensSqi = this.ensembleInputSqi(this.signalQualityIndex);
@@ -316,6 +317,15 @@ export class HeartBeatProcessor {
         isPeak = true;
         emitReason = decision.reason;
         const wScore = decision.weightedScore ?? 0;
+
+        // Feedback del latido: beep + vibración disparados por el MISMO evento
+        // (pico emitido) que revela la onda y el pulso en el monitor. La
+        // genuinidad ya la garantiza decidePeakEmit (score>=minScore, refractario
+        // ~300ms, plausibilidad RR, confianza), así que no se aplica un segundo
+        // umbral divergente: audio, háptico y visual quedan 1:1 y en armonía.
+        this.vibrate();
+        this.playBeep();
+
         const prevEmitted = this.lastEmittedPeakTime;
         this.lastEmittedPeakTime = decision.peakTimeMs;
         this.lastPeakTime = decision.peakTimeMs;
@@ -352,11 +362,6 @@ export class HeartBeatProcessor {
               this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
             }
           }
-        }
-
-        if (wScore >= 0.4 && this.rrIntervals.length >= 1) {
-          this.vibrate();
-          this.playBeep();
         }
       }
 
@@ -425,31 +430,31 @@ export class HeartBeatProcessor {
   }
 
   private normalizeSignal(value: number, windowLen: number = 150): { normalizedValue: number; range: number } {
-    const recent = this.signalBuffer.slice(-windowLen);
-    const { low, high, range } = robustBounds(recent);
+    const { low, high, range } = this.normalizeBounds(windowLen);
     const scale = PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_SCALE;
     if (range < this.minNormalizeRange()) {
-      return {
-        normalizedValue: value * PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_FALLBACK_GAIN,
-        range,
-      };
+      return { normalizedValue: value * PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_FALLBACK_GAIN, range };
     }
     const clipped = Math.min(high, Math.max(low, value));
-    const normalizedValue = ((clipped - low) / range - 0.5) * scale;
-    return { normalizedValue, range };
+    return { normalizedValue: ((clipped - low) / range - 0.5) * scale, range };
   }
 
   private normalizeWindow(values: number[], windowLen: number = 150): number[] {
-    const refWindow = this.signalBuffer.slice(-windowLen);
-    const { low, high, range } = robustBounds(refWindow);
+    const { low, high, range } = this.normalizeBounds(windowLen);
     const scale = PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_SCALE;
     if (range < this.minNormalizeRange()) {
-      return values.map((v) => v * PEAK_DETECTION_DEFAULTS.HEARTBEAT_NORM_FALLBACK_GAIN);
+      return values.map(() => 0);
     }
     return values.map((v) => {
       const c = Math.min(high, Math.max(low, v));
       return ((c - low) / range - 0.5) * scale;
     });
+  }
+
+  /** Robust bounds from recent signal window. */
+  private normalizeBounds(windowLen: number): { low: number; high: number; range: number } {
+    const recent = this.signalBuffer.tail(windowLen);
+    return robustBounds(recent);
   }
 
   private estimateSampleRate(): number {
@@ -478,7 +483,7 @@ export class HeartBeatProcessor {
       this.consecutivePeaks < 3
         ? PEAK_DETECTION_DEFAULTS.HEARTBEAT_WINDOW_WARMUP
         : PEAK_DETECTION_DEFAULTS.HEARTBEAT_WINDOW_STABLE;
-    const recentSignal = this.normalizeWindow(this.signalBuffer.slice(-windowLen), windowLen);
+    const recentSignal = this.normalizeWindow(this.signalBuffer.tail(windowLen), windowLen);
     const mean = recentSignal.reduce((s, v) => s + v, 0) / recentSignal.length;
     const centered = recentSignal.map((v) => v - mean);
     const energy = centered.reduce((s, v) => s + v * v, 0);
@@ -503,7 +508,7 @@ export class HeartBeatProcessor {
     let derivCount = 0;
     const derivStart = Math.max(0, nSig - 61);
     for (let i = derivStart + 1; i < nSig; i++) {
-      meanAbsDeriv += Math.abs(this.signalBuffer[i] - this.signalBuffer[i - 1]);
+      meanAbsDeriv += Math.abs(this.signalBuffer.get(i) - this.signalBuffer.get(i - 1));
       derivCount++;
     }
     if (derivCount > 0) meanAbsDeriv /= derivCount;
@@ -591,7 +596,7 @@ export class HeartBeatProcessor {
 
   /** Limpia estado de picos/RR al quitar el dedo o al volver a colocarlo. */
   resetPeakTracking(): void {
-    this.signalBuffer = [];
+    this.signalBuffer.reset();
     this.timestampBuffer = [];
     this.rrIntervals = [];
     this.smoothBPM = 0;

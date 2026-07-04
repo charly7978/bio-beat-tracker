@@ -21,9 +21,7 @@ export const COLORS = {
   SCANLINE: 'rgba(255, 255, 255, 0.012)',
   BASELINE: 'rgba(255, 255, 255, 0.25)',
   SIGNAL: '#22c55e',
-  SIGNAL_GLOW: 'rgba(34, 197, 94, 0.45)',
   SIGNAL_ARR: '#ef4444',
-  SIGNAL_ARR_GLOW: 'rgba(239, 68, 68, 0.45)',
   PEAK_NORMAL: '#00f2ff',
   PEAK_ARR: '#ef4444',
   VALLEY: '#64748b',
@@ -97,24 +95,9 @@ export const CARDIAC_WAVE_CONFIG = {
   BASE_STROKE_WIDTH: 2.0,
 
   /**
-   * Grosor de la línea de brillo secundaria.
-   */
-  GLOW_STROKE_WIDTH: 1.6,
-
-  /**
    * Grosor de la punta o cabeza de la onda de barrido.
    */
   LEADING_STROKE_WIDTH: 1.5,
-
-  /**
-   * Desenfoque de sombra del cuerpo de la señal (Glow).
-   */
-  SHADOW_BLUR_BASE: 8,
-
-  /**
-   * Desenfoque de sombra de la punta o cabeza conductora de la señal.
-   */
-  SHADOW_BLUR_LEADING: 15,
 
   // === Marcadores Fisiológicos (Fiduciales) ===
   /**
@@ -189,14 +172,6 @@ export const CARDIAC_WAVE_CONFIG = {
   WAVE_PAD_BOTTOM: 44,
 
   // === Tiempos de Reacción y Velocidades Dinámicas ===
-  /**
-   * Velocidad de amortiguación (desvanecimiento) de la punta conductora tras cada latido.
-   * - ¿Qué significa?: Factor multiplicador por cuadro que reduce el tamaño del halo del cursor (sweepPulse).
-   * - Si se sube: El halo brillante de la punta se apaga más lentamente, dejando un rastro luminoso más largo.
-   * - Si se baja: El halo se apaga de forma abrupta y veloz.
-   */
-  SWEEP_PULSE_DECAY: 0.90,
-
   /**
    * Tiempo de rebote (debounce) mínimo entre picos registrados en milisegundos.
    * - ¿Qué significa?: El tiempo de espera mínimo necesario para procesar visualmente el siguiente latido y evitar falsas detecciones duplicadas.
@@ -365,7 +340,6 @@ export interface PpgRenderState {
   beatHistory: BeatEntry[];
   amplitudeStats: AmplitudeStats;
   waveGain: number;
-  sweepPulse: number;
   ibiDisplay: number;
   buffer: CircularBuffer | null;
   lastArrhythmiaCount: number;
@@ -548,14 +522,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
 
   ctx.font = `bold 56px ${FONT_MONO}`;
   ctx.fillStyle = hrColor;
-  const heartPulse = state.props.isMonitoring && dispBpm > 30 ? (Math.sin(state.now / (60000 / Math.max(60, dispBpm)) * 2 * Math.PI) + 1) / 2 : 0;
-  ctx.save();
-  if (heartPulse > 0) {
-    ctx.shadowColor = hrColor;
-    ctx.shadowBlur = 6 + heartPulse * 6;
-  }
   ctx.fillText(dispBpm > 0 ? dispBpm.toString() : '--', 16, metrics.y + 72);
-  ctx.restore();
 
   ctx.font = `12px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
@@ -781,7 +748,6 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   const p = state.props;
 
   if (p.preserveResults && !p.isFingerDetected) return;
-  if (p.isPeak) state.sweepPulse = 1;
 
   if (p.isPeak) {
     const peakAge = state.now - state.lastPeakProcessedTime;
@@ -863,9 +829,6 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.beginPath();
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
-
-  // El halo de la punta se amortigua una vez por frame; ambos modos (2D/3D) lo leen.
-  state.sweepPulse *= CARDIAC_WAVE_CONFIG.SWEEP_PULSE_DECAY;
 
     // ── MODO 3D: onda como cinta extruida sobre el piso en perspectiva. ──
   // Reusa las MISMAS coords honestas → forma, amplitud y tiempo idénticos al 2D.
@@ -1126,12 +1089,9 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     ctx.lineTo(coords[end].x, coords[end].y);
     ctx.strokeStyle = isArr ? COLORS.SIGNAL_ARR : COLORS.SIGNAL;
     ctx.lineWidth = isArr ? 2.4 : 2;
-    ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
-    ctx.shadowBlur = isArr ? 8 : 5;
     ctx.stroke();
     seg = end + 1;
   }
-  ctx.shadowBlur = 0;
 
   for (let i = 0; i < coords.length; i++) {
     const c = coords[i];

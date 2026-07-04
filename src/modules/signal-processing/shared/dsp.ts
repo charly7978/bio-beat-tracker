@@ -1,6 +1,6 @@
 /**
  * Utilidades DSP puras compartidas (sin estado).
- * Los filtros IIR en streaming siguen viviendo en `BandpassFilter`.
+ * Filtros IIR en streaming viven en `BandpassFilter`.
  */
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
 import { clamp } from '../../../utils/math';
@@ -46,6 +46,31 @@ export function robustNormalizeZeroCenter(y: number[]): number[] {
   return y.map((v) => (clamp(v, low, high) - low) / range - 0.5);
 }
 
+/**
+ * Media móvil O(n) con suma acumulativa. Reemplaza movingAverage O(n*w).
+ * Tamaño de ventana efectivo = 2*half+1 ≈ win.
+ */
+export function slidingMean(x: number[], win: number): number[] {
+  const n = x.length;
+  if (n === 0 || win < 1) return [];
+  const half = Math.floor(win / 2);
+  const out = new Array<number>(n);
+  let sum = 0;
+  let c = 0;
+  for (let i = -half; i <= half; i++) {
+    if (i >= 0 && i < n) { sum += x[i]; c++; }
+  }
+  out[0] = sum / c;
+  for (let i = 1; i < n; i++) {
+    const removeIdx = i - half - 1;
+    if (removeIdx >= 0) { sum -= x[removeIdx]; c--; }
+    const addIdx = i + half;
+    if (addIdx < n) { sum += x[addIdx]; c++; }
+    out[i] = c > 0 ? sum / c : x[i];
+  }
+  return out;
+}
+
 export function movingAverage(x: number[], win: number): number[] {
   const n = x.length;
   if (n === 0 || win < 1) return [];
@@ -55,66 +80,17 @@ export function movingAverage(x: number[], win: number): number[] {
     let sum = 0;
     let c = 0;
     for (let j = i - half; j <= i + half; j++) {
-      if (j >= 0 && j < n) {
-        sum += x[j];
-        c++;
-      }
+      if (j >= 0 && j < n) { sum += x[j]; c++; }
     }
     out[i] = c > 0 ? sum / c : x[i];
   }
   return out;
 }
 
-export function derivativeCentral(x: number[], fs: number): number[] {
-  const n = x.length;
-  const out = new Array<number>(n).fill(0);
-  if (n < 3 || fs <= 0) return out;
-  for (let i = 1; i < n - 1; i++) {
-    out[i] = ((x[i + 1] - x[i - 1]) / 2) * fs;
-  }
-  return out;
-}
-
-export function movingWindowIntegration(x: number[], samples: number): number[] {
-  const n = x.length;
-  if (n === 0 || samples < 1) return [];
-  const out = new Array<number>(n).fill(0);
-  let acc = 0;
-  const q: number[] = [];
-  for (let i = 0; i < n; i++) {
-    acc += x[i];
-    q.push(x[i]);
-    if (q.length > samples) acc -= q.shift()!;
-    out[i] = acc / q.length;
-  }
-  return out;
-}
-
-export function hampel1D(y: number[], window: number, nSigma = 3): number[] {
-  const n = y.length;
-  const out = [...y];
-  const half = Math.floor(window / 2);
-  for (let i = 0; i < n; i++) {
-    const slice: number[] = [];
-    for (let j = i - half; j <= i + half; j++) {
-      if (j >= 0 && j < n) slice.push(y[j]);
-    }
-    if (slice.length < 3) continue;
-    const med = median(slice);
-    const mad =
-      [...slice].reduce((s, v) => s + Math.abs(v - med), 0) / slice.length || 1e-9;
-    if (Math.abs(y[i] - med) > nSigma * 1.4826 * mad) {
-      out[i] = med;
-    }
-  }
-  return out;
-}
-
-/** Re-muestreo lineal a timestamps uniformes en [0, durationMs] */
 export function resampleToUniformTimeline(
   values: number[],
   timestampsMs: number[],
-  targetCount: number
+  targetCount: number,
 ): { y: number[]; fs: number; t0: number; t1: number } {
   const n = Math.min(values.length, timestampsMs.length);
   if (n < 2 || targetCount < 4) {
@@ -139,7 +115,24 @@ export function resampleToUniformTimeline(
   return { y, fs, t0, t1 };
 }
 
-/** Re-muestrea a timeline uniforme si los Δt son irregulares (cámara / backpressure). */
+export function hampel1D(y: number[], window: number, nSigma = 3): number[] {
+  const n = y.length;
+  const out = [...y];
+  const half = Math.floor(window / 2);
+  for (let i = 0; i < n; i++) {
+    const slice: number[] = [];
+    for (let j = i - half; j <= i + half; j++) {
+      if (j >= 0 && j < n) slice.push(y[j]);
+    }
+    if (slice.length < 3) continue;
+    const med = median(slice);
+    const mad = [...slice].reduce((s, v) => s + Math.abs(v - med), 0) / slice.length || 1e-9;
+    if (Math.abs(y[i] - med) > nSigma * 1.4826 * mad) out[i] = med;
+  }
+  return out;
+}
+
+/** Re-muestreo lineal a timeline uniforme si los Δt son irregulares. */
 export function prepareUniformPpgWindow(
   signal: number[],
   timestampsMs: number[],
@@ -161,23 +154,36 @@ export function prepareUniformPpgWindow(
   if (!needsResample) {
     return { signal, timestampsMs, samplingRateHz, resampled: false };
   }
+  const t0 = timestampsMs[0];
+  const t1 = timestampsMs[timestampsMs.length - 1];
+  const duration = Math.max(1, t1 - t0);
   const targetN = clamp(
-    Math.round(((timestampsMs[timestampsMs.length - 1]! - timestampsMs[0]!) / 1000) * samplingRateHz),
+    Math.round((duration / 1000) * samplingRateHz),
     cfg.RESAMPLE_TARGET_MIN,
     cfg.RESAMPLE_TARGET_MAX,
   );
-  const r = resampleToUniformTimeline(signal, timestampsMs, targetN);
-  const ts = new Array<number>(r.y.length);
-  for (let i = 0; i < r.y.length; i++) {
-    ts[i] = r.t0 + (i * (r.t1 - r.t0)) / Math.max(1, r.y.length - 1);
+  if (targetN < 4) return { signal, timestampsMs, samplingRateHz, resampled: false };
+  const outSig = new Array<number>(targetN);
+  const outTs = new Array<number>(targetN);
+  for (let k = 0; k < targetN; k++) {
+    const t = t0 + (duration * k) / Math.max(1, targetN - 1);
+    outTs[k] = t;
+    let j = 0;
+    while (j < timestampsMs.length - 2 && timestampsMs[j + 1] < t) j++;
+    const tA = timestampsMs[j];
+    const tB = timestampsMs[j + 1];
+    const vA = signal[j];
+    const vB = signal[j + 1];
+    const u = tB > tA ? (t - tA) / (tB - tA) : 0;
+    outSig[k] = vA + u * (vB - vA);
   }
-  return { signal: r.y, timestampsMs: ts, samplingRateHz: r.fs, resampled: true };
+  return { signal: outSig, timestampsMs: outTs, samplingRateHz: ((targetN - 1) / duration) * 1000, resampled: true };
 }
 
 export function autocorrDominantLag(
   centered: number[],
   minLag: number,
-  maxLag: number
+  maxLag: number,
 ): { lag: number; score: number } {
   let bestLag = 0;
   let best = 0;
@@ -193,10 +199,7 @@ export function autocorrDominantLag(
     }
     if (eA <= 0 || eB <= 0) continue;
     const c = cross / Math.sqrt(eA * eB);
-    if (c > best) {
-      best = c;
-      bestLag = lag;
-    }
+    if (c > best) { best = c; bestLag = lag; }
   }
   return { lag: bestLag, score: best };
 }
@@ -213,15 +216,6 @@ export function bpmFromAutocorr(signal: number[], fs: number): { bpm: number; sc
   return { bpm: (60 * fs) / lag, score };
 }
 
-/**
- * Frecuencia dominante (Hz) de una serie uniformemente muestreada dentro de la
- * banda [fMinHz, fMaxHz], por PERIODOGRAMA (DFT por recurrencia de rotación, sin
- * trig por muestra). Frente a la autocorrelación, elige el fundamental por
- * energía espectral → sin ambigüedad de sub-armónico. La serie se centra por su
- * media internamente (pásela ya detrended si tiene tendencia lineal). Devuelve
- * la frecuencia del pico y su concentración espectral normalizada (0–1; ≈1 para
- * una onda pura, ≈0 para ruido sin periodicidad).
- */
 export function bandLimitedDominantFreq(
   series: number[],
   fsHz: number,
@@ -229,7 +223,7 @@ export function bandLimitedDominantFreq(
   fMaxHz: number,
 ): { freqHz: number; quality: number } {
   const n = series.length;
-  const fMax = Math.min(fMaxHz, fsHz * 0.5 - 1e-6); // respeta Nyquist
+  const fMax = Math.min(fMaxHz, fsHz * 0.5 - 1e-6);
   if (n < 8 || fsHz <= 0 || fMax <= fMinHz) return { freqHz: 0, quality: 0 };
 
   let mean = 0;
@@ -244,7 +238,6 @@ export function bandLimitedDominantFreq(
   }
   if (totalPower < 1e-12) return { freqHz: 0, quality: 0 };
 
-  // Resolución ≈0.004 Hz (~0.25 rpm), acotada para limitar el coste.
   const steps = clamp(Math.round((fMax - fMinHz) / 0.004), 64, 2048);
   let bestMag = 0;
   let bestF = 0;
@@ -265,18 +258,20 @@ export function bandLimitedDominantFreq(
       cw = nextCw;
     }
     const mag = re * re + im * im;
-    if (mag > bestMag) {
-      bestMag = mag;
-      bestF = f;
-    }
+    if (mag > bestMag) { bestMag = mag; bestF = f; }
   }
 
   const quality = clamp((2 * bestMag) / (n * totalPower), 0, 1);
   return { freqHz: bestF, quality };
 }
 
+let _sharedBpf: BandpassFilter | null = null;
+
 export function bandpassOffline(signal: number[], fs: number): number[] {
-  const f = new BandpassFilter(fs);
-  f.reset();
-  return signal.map((s) => f.filter(s));
+  if (!_sharedBpf || _sharedBpf.sampleRate !== fs) {
+    _sharedBpf = new BandpassFilter(fs, 8);
+  } else {
+    _sharedBpf.reset();
+  }
+  return signal.map((s) => _sharedBpf!.filter(s));
 }
