@@ -25,6 +25,11 @@ import {
 import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
 import { computeCameraPeekState, computeRoiScreenRect, guideCaption } from '@/lib/ui/cameraPeek';
+import { calculateFingerCenteringMetrics } from '@/lib/finger/fingerPositioningValidator';
+import {
+  createPositioningFeedbackState,
+  processFeedback,
+} from '@/lib/finger/fingerPositioningFeedback';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
 
@@ -163,6 +168,9 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   const displaySysRef = useRef(0);
   const displayDiaRef = useRef(0);
   const waveGainRef = useRef(4.5);
+
+  // Estado de feedback de posicionamiento: trackea haptics y transiciones
+  const positioningFeedbackRef = useRef(createPositioningFeedbackState());
 
   useImperativeHandle(ref, () => ({
     pushSignal: (val: number, _ts: number) => {
@@ -411,13 +419,35 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
 
       const diagStage = (p.diagnostics as { acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY' } | undefined)?.acquisitionStage;
       const placementStable = (p.diagnostics as { placementStable?: boolean } | undefined)?.placementStable;
+
+      // Calcula métricas de centrado si hay datos de cobertura disponibles
+      const diag = p.diagnostics as Record<string, unknown> | undefined;
+      const centeringMetrics = diag?.placementCoverage !== undefined
+        ? calculateFingerCenteringMetrics({
+            coverageRatio: (diag.placementCoverage as number) ?? 0,
+            sectorCoverage: diag.sectorCoverage as number[][] | undefined,
+            centroidX: diag.centroidX as number | undefined,
+            centroidY: diag.centroidY as number | undefined,
+            distributionVariance: diag.distributionVariance as number | undefined,
+          })
+        : undefined;
+
       const peek = computeCameraPeekState({
         isMonitoring: p.isMonitoring,
         contactState: p.contactState,
         acquisitionStage: diagStage,
         quality: p.quality ?? 0,
         placementStable,
+        centeringMetrics,
       });
+
+      // Procesa feedback háptico y visual basado en cambios de estado
+      void processFeedback(
+        peek.guideLevel,
+        centeringMetrics?.centeringScore ?? 0,
+        now,
+        positioningFeedbackRef.current,
+      );
 
       const renderState: PpgRenderState = {
         layout: layoutRef.current,
@@ -474,7 +504,11 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
             guideLevel: peek.guideLevel,
             guideColor: peek.guideColor,
             glowColor: peek.glowColor,
-            caption: guideCaption(peek.guideLevel, p.diagnostics?.placementHint),
+            caption: guideCaption(
+              peek.guideLevel,
+              p.diagnostics?.placementHint,
+              peek.centeringMetrics?.correctionHint,
+            ),
           },
           roiGeometry,
         );
