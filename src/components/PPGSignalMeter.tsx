@@ -25,6 +25,7 @@ import {
 import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
 import { computeCameraPeekState, computeRoiScreenRect, guideCaption } from '@/lib/ui/cameraPeek';
+import { calculateFingerCenteringMetrics } from '@/lib/finger/fingerPositioningValidator';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
 
@@ -411,12 +412,26 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
 
       const diagStage = (p.diagnostics as { acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY' } | undefined)?.acquisitionStage;
       const placementStable = (p.diagnostics as { placementStable?: boolean } | undefined)?.placementStable;
+
+      // Calcula métricas de centrado si hay datos de cobertura disponibles
+      const diag = p.diagnostics as any;
+      const centeringMetrics = diag?.placementCoverage !== undefined
+        ? calculateFingerCenteringMetrics({
+            coverageRatio: diag.placementCoverage ?? 0,
+            sectorCoverage: diag.sectorCoverage,
+            centroidX: diag.centroidX,
+            centroidY: diag.centroidY,
+            distributionVariance: diag.distributionVariance,
+          })
+        : undefined;
+
       const peek = computeCameraPeekState({
         isMonitoring: p.isMonitoring,
         contactState: p.contactState,
         acquisitionStage: diagStage,
         quality: p.quality ?? 0,
         placementStable,
+        centeringMetrics,
       });
 
       const renderState: PpgRenderState = {
@@ -474,7 +489,11 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
             guideLevel: peek.guideLevel,
             guideColor: peek.guideColor,
             glowColor: peek.glowColor,
-            caption: guideCaption(peek.guideLevel, p.diagnostics?.placementHint),
+            caption: guideCaption(
+              peek.guideLevel,
+              p.diagnostics?.placementHint,
+              peek.centeringMetrics?.correctionHint,
+            ),
           },
           roiGeometry,
         );
