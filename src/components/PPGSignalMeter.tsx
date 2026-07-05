@@ -116,6 +116,8 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   diagnostics,
 }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  /** Capa superior SIN máscara: grillas + onda PPG siempre a opacidad plena. */
+  const waveCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const animationRef = useRef<number | null>(null);
   const isRunningRef = useRef(false);
@@ -293,12 +295,15 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
     const cssW = Math.max(320, Math.floor(rect.width));
     const cssH = Math.max(480, Math.floor(rect.height));
-    canvas.width = Math.floor(cssW * dpr);
-    canvas.height = Math.floor(cssH * dpr);
-    canvas.style.width = `${cssW}px`;
-    canvas.style.height = `${cssH}px`;
-    const ctx = canvas.getContext('2d', { alpha: true });
-    if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    for (const c of [canvas, waveCanvasRef.current]) {
+      if (!c) continue;
+      c.width = Math.floor(cssW * dpr);
+      c.height = Math.floor(cssH * dpr);
+      c.style.width = `${cssW}px`;
+      c.style.height = `${cssH}px`;
+      const ctx = c.getContext('2d', { alpha: true });
+      if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
 
     const header = { x: 0, y: 0, w: cssW, h: 36 };
     const metricsH = Math.max(92, Math.min(108, Math.round(cssH * 0.11)));
@@ -345,13 +350,15 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const render = () => {
       if (!isRunningRef.current) return;
       const canvas = canvasRef.current;
+      const waveCanvas = waveCanvasRef.current;
       const buffer = dataBufferRef.current;
-      if (!canvas || !buffer) {
+      if (!canvas || !waveCanvas || !buffer) {
         animationRef.current = requestAnimationFrame(render);
         return;
       }
       const ctx = canvas.getContext('2d', { alpha: true });
-      if (!ctx) {
+      const waveCtx = waveCanvas.getContext('2d', { alpha: true });
+      if (!ctx || !waveCtx) {
         animationRef.current = requestAnimationFrame(render);
         return;
       }
@@ -436,15 +443,28 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         signalStrength: signalStrengthNow,
       };
 
+      // Capa base (canvas enmascarado): fondo y paneles del monitor.
       drawBackground(ctx, layoutRef.current.width, layoutRef.current.height);
       drawHeader(ctx, renderState);
       drawMetricsBar(ctx, renderState);
-      drawGrid3D(ctx, renderState);
-      drawPressureGauge(ctx, renderState);
-      drawSignal(ctx, renderState);
-      drawAcquisitionOverlay(ctx, renderState);
+      // Fondo negro del área de plot (la grilla vive en la capa superior).
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(
+        layoutRef.current.plot.x,
+        layoutRef.current.plot.y,
+        layoutRef.current.plot.w,
+        layoutRef.current.plot.h,
+      );
       drawTrendStrip(ctx, renderState);
       drawFooter(ctx, renderState);
+
+      // Capa superior (canvas SIN máscara): grillas, onda PPG y overlays del
+      // plot a opacidad plena, siempre por encima de la ventana del dedo.
+      waveCtx.clearRect(0, 0, layoutRef.current.width, layoutRef.current.height);
+      drawGrid3D(waveCtx, renderState, { skipBackground: true });
+      drawPressureGauge(waveCtx, renderState);
+      drawSignal(waveCtx, renderState);
+      drawAcquisitionOverlay(waveCtx, renderState);
 
       sweepPulseRef.current = renderState.sweepPulse;
       lastPeakProcessedRef.current = renderState.lastPeakProcessedTime;
@@ -482,72 +502,75 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       ctx.fillStyle = '#000000';
       ctx.fillRect(0, 0, canvas!.width, canvas!.height);
     }
+    const waveCanvas = waveCanvasRef.current;
+    const waveCtx = waveCanvas?.getContext('2d');
+    if (waveCtx) {
+      waveCtx.clearRect(0, 0, waveCanvas!.width, waveCanvas!.height);
+    }
     onReset();
   }, [onReset]);
 
   return (
     <div ref={containerRef} className="fixed inset-0 overflow-hidden">
       {/*
-        VENTANA DE DEDO — máscara radial CSS aplicada al canvas del monitor.
-        Debajo del canvas está la <CameraView/> real (absolute inset-0 en Index).
-        El radial-gradient reduce el alpha del canvas SOLO en un círculo centrado
-        (radio ~ tamaño de una yema humana), dejando ver el dedo del usuario en
-        vivo por detrás. Fuera del círculo el canvas es 100% opaco → la onda
-        cardíaca y los displays conservan toda su jerarquía y legibilidad.
-        Dentro del círculo el canvas queda ~55% opaco → las ondas siguen
-        visibles y NUNCA quedan por debajo del dedo (se dibujan por encima),
-        pero el usuario ve el contacto real de su dedo con el lente.
+        VENTANA DE DEDO — máscara radial CSS aplicada SOLO al canvas base
+        (fondo y paneles del monitor). Debajo está la <CameraView/> real
+        (absolute inset-0 en Index). El círculo transparente queda
+        perfectamente centrado, con radio útil ≈90px (yema de dedo) y un
+        feather suave de 90→126px, sin bordes duros. La onda PPG y las
+        grillas viven en un segundo canvas SIN máscara por encima, por lo
+        que conservan opacidad plena y el dedo nunca atraviesa la señal.
       */}
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
         style={{
           WebkitMaskImage:
-            'radial-gradient(circle at 50% 50%, rgba(0,0,0,0.42) 0px, rgba(0,0,0,0.55) 55px, rgba(0,0,0,0.86) 92px, rgba(0,0,0,1) 118px)',
+            'radial-gradient(circle at 50% 50%, rgba(0,0,0,0.30) 0px, rgba(0,0,0,0.34) 58px, rgba(0,0,0,0.48) 90px, rgba(0,0,0,0.82) 110px, rgba(0,0,0,1) 126px)',
           maskImage:
-            'radial-gradient(circle at 50% 50%, rgba(0,0,0,0.42) 0px, rgba(0,0,0,0.55) 55px, rgba(0,0,0,0.86) 92px, rgba(0,0,0,1) 118px)',
+            'radial-gradient(circle at 50% 50%, rgba(0,0,0,0.30) 0px, rgba(0,0,0,0.34) 58px, rgba(0,0,0,0.48) 90px, rgba(0,0,0,0.82) 110px, rgba(0,0,0,1) 126px)',
         }}
       />
+      {/* Capa de señal: grillas + onda PPG, sin máscara, opacidad plena. */}
+      <canvas
+        ref={waveCanvasRef}
+        className="pointer-events-none absolute inset-0 w-full h-full"
+      />
       {/*
-        Anillo médico sutil alrededor de la ventana — guía discreta, sin
-        competir con la onda. SVG absoluto, pointerEvents none.
+        Anillo médico sutil alrededor de la ventana — guía discreta con
+        halo degradado (sin trazos duros), radio útil 90px. SVG absoluto,
+        pointerEvents none.
       */}
       <svg
         aria-hidden
         className="pointer-events-none absolute left-1/2 top-1/2"
-        width={236}
-        height={236}
+        width={240}
+        height={240}
         style={{ transform: 'translate(-50%, -50%)' }}
       >
         <defs>
-          <radialGradient id="peep-inner" cx="50%" cy="50%" r="50%">
-            <stop offset="60%" stopColor="rgba(148,163,184,0)" />
-            <stop offset="100%" stopColor="rgba(148,163,184,0.10)" />
+          <radialGradient id="peep-halo" cx="50%" cy="50%" r="50%">
+            <stop offset="62%" stopColor="rgba(148,163,184,0)" />
+            <stop offset="75%" stopColor="rgba(148,163,184,0.06)" />
+            <stop offset="82%" stopColor="rgba(148,163,184,0.05)" />
+            <stop offset="100%" stopColor="rgba(148,163,184,0)" />
           </radialGradient>
         </defs>
-        <circle cx="118" cy="118" r="92" fill="url(#peep-inner)" />
+        <circle cx="120" cy="120" r="120" fill="url(#peep-halo)" />
         <circle
-          cx="118"
-          cy="118"
-          r="88"
+          cx="120"
+          cy="120"
+          r="90"
           fill="none"
-          stroke="rgba(226,232,240,0.16)"
-          strokeWidth="1"
-        />
-        <circle
-          cx="118"
-          cy="118"
-          r="90.5"
-          fill="none"
-          stroke="rgba(15,23,42,0.55)"
-          strokeWidth="1"
+          stroke="rgba(226,232,240,0.10)"
+          strokeWidth="1.5"
         />
         {/* Marcas cardinales muy finas */}
         {[
-          [118, 22, 118, 32],
-          [118, 204, 118, 214],
-          [22, 118, 32, 118],
-          [204, 118, 214, 118],
+          [120, 24, 120, 33],
+          [120, 207, 120, 216],
+          [24, 120, 33, 120],
+          [207, 120, 216, 120],
         ].map(([x1, y1, x2, y2], i) => (
           <line
             key={i}
@@ -555,7 +578,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
             y1={y1}
             x2={x2}
             y2={y2}
-            stroke="rgba(226,232,240,0.22)"
+            stroke="rgba(226,232,240,0.16)"
             strokeWidth="0.75"
           />
         ))}
