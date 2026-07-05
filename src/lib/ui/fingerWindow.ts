@@ -171,6 +171,26 @@ function softArc(
   }
 }
 
+/** Dibuja una elipse completa como trazo suave con huecos para la onda. */
+function ring(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  gap: number,
+  color: string,
+  alpha: number,
+  lineWidth: number,
+) {
+  if (alpha <= 0.002) return;
+  ctx.strokeStyle = `rgba(${color},${alpha.toFixed(3)})`;
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  softArc(ctx, cx, cy, rx, ry, -Math.PI / 2, TAU, gap);
+  ctx.stroke();
+}
+
 export function drawFingerWindow3D(
   ctx: CanvasRenderingContext2D,
   state: PpgRenderState,
@@ -180,126 +200,116 @@ export function drawFingerWindow3D(
   const cx = width * FINGER_WINDOW.cxFrac;
   const cy = height * FINGER_WINDOW.cyFrac;
   const { rx, ry } = FINGER_WINDOW;
+  const gap = 0.30; // hueco angular a las 3 y 9 en punto → pasa la onda
 
   const pl = readPlacement(state);
 
-  // Color según situación: sin dedo→azul; corrigiendo→ámbar cálido;
-  // estabilizando→ámbar; bueno/ready→verde. Transición continua por calidad.
+  // Color: sin dedo→azul; corrigiendo→ámbar cálido; estabilizando→ámbar→verde.
   let baseCol: string;
   if (!pl.hasFinger) baseCol = COL.invite;
   else if (pl.hint) baseCol = COL.warn;
   else if (pl.ready) baseCol = COL.good;
   else baseCol = mix(COL.locking, COL.good, pl.quality);
 
-  // Respiración lenta (nunca estático) y desvanecimiento global: cuanto mejor
-  // la colocación, más se apaga la guía → cede el escenario a la onda.
-  const breath = 0.5 + 0.5 * Math.sin(now / 1100);
-  const presence = pl.ready ? 0.12 : lerp(1, 0.18, pl.quality); // 1=necesita guía
+  const breath = 0.5 + 0.5 * Math.sin(now / 1400);
+  // presencia global: la guía se apaga a medida que la colocación mejora.
+  const presence = pl.ready ? 0.14 : lerp(1, 0.2, pl.quality);
+  // necesidad de invitación: máxima sin dedo o con poca cobertura.
+  const need = pl.hasFinger ? clamp01((0.7 - pl.quality) / 0.7) : 1;
 
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  // ── 1. Pozo de guía: glow central suave que dice "acá va el dedo" ─────────
-  // Achatado a la elipse; alpha ínfimo, se desvanece al estabilizar.
-  const wellA = (0.05 + breath * 0.03) * presence;
+  // ── 1. RECESIÓN: vignette elíptico que hunde el centro (marco oscuro suave
+  //       alrededor de la ventana). Da el efecto de "pozo" bajo el piso. ─────
   ctx.save();
   ctx.translate(cx, cy);
   ctx.scale(1, ry / rx);
-  const well = ctx.createRadialGradient(0, 0, 0, 0, 0, rx * 1.15);
-  well.addColorStop(0, `rgba(${baseCol},${wellA.toFixed(3)})`);
-  well.addColorStop(0.55, `rgba(${baseCol},${(wellA * 0.5).toFixed(3)})`);
-  well.addColorStop(1, `rgba(${baseCol},0)`);
-  ctx.fillStyle = well;
+  const vig = ctx.createRadialGradient(0, 0, rx * 0.55, 0, 0, rx * 1.75);
+  vig.addColorStop(0, 'rgba(2,6,12,0)');
+  vig.addColorStop(0.72, `rgba(2,6,12,${(0.34 * presence).toFixed(3)})`);
+  vig.addColorStop(1, 'rgba(2,6,12,0)');
+  ctx.fillStyle = vig;
   ctx.beginPath();
-  ctx.arc(0, 0, rx * 1.15, 0, TAU);
+  ctx.arc(0, 0, rx * 1.75, 0, TAU);
+  ctx.fill();
+
+  // Brillo central del fondo del pozo (muy tenue) — "acá va la yema".
+  const glowA = (0.06 + breath * 0.035) * presence;
+  const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, rx * 0.95);
+  glow.addColorStop(0, `rgba(${baseCol},${glowA.toFixed(3)})`);
+  glow.addColorStop(0.6, `rgba(${baseCol},${(glowA * 0.4).toFixed(3)})`);
+  glow.addColorStop(1, `rgba(${baseCol},0)`);
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(0, 0, rx * 0.95, 0, TAU);
   ctx.fill();
   ctx.restore();
 
-  // ── 2. Aro-objetivo tenue (dónde apoyar), con huecos para la onda ────────
-  const gap = 0.26; // ~15° de hueco a cada lado del eje horizontal
-  const ringA = (0.12 + breath * 0.04) * presence;
-  ctx.strokeStyle = `rgba(${baseCol},${ringA.toFixed(3)})`;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  softArc(ctx, cx, cy, rx, ry, -Math.PI / 2, TAU, gap);
-  ctx.stroke();
+  // ── 2. EMBUDO: anillos concéntricos que se cierran hacia el centro (paredes
+  //       del pozo en perspectiva). Los más internos, más juntos y tenues. ──
+  const funnel = [1.06, 0.86, 0.68, 0.52, 0.38];
+  for (let i = 0; i < funnel.length; i++) {
+    const f = funnel[i];
+    const a = (0.05 + 0.02 * i) * presence; // se aclara hacia afuera
+    ring(ctx, cx, cy, rx * f, ry * f, gap, baseCol, a, 1);
+  }
 
-  // ── 3. Aro de COBERTURA (la guía real de "cuánto falta"): se completa con
-  //       coverageRatio. El resto queda como fantasma para ver el objetivo. ──
+  // ── 3. ONDAS CONVERGENTES: ripples que viajan HACIA el centro para atraer
+  //       la yema. Solo cuando falta colocar; se apagan al estabilizar. ─────
+  if (need > 0.03) {
+    const RIPPLES = 3;
+    for (let i = 0; i < RIPPLES; i++) {
+      const phase = ((now / 2600 + i / RIPPLES) % 1); // 0→1
+      const r = lerp(1.18, 0.32, phase); // de afuera hacia adentro
+      const env = Math.sin(phase * Math.PI); // fade en extremos
+      const a = 0.12 * env * need * presence;
+      ring(ctx, cx, cy, rx * r, ry * r, gap, baseCol, a, 1.1);
+    }
+  }
+
+  // ── 4. ARO-OBJETIVO + COBERTURA REAL (cuánto falta cubrir el lente) ──────
+  // Objetivo (borde de la ventana), tenue.
+  ring(ctx, cx, cy, rx, ry, gap, baseCol, (0.14 + breath * 0.04) * presence, 1.2);
   if (pl.hasFinger) {
     const cov = clamp01(pl.coverage);
-    // Fantasma del objetivo completo (muy tenue).
-    ctx.strokeStyle = `rgba(${baseCol},${(0.06 * presence).toFixed(3)})`;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    softArc(ctx, cx, cy, rx * 0.82, ry * 0.82, -Math.PI / 2, TAU, gap);
-    ctx.stroke();
+    // Fantasma del objetivo de cobertura.
+    ring(ctx, cx, cy, rx * 0.9, ry * 0.9, gap, baseCol, 0.06 * presence, 2);
     // Parte cubierta (se llena desde arriba).
     if (cov > 0.02) {
-      ctx.strokeStyle = `rgba(${baseCol},${(0.5 * lerp(1, 0.35, pl.quality)).toFixed(3)})`;
+      ctx.strokeStyle = `rgba(${baseCol},${(0.42 * lerp(1, 0.4, pl.quality)).toFixed(3)})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      softArc(ctx, cx, cy, rx * 0.82, ry * 0.82, -Math.PI / 2, TAU * cov, gap);
+      softArc(ctx, cx, cy, rx * 0.9, ry * 0.9, -Math.PI / 2, TAU * cov, gap);
       ctx.stroke();
     }
   }
 
-  // ── 4. Invitación convergente: 4 chevrons finísimos que "respiran" hacia
-  //       el centro cuando falta colocar. Atraen la yema. Se apagan al mejorar.
-  const inviteStrength = pl.hasFinger ? clamp01(0.6 - pl.coverage) : 1;
-  if (inviteStrength > 0.02) {
-    const pull = 0.12 * (0.5 + 0.5 * Math.sin(now / 620)); // respiración hacia dentro
-    const aInv = (0.14 * inviteStrength) * presence;
-    ctx.strokeStyle = `rgba(${baseCol},${aInv.toFixed(3)})`;
-    ctx.lineWidth = 1.1;
-    for (let i = 0; i < 4; i++) {
-      // Cardinales, pero salteando el eje horizontal (deja pasar la onda).
-      const a = -Math.PI / 2 + (i * Math.PI) / 2;
-      if (Math.abs(Math.sin(a)) < 0.2) continue; // omite 3 y 9 en punto
-      const rOut = 1.12 - pull;
-      const rIn = 0.98 - pull;
-      const tip = ellipsePt(cx, cy, rx * rIn, ry * rIn, a);
-      const l = ellipsePt(cx, cy, rx * rOut, ry * rOut, a - 0.12);
-      const r = ellipsePt(cx, cy, rx * rOut, ry * rOut, a + 0.12);
-      ctx.beginPath();
-      ctx.moveTo(l.x, l.y);
-      ctx.lineTo(tip.x, tip.y);
-      ctx.lineTo(r.x, r.y);
-      ctx.stroke();
-    }
-  }
-
-  // ── 5. Progreso REAL de estabilización: aro fino levemente exterior ──────
+  // ── 5. PROGRESO REAL de estabilización (aro exterior fino) ───────────────
   if (pl.hasFinger && !pl.ready && pl.progress > 0.01) {
     const col = mix(COL.locking, COL.good, pl.progress);
-    ctx.strokeStyle = `rgba(${col},0.32)`;
+    ctx.strokeStyle = `rgba(${col},${(0.3 * presence + 0.08).toFixed(3)})`;
     ctx.lineWidth = 1.6;
     ctx.beginPath();
-    softArc(ctx, cx, cy, rx * 1.12, ry * 1.12, -Math.PI / 2, TAU * pl.progress, gap);
+    softArc(ctx, cx, cy, rx * 1.16, ry * 1.16, -Math.PI / 2, TAU * pl.progress, gap);
     ctx.stroke();
   }
 
-  // ── 6. Latido casi imperceptible cuando la señal es estable ──────────────
+  // ── 6. LATIDO casi imperceptible en señal estable ────────────────────────
   if (pl.ready && state.sweepPulse > 0.04) {
     const k = state.sweepPulse;
-    const grow = 1 + (1 - k) * 0.1;
-    ctx.strokeStyle = `rgba(${COL.good},${(0.16 * k).toFixed(3)})`;
-    ctx.lineWidth = 1 + k * 0.8;
-    ctx.beginPath();
-    softArc(ctx, cx, cy, rx * grow, ry * grow, -Math.PI / 2, TAU, gap);
-    ctx.stroke();
+    ring(ctx, cx, cy, rx * (1 + (1 - k) * 0.08), ry * (1 + (1 - k) * 0.08), gap, COL.good, 0.16 * k, 1 + k * 0.8);
   }
 
-  // ── 7. Micro-guía textual: susurrada, minúscula, solo si hay algo que hacer.
+  // ── 7. MICRO-GUÍA textual: susurrada, minúscula, solo si hay algo que hacer.
   if (pl.hint) {
-    const a = (0.34 + breath * 0.12) * (pl.hasFinger ? 1 : 1.1);
+    const a = 0.32 + breath * 0.12;
     ctx.font = '500 10.5px ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillStyle = `rgba(${baseCol},${a.toFixed(3)})`;
-    // debajo de la ventana, fuera del corredor de la onda.
-    ctx.fillText(pl.hint, cx, cy + ry + 16);
+    ctx.fillText(pl.hint, cx, cy + ry + 18);
   }
 
   ctx.restore();
