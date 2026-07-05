@@ -35,6 +35,13 @@ export interface CortexFrame {
     contactPressure: number;
     acRatio: number;
   };
+  placementGuidance: {
+    state: string;
+    guidance: string;
+    action: string;
+    severity: string;
+    confidence: number;
+  };
 }
 
 export interface CortexSession {

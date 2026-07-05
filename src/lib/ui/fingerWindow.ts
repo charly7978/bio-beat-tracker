@@ -95,6 +95,10 @@ interface Placement {
   bloodWarn: boolean;
 }
 
+function pick<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 function readPlacement(state: PpgRenderState): Placement {
   const p = state.props;
   const diag = p.diagnostics as unknown as Record<string, unknown> | undefined;
@@ -124,14 +128,14 @@ function readPlacement(state: PpgRenderState): Placement {
     hasFinger && coverage > 0.75 && perfusion > 0 && perfusion < 0.0005;
 
   let hint: string | null = null;
-  if (!hasFinger) hint = 'apoyá la yema en el lente';
-  else if (coverage < 0.40) hint = 'más cobertura del lente';
-  else if (coverage < 0.55) hint = 'cubrí bien el lente';
-  else if (motion > 0.55) hint = 'sostené el dedo quieto';
-  else if (motion > 0.4) hint = 'menos movimiento, muy bien';
-  else if (bloodWarn) hint = 'aflojá la presión';
-  else if (perfusion < 0.001) hint = 'apoyá con firmeza';
-  else if (under > 0.45) hint = 'más presión moderada';
+  if (!hasFinger) hint = pick(['apoyá la yema en el lente', 'colocá el dedo sobre la cámara', 'tapá el flash con la yema']);
+  else if (coverage < 0.40) hint = pick(['más cobertura del lente', 'desplazá el dedo hacia el centro', 'cubrí mejor la cámara']);
+  else if (coverage < 0.55) hint = pick(['cubrí bien el lente', 'casi ahí, mové un poco más', 'llená toda la superficie']);
+  else if (motion > 0.55) hint = pick(['sostené el dedo quieto', 'sin mover, firme', 'tranqui, mantené el dedo estable']);
+  else if (motion > 0.4) hint = pick(['menos movimiento, muy bien', 'casi perfecto, no te muevas', 'sostenelo así, sin temblar']);
+  else if (bloodWarn) hint = pick(['aflojá la presión', 'presionás muy fuerte, soltá un toque', 'estás aplastando el dedo']);
+  else if (perfusion < 0.001) hint = pick(['apoyá con firmeza', 'un poco más de presión', 'hacé más contacto']);
+  else if (under > 0.45) hint = pick(['más presión moderada', 'apoyá un poco más', 'mejor contacto']);
   if (ready && quality > 0.6) hint = null;
 
   return {

@@ -14,6 +14,23 @@ const stageLabels: Record<string, { label: string; color: string }> = {
   decide: { label: 'DECIDIR', color: '#ef4444' },
 };
 
+const severityColors: Record<string, string> = {
+  info: '#60a5fa',
+  hint: '#f59e0b',
+  warn: '#ef4444',
+  error: '#dc2626',
+};
+
+const stateLabels: Record<string, string> = {
+  NO_FINGER: 'Sin dedo',
+  PARTIAL_COVERAGE: 'Cobertura parcial',
+  CENTERED_LOW_PRESSURE: 'Poca presión',
+  CENTERED_GOOD: 'Colocado bien',
+  CENTERED_HIGH_PRESSURE: 'Exceso de presión',
+  MOVEMENT: 'Movimiento',
+  UNKNOWN: 'Desconocido',
+};
+
 export function CortexConsole({ frame, sessionActive }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -33,6 +50,9 @@ export function CortexConsole({ frame, sessionActive }: Props) {
   const dir = typeof window !== 'undefined' && document.dir;
   const isRTL = dir === 'rtl';
 
+  const pg = frame?.placementGuidance;
+  const severityColor = pg ? (severityColors[pg.severity] ?? '#666') : '#666';
+
   return (
     <div className={`rounded-lg border border-zinc-800 bg-zinc-950 overflow-hidden ${isRTL ? 'text-right' : 'text-left'}`}
          style={{ fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace" }}>
@@ -47,6 +67,27 @@ export function CortexConsole({ frame, sessionActive }: Props) {
           {sessionActive ? 'LIVE' : 'IDLE'}
         </span>
       </div>
+
+      {/* Guidance bar */}
+      {pg && pg.state !== 'CENTERED_GOOD' && (
+        <div
+          className="px-3 py-2 border-b border-zinc-800 flex items-center gap-2"
+          style={{ backgroundColor: severityColor + '15' }}
+        >
+          <span className="text-lg" style={{ color: severityColor }}>
+            {pg.action === 'none' ? '✓' : pg.action === 'less_pressure' ? '↓' : pg.action === 'more_pressure' ? '↑' : pg.action === 'center' ? '⊙' : pg.action === 'steady' ? '—' : '?'}
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-bold" style={{ color: severityColor }}>
+              {(stateLabels as any)[pg.state] ?? pg.state}
+            </div>
+            <div className="text-[10px] text-zinc-400 truncate">{pg.guidance}</div>
+          </div>
+          <span className="text-[10px] text-zinc-600">
+            {(pg.confidence * 100).toFixed(0)}%
+          </span>
+        </div>
+      )}
 
       <div ref={scrollRef} className="p-2 space-y-1 overflow-y-auto" style={{ maxHeight: '360px' }}>
         {framesRef.current.length === 0 ? (
@@ -98,7 +139,7 @@ function Chip({ label, value, color }: { label: string; value: string; color: st
   );
 }
 
-const stateLabels: Record<string, string> = {
+const hemodynamicStateLabels: Record<string, string> = {
   normal: 'Normal',
   hypoperfusion: 'Hipoperfusión',
   hyperdynamic: 'Hiperdinámico',
@@ -109,5 +150,5 @@ const stateLabels: Record<string, string> = {
 };
 
 function stageLabel(s: string): string {
-  return (stateLabels as any)[s] ?? s;
+  return (hemodynamicStateLabels as any)[s] ?? s;
 }

@@ -5,6 +5,7 @@ import type {
   CortexDecision,
   ReasoningStage,
 } from './types';
+import { FingerPlacementAgent } from './agents/FingerPlacementAgent';
 
 function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
@@ -52,6 +53,11 @@ function channelFromDecision(d: CortexDecision): 'red' | 'green' | 'blue' | 'rg_
 export class CortexReasoner {
   private history: ProcessedSignal[] = [];
   private lastFrame: CortexFrame | null = null;
+  private placementAgent: FingerPlacementAgent;
+
+  constructor() {
+    this.placementAgent = new FingerPlacementAgent();
+  }
 
   process(signal: ProcessedSignal): CortexFrame {
     this.history.push(signal);
@@ -130,6 +136,24 @@ export class CortexReasoner {
       ));
     }
 
+    // Finger Placement Agent
+    const placementDecision = this.placementAgent.process(signal);
+    stages.push(buildStage('see',
+      `[Colocación] ${placementDecision.stages.see}`
+    ));
+    stages.push(buildStage('analyze',
+      `[Colocación] ${placementDecision.stages.analyze}`
+    ));
+    stages.push(buildStage('check',
+      `[Colocación] Guía: "${placementDecision.guidance.text}". Acción: ${placementDecision.guidance.action}. Severidad: ${placementDecision.guidance.severity}.`
+    ));
+    stages.push(buildStage('reason',
+      `[Colocación] El usuario ${placementDecision.state === 'NO_FINGER' ? 'no ha colocado el dedo' : placementDecision.state === 'CENTERED_GOOD' ? 'colocó bien el dedo' : 'necesita ajustar la posición'}. Confianza: ${(placementDecision.confidence * 100).toFixed(0)}%.`
+    ));
+    stages.push(buildStage('decide',
+      `[Colocación] Estado: ${placementDecision.state}. Acción de guía: ${placementDecision.guidance.action}.`
+    ));
+
     const hemodynamicState = inferHemodynamicState(signal, conf);
     const phase = estimatePulsePhase(signal);
 
@@ -162,6 +186,13 @@ export class CortexReasoner {
         contactPressure: signal.diagnostics?.fingerPressure === 'HEAVY' ? 1 :
                          signal.diagnostics?.fingerPressure === 'LIGHT' ? 0.3 : 0.5,
         acRatio: rgRatio,
+      },
+      placementGuidance: {
+        state: placementDecision.state,
+        guidance: placementDecision.guidance.text,
+        action: placementDecision.guidance.action,
+        severity: placementDecision.guidance.severity,
+        confidence: placementDecision.confidence,
       },
     };
 
