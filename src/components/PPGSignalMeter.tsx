@@ -297,7 +297,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     canvas.height = Math.floor(cssH * dpr);
     canvas.style.width = `${cssW}px`;
     canvas.style.height = `${cssH}px`;
-    const ctx = canvas.getContext('2d', { alpha: false });
+    const ctx = canvas.getContext('2d', { alpha: true });
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const header = { x: 0, y: 0, w: cssW, h: 36 };
@@ -350,7 +350,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         animationRef.current = requestAnimationFrame(render);
         return;
       }
-      const ctx = canvas.getContext('2d', { alpha: false });
+      const ctx = canvas.getContext('2d', { alpha: true });
       if (!ctx) {
         animationRef.current = requestAnimationFrame(render);
         return;
@@ -486,11 +486,80 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   }, [onReset]);
 
   return (
-    <div ref={containerRef} className="fixed inset-0 bg-slate-950 overflow-hidden">
+    <div ref={containerRef} className="fixed inset-0 overflow-hidden">
+      {/*
+        VENTANA DE DEDO — máscara radial CSS aplicada al canvas del monitor.
+        Debajo del canvas está la <CameraView/> real (absolute inset-0 en Index).
+        El radial-gradient reduce el alpha del canvas SOLO en un círculo centrado
+        (radio ~ tamaño de una yema humana), dejando ver el dedo del usuario en
+        vivo por detrás. Fuera del círculo el canvas es 100% opaco → la onda
+        cardíaca y los displays conservan toda su jerarquía y legibilidad.
+        Dentro del círculo el canvas queda ~55% opaco → las ondas siguen
+        visibles y NUNCA quedan por debajo del dedo (se dibujan por encima),
+        pero el usuario ve el contacto real de su dedo con el lente.
+      */}
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
+        style={{
+          WebkitMaskImage:
+            'radial-gradient(circle at 50% 50%, rgba(0,0,0,0.42) 0px, rgba(0,0,0,0.55) 55px, rgba(0,0,0,0.86) 92px, rgba(0,0,0,1) 118px)',
+          maskImage:
+            'radial-gradient(circle at 50% 50%, rgba(0,0,0,0.42) 0px, rgba(0,0,0,0.55) 55px, rgba(0,0,0,0.86) 92px, rgba(0,0,0,1) 118px)',
+        }}
       />
+      {/*
+        Anillo médico sutil alrededor de la ventana — guía discreta, sin
+        competir con la onda. SVG absoluto, pointerEvents none.
+      */}
+      <svg
+        aria-hidden
+        className="pointer-events-none absolute left-1/2 top-1/2"
+        width={236}
+        height={236}
+        style={{ transform: 'translate(-50%, -50%)' }}
+      >
+        <defs>
+          <radialGradient id="peep-inner" cx="50%" cy="50%" r="50%">
+            <stop offset="60%" stopColor="rgba(148,163,184,0)" />
+            <stop offset="100%" stopColor="rgba(148,163,184,0.10)" />
+          </radialGradient>
+        </defs>
+        <circle cx="118" cy="118" r="92" fill="url(#peep-inner)" />
+        <circle
+          cx="118"
+          cy="118"
+          r="88"
+          fill="none"
+          stroke="rgba(226,232,240,0.16)"
+          strokeWidth="1"
+        />
+        <circle
+          cx="118"
+          cy="118"
+          r="90.5"
+          fill="none"
+          stroke="rgba(15,23,42,0.55)"
+          strokeWidth="1"
+        />
+        {/* Marcas cardinales muy finas */}
+        {[
+          [118, 22, 118, 32],
+          [118, 204, 118, 214],
+          [22, 118, 32, 118],
+          [204, 118, 214, 118],
+        ].map(([x1, y1, x2, y2], i) => (
+          <line
+            key={i}
+            x1={x1}
+            y1={y1}
+            x2={x2}
+            y2={y2}
+            stroke="rgba(226,232,240,0.22)"
+            strokeWidth="0.75"
+          />
+        ))}
+      </svg>
       <PulseIndicator showPulse={showPulse} />
       <ActionButtons
         isMonitoring={isMonitoring}
