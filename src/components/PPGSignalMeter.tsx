@@ -504,7 +504,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
     };
   }, []);
-
   const handleReset = useCallback(() => {
     dataBufferRef.current?.clear();
     amplitudeStatsRef.current = { min: -50, max: 50, range: 100 };
@@ -538,15 +537,18 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
           50% { transform: translateY(70px); opacity: 0.8; }
           100% { transform: translateY(-70px); opacity: 0.2; }
         }
-        @keyframes pulseGlow {
-          0% { box-shadow: 0 0 10px rgba(34, 197, 94, 0.2); }
-          50% { box-shadow: 0 0 25px rgba(34, 197, 94, 0.6); }
-          100% { box-shadow: 0 0 10px rgba(34, 197, 94, 0.2); }
+        @keyframes spinClockwise {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
         }
-        @keyframes pulseGlowOrange {
-          0% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.2); }
-          50% { box-shadow: 0 0 20px rgba(245, 158, 11, 0.5); }
-          100% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.2); }
+        @keyframes spinCounterClockwise {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(-360deg); }
+        }
+        @keyframes pulseTelemetry {
+          0% { opacity: 0.35; }
+          50% { opacity: 0.85; }
+          100% { opacity: 0.35; }
         }
       `}</style>
 
@@ -554,35 +556,60 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
+        style={{ zIndex: 1 }}
       />
 
       {/* 3D Camera Preview Window reposado en la grilla del piso en 3D */}
       {isCameraOn && layoutInfo && (
         <div 
-          className="absolute pointer-events-none"
+          className="absolute pointer-events-none font-mono"
           style={{
             position: 'absolute',
             left: layoutInfo.plotX + layoutInfo.plotW / 2,
             top: layoutInfo.floorCenterY,
-            width: '140px',
-            height: '140px',
-            transform: 'translate(-50%, -50%) perspective(400px) rotateX(55deg)',
+            width: '180px',
+            height: '180px',
+            transform: 'translate(-50%, -50%) perspective(450px) rotateX(55deg)',
             transformStyle: 'preserve-3d',
             pointerEvents: 'none',
-            zIndex: 5,
+            zIndex: 2,
           }}
         >
-          {/* Glowing Border and Container */}
+          {/* Outer Corner Brackets (Tech HUD) */}
+          <svg className="absolute inset-0 w-full h-full text-emerald-500/30" viewBox="0 0 180 180" fill="none" stroke="currentColor" strokeWidth="1">
+            <path d="M 12,28 L 12,12 L 28,12" />
+            <path d="M 152,12 L 168,12 L 168,28" />
+            <path d="M 12,152 L 12,168 L 28,168" />
+            <path d="M 168,152 L 168,168 L 152,168" />
+          </svg>
+
+          {/* Telemetry HUD Labels (Flat inside 3D space) */}
+          <div className="absolute top-[12px] left-[14px] text-[6.5px] text-emerald-400/50 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
+            SYS.MODE: {isFingerDetected ? 'PPG_ACTIVE' : 'PPG_STANDBY'}
+          </div>
+          <div className="absolute top-[12px] right-[14px] text-[6.5px] text-emerald-400/50 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
+            WL: 660nm
+          </div>
+          <div className="absolute bottom-[12px] left-[14px] text-[6.5px] text-emerald-400/50 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
+            SENS: {isFingerDetected ? 'SIGNAL_LOCK' : 'SEARCH_SCAN'}
+          </div>
+          <div className="absolute bottom-[12px] right-[14px] text-[6.5px] text-emerald-400/50 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
+            GAIN: {quality > 0 ? `${Math.round(quality)}%` : 'AUTO'}
+          </div>
+
+          {/* Central Circular Camera Viewport */}
           <div 
-            className="relative w-full h-full rounded-full overflow-hidden border-2 transition-all duration-500" 
+            className="absolute left-[20px] top-[20px] w-[140px] h-[140px] rounded-full overflow-hidden transition-all duration-700" 
             style={{
-              borderColor: isFingerDetected ? 'rgba(34, 197, 94, 0.6)' : 'rgba(245, 158, 11, 0.5)',
-              animation: isFingerDetected ? 'pulseGlow 2s infinite ease-in-out' : 'pulseGlowOrange 1.5s infinite ease-in-out',
+              border: isFingerDetected ? '1px solid rgba(34, 197, 94, 0.45)' : '1px solid rgba(245, 158, 11, 0.35)',
+              boxShadow: isFingerDetected 
+                ? '0 0 15px rgba(34, 197, 94, 0.2), inset 0 0 15px rgba(34, 197, 94, 0.15)' 
+                : '0 0 10px rgba(245, 158, 11, 0.12), inset 0 0 10px rgba(245, 158, 11, 0.08)',
               backgroundColor: '#000000',
             }}
           >
             {/* CameraView with soft blur filter to smooth out skin/blood details */}
-            <div className="w-full h-full" style={{ filter: 'blur(10px) saturate(1.6) brightness(0.85)' }}>
+            <div className="w-full h-full" style={{ filter: 'blur(10px) saturate(1.7) brightness(0.8)' }}>
               <CameraView 
                 ref={cameraRef}
                 onStreamReady={onStreamReady}
@@ -590,29 +617,77 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
               />
             </div>
             
+            {/* CRT scanlines overlay */}
+            <div 
+              className="absolute inset-0 pointer-events-none" 
+              style={{
+                background: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.15), rgba(0,0,0,0.15) 1px, transparent 1px, transparent 3px)',
+                opacity: 0.5
+              }}
+            />
+            
             {/* Vignette overlay */}
             <div 
               className="absolute inset-0 pointer-events-none" 
               style={{
-                background: 'radial-gradient(circle, rgba(0,0,0,0) 40%, rgba(0,0,0,0.9) 100%)'
+                background: 'radial-gradient(circle, rgba(0,0,0,0) 45%, rgba(0,0,0,0.85) 100%)'
               }}
             />
+            
+            {/* Spinning HUD Reticle Circles */}
+            <svg 
+              className="absolute inset-0 w-full h-full pointer-events-none" 
+              viewBox="0 0 140 140" 
+              fill="none" 
+              stroke="currentColor"
+            >
+              {/* Outer ticking ring (spinning clockwise) */}
+              <circle 
+                cx="70" 
+                cy="70" 
+                r="64" 
+                className={isFingerDetected ? 'text-emerald-500/20' : 'text-amber-500/15'}
+                strokeWidth="0.75" 
+                strokeDasharray="2 6" 
+                style={{
+                  transformOrigin: '70px 70px',
+                  animation: 'spinClockwise 15s linear infinite'
+                }}
+              />
+              
+              {/* Inner segmented tech ring (spinning counter-clockwise) */}
+              <circle 
+                cx="70" 
+                cy="70" 
+                r="56" 
+                className={isFingerDetected ? 'text-emerald-500/12' : 'text-amber-500/8'}
+                strokeWidth="1" 
+                strokeDasharray="40 12 5 12" 
+                style={{
+                  transformOrigin: '70px 70px',
+                  animation: 'spinCounterClockwise 10s linear infinite'
+                }}
+              />
+
+              {/* Cardinal ticks / Crosshair (static) */}
+              <path d="M 70 4 L 70 10 M 70 130 L 70 136 M 4 70 L 10 70 M 130 70 L 136 70" stroke={isFingerDetected ? 'rgba(34,197,94,0.35)' : 'rgba(245,158,11,0.25)'} strokeWidth="0.75" />
+            </svg>
             
             {/* Holographic Fingerprint Icon */}
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
               <svg
                 viewBox="0 0 64 64"
-                className={`w-16 h-16 transition-all duration-700 ${
+                className={`w-14 h-14 transition-all duration-700 ${
                   isFingerDetected 
-                    ? 'text-emerald-500/10 scale-90 rotate-6 opacity-30' 
+                    ? 'text-emerald-500/10 scale-90 rotate-6 opacity-20' 
                     : 'text-emerald-400/80 animate-pulse'
                 }`}
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="1.5"
+                strokeWidth="1.2"
                 strokeLinecap="round"
                 style={{
-                  filter: isFingerDetected ? 'none' : 'drop-shadow(0 0 8px rgba(52,211,153,0.4))'
+                  filter: isFingerDetected ? 'none' : 'drop-shadow(0 0 6px rgba(52,211,153,0.35))'
                 }}
               >
                 <path d="M20 50 C20 42, 24 38, 32 38 C40 38, 44 42, 44 50" />
@@ -627,7 +702,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
               {/* Rotating target ring */}
               {!isFingerDetected && (
                 <div 
-                  className="absolute w-24 h-24 border border-dashed border-emerald-400/20 rounded-full animate-spin" 
+                  className="absolute w-20 h-20 border border-dashed border-emerald-400/15 rounded-full animate-spin" 
                   style={{ animationDuration: '20s' }}
                 />
               )}
@@ -650,11 +725,12 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       {/* Subtle Pointer HUD Card */}
       {isCameraOn && layoutInfo && (
         <div 
-          className="absolute left-1/2 -translate-x-1/2 pointer-events-none flex flex-col items-center z-20"
+          className="absolute left-1/2 -translate-x-1/2 pointer-events-none flex flex-col items-center"
           style={{
             top: layoutInfo.floorCenterY - 110,
             width: '260px',
             transition: 'top 0.3s ease-in-out',
+            zIndex: 4,
           }}
         >
           <div 
@@ -693,6 +769,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       <canvas
         ref={waveCanvasRef}
         className="pointer-events-none absolute inset-0 w-full h-full"
+        style={{ zIndex: 3 }}
       />
       <PulseIndicator showPulse={showPulse} />
       <ActionButtons
