@@ -38,9 +38,17 @@ export function useInference() {
     }
   }, []);
 
-  useEffect(() => {
-    return () => stopPolling();
+  const dispose = useCallback(() => {
+    stopPolling();
+    svcRef.current?.dispose();
+    svcRef.current = null;
+    setStatus('unloaded');
+    setLastResult(null);
   }, [stopPolling]);
+
+  useEffect(() => {
+    return () => dispose();
+  }, [dispose]);
 
   return {
     status,
@@ -50,5 +58,6 @@ export function useInference() {
     classify,
     startPolling,
     stopPolling,
+    dispose,
   };
 }

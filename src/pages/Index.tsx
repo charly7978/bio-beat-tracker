@@ -193,7 +193,7 @@ const Index = () => {
       inference.startPolling(3000);
     } else {
       cortex.stop();
-      inference.stopPolling();
+      inference.dispose();
     }
   }, [session.isMonitoring, cortex, inference]);
 
