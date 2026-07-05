@@ -865,18 +865,8 @@ const Index = () => {
             />
           </div>
 
-          {/* PEEPHOLE — pequeño visor circular con el feed real de la cámara,
-              para que el usuario vea si su dedo cubre bien el lente. Se ubica
-              en la parte superior central para no competir con la onda PPG. */}
-          <FingerPeephole
-            cameraRef={cameraRef}
-            isActive={session.isCameraOn}
-            isFingerDetected={
-              !!lastSignal?.fingerDetected &&
-              lastSignal?.contactState !== 'NO_CONTACT'
-            }
-            quality={lastSignal?.quality || 0}
-          />
+
+
 
           {/* STATUS BAR — sobre los botones INICIAR/RESET (h-12) y a la izquierda del toggle 3D */}
           <div 
