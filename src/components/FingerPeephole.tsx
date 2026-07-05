@@ -71,11 +71,13 @@ const FingerPeephole: React.FC<FingerPeepholeProps> = ({
   return (
     <div
       aria-hidden={!isActive}
-      className="pointer-events-none absolute z-40 select-none"
+      className="pointer-events-none select-none"
       style={{
-        top: 14,
+        position: "fixed",
+        top: "calc(14px + env(safe-area-inset-top, 0px))",
         left: "50%",
         transform: "translateX(-50%)",
+        zIndex: 60,
       }}
     >
       <div
