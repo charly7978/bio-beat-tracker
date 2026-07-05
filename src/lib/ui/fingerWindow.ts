@@ -113,19 +113,25 @@ function readPlacement(state: PpgRenderState): Placement {
     ? clamp01(0.42 * coverage + 0.42 * perfQ + 0.16 * (1 - motion))
     : 0;
 
-  // Posición correcta: bien cubierto, quieto, y con perfusión mínima real.
+  // Posición correcta: bien cubierto, quieto, y con perfusión detectable (más permisivo).
+  // Coverage > 0.55 alinea con el hint "cubrí bien el lente" y motion < 0.4 permite
+  // más respiración/micromovimiento. Perfusión baja (> 0.0005) es lo real en muchos dedos.
   const positionOk =
-    hasFinger && coverage > 0.7 && motion < 0.35 && perfusion > 0.0018;
+    hasFinger && coverage > 0.55 && motion < 0.4 && perfusion > 0.0005;
 
+  // Alerta de presión: sangre muy baja, pero ya no veda la huella (que aparece antes).
   const bloodWarn =
-    hasFinger && coverage > 0.75 && perfusion > 0 && perfusion < 0.002;
+    hasFinger && coverage > 0.75 && perfusion > 0 && perfusion < 0.0005;
 
   let hint: string | null = null;
   if (!hasFinger) hint = 'apoyá la yema en el lente';
+  else if (coverage < 0.40) hint = 'más cobertura del lente';
   else if (coverage < 0.55) hint = 'cubrí bien el lente';
   else if (motion > 0.55) hint = 'sostené el dedo quieto';
-  else if (bloodWarn) hint = 'aflojá un poco la presión';
-  else if (under > 0.45) hint = 'apoyá con un poco más de firmeza';
+  else if (motion > 0.4) hint = 'menos movimiento, muy bien';
+  else if (bloodWarn) hint = 'aflojá la presión';
+  else if (perfusion < 0.001) hint = 'apoyá con firmeza';
+  else if (under > 0.45) hint = 'más presión moderada';
   if (ready && quality > 0.6) hint = null;
 
   return {
@@ -337,16 +343,17 @@ export function drawFingerWindow3D(
   anim.hadFingerLast = pl.hasFinger;
   anim.contactPulse = approach(anim.contactPulse, 0, dt, 400);
 
-  // Huella: se materializa después de 400 ms de posición OK sostenida
-  // y se desmaterializa en cuanto se rompe (con τ chico).
+  // Huella: se materializa después de 300 ms de posición OK sostenida (más rápido).
+  // Desmaterializa en 150 ms si se rompe (muy ágil, sigue al dedo).
   if (pl.positionOk) {
     if (anim.positionOkSince === 0) anim.positionOkSince = now;
     const held = now - anim.positionOkSince;
-    const target = held > 380 ? 1 : 0;
-    anim.fingerprint = approach(anim.fingerprint, target, dt, 260);
+    // Muestra "cargando" (opacidad baja) a los 100ms, luego materializa a los 300ms.
+    const target = held > 300 ? 1 : held > 100 ? 0.25 : 0;
+    anim.fingerprint = approach(anim.fingerprint, target, dt, 200);
   } else {
     anim.positionOkSince = 0;
-    anim.fingerprint = approach(anim.fingerprint, 0, dt, 200);
+    anim.fingerprint = approach(anim.fingerprint, 0, dt, 150);
   }
 
   // Presencia global: se apaga a medida que la calidad crece.
@@ -473,10 +480,13 @@ export function drawFingerWindow3D(
 
   // ── 7. HUELLA DACTILAR: aparece al encontrar la posición correcta ────────
   if (anim.fingerprint > 0.01) {
-    // Color: verde en READY, azul/gris antes → siempre atenuado.
+    // Color: verde en READY, azul/gris antes.
     const fpCol = pl.ready ? COL.good : mix(COL.invite, COL.good, pl.quality);
-    // La huella respira levemente (respiración humana).
-    const fpAlpha = anim.fingerprint * (0.18 + breath * 0.06);
+    // La huella respira levemente. Más opaca cuando se está cargando (0.25) para
+    // que el usuario vea que está llegando a la posición correcta.
+    const fpAlpha = anim.fingerprint < 0.3
+      ? anim.fingerprint * (0.22 + breath * 0.08)
+      : anim.fingerprint * (0.24 + breath * 0.08);
     drawFingerprint(ctx, cx, cy, rx * 0.9, ry * 0.9, fpCol, fpAlpha);
   }
 
