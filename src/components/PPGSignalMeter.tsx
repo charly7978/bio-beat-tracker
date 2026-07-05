@@ -462,9 +462,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       // Capa superior (canvas SIN máscara): grillas, onda PPG y overlays del
       // plot a opacidad plena, siempre por encima de la ventana del dedo.
       waveCtx.clearRect(0, 0, layoutRef.current.width, layoutRef.current.height);
-      drawGrid3D(waveCtx, renderState, { skipBackground: true });
-      // Plataforma-objetivo del dedo: acostada sobre la grilla, DEBAJO de la onda.
+      // Pozo-guía del dedo: se dibuja PRIMERO → la grilla y la onda le pasan por
+      // encima y queda hundido en el piso del monitor (debajo de todo).
       drawFingerWindow3D(waveCtx, renderState);
+      drawGrid3D(waveCtx, renderState, { skipBackground: true });
       drawPressureGauge(waveCtx, renderState);
       drawSignal(waveCtx, renderState);
       drawAcquisitionOverlay(waveCtx, renderState);
