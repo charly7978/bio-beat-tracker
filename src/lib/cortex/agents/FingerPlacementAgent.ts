@@ -8,6 +8,14 @@ import type {
   PlacementMetrics,
 } from './types';
 
+export interface InferenceInput {
+  label: string;
+  state: string;
+  confidence: number;
+  guidance: string;
+  frameRgb: string;
+}
+
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
@@ -142,25 +150,45 @@ function readMetrics(signal: ProcessedSignal): PlacementMetrics {
 
 export class FingerPlacementAgent {
   private lastDecision: FingerPlacementDecision | null = null;
+  private lastInference: InferenceInput | null = null;
+
+  setInferenceResult(result: InferenceInput): void {
+    this.lastInference = result;
+  }
 
   process(signal: ProcessedSignal): FingerPlacementDecision {
     const metrics = readMetrics(signal);
     const { state, confidence, explanation } = classifyPlacement(metrics);
     const guidance = generateGuidance(state, metrics);
 
-    const see = `Frame #${signal.timestamp}: cobertura ${(metrics.coverage * 100).toFixed(0)}%, R/G/B crudo (${signal.rawRed?.toFixed(0) ?? '?'}, ${signal.rawGreen?.toFixed(0) ?? '?'}, ${signal.rawBlue?.toFixed(0) ?? '?'})`;
-    const analyze = `Estado: ${state}. ${explanation}`;
-    const check = `Confianza: ${(confidence * 100).toFixed(0)}%. Contacto: ${metrics.contactState}. Huella hemoglobina: ${metrics.coverage > 0.11 ? 'detectable' : 'no detectable'}.`;
-    const reason = `El usuario necesita: "${guidance.text}". Acción: ${guidance.action}. Severidad: ${guidance.severity}.`;
-    const decide = `Decisión: ${state}. Guía: ${guidance.action}.`;
+    const infer = this.lastInference;
+    const see = infer
+      ? `[Modelo] Frame: ${infer.frameRgb}. Clasificación: "${infer.label}" (conf: ${(infer.confidence * 100).toFixed(0)}%)`
+      : `Frame #${signal.timestamp}: cobertura ${(metrics.coverage * 100).toFixed(0)}%, R/G/B crudo (${signal.rawRed?.toFixed(0) ?? '?'}, ${signal.rawGreen?.toFixed(0) ?? '?'}, ${signal.rawBlue?.toFixed(0) ?? '?'})`;
+    const analyze = infer
+      ? `[Modelo] Estado inferido: ${infer.state}. Guía: "${infer.guidance}". RGB frame: (${infer.frameRgb})`
+      : `Estado: ${state}. ${explanation}`;
+    const check = infer
+      ? `[Modelo] Confianza modelo: ${(infer.confidence * 100).toFixed(0)}%. Coincidencia con reglas: ${state === infer.state ? 'sí' : 'no (reglas: ' + state + ')'}`
+      : `Confianza: ${(confidence * 100).toFixed(0)}%. Contacto: ${metrics.contactState}. Huella hemoglobina: ${metrics.coverage > 0.11 ? 'detectable' : 'no detectable'}.`;
+    const decide = infer
+      ? `Decisión combinada: ${infer.state}. Guía: "${infer.guidance}".`
+      : `Decisión: ${state}. Guía: ${guidance.action}.`;
+
+    const finalState = infer && infer.confidence > 0.6 ? (infer.state as FingerPlacementState) : state;
+    const finalConfidence = infer && infer.confidence > 0.6 ? infer.confidence : confidence;
+    const finalGuidance = infer && infer.confidence > 0.6
+      ? { text: infer.guidance, action: 'none' as GuidanceAction, severity: 'info' as GuidanceSeverity }
+      : guidance;
 
     const decision: FingerPlacementDecision = {
-      state,
-      confidence,
-      guidance,
+      state: finalState,
+      confidence: finalConfidence,
+      guidance: finalGuidance,
       metrics,
-      reasoning: explanation,
-      stages: { see, analyze, check, reason, decide },
+      reasoning: infer ? infer.guidance : explanation,
+      stages: { see, analyze, check, reason: infer ? `[Modelo] ${infer.guidance}` : `El usuario necesita: "${guidance.text}". Acción: ${guidance.action}. Severidad: ${guidance.severity}.`, decide },
+      inference: infer ? { label: infer.label, modelConfidence: infer.confidence, modelGuidance: infer.guidance, frameRgb: infer.frameRgb } : undefined,
     };
 
     this.lastDecision = decision;

@@ -3,6 +3,14 @@ import type { ProcessedSignal } from '@/types/signal';
 import type { CortexFrame } from './types';
 import { CortexReasoner } from './CortexReasoner';
 
+export interface InferenceInput {
+  label: string;
+  state: string;
+  confidence: number;
+  guidance: string;
+  frameRgb: string;
+}
+
 export function useCortex() {
   const [lastFrame, setLastFrame] = useState<CortexFrame | null>(null);
   const [isActive, setIsActive] = useState(false);
@@ -25,11 +33,17 @@ export function useCortex() {
     setLastFrame(frame);
   }, []);
 
+  const setInferenceResult = useCallback((result: InferenceInput) => {
+    if (!reasonerRef.current) return;
+    reasonerRef.current.setInferenceResult(result);
+  }, []);
+
   return {
     lastFrame,
     isActive,
     start,
     stop,
     feedSignal,
+    setInferenceResult,
   };
 }

@@ -20,6 +20,7 @@ import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
 import { isNative } from "@/lib/device/platform";
 import type { ContactState, ProcessedSignal } from "@/types/signal";
 import { useCortex } from "@/lib/cortex/useCortex";
+import { useInference } from "@/lib/cortex/vision/useInference";
 import { usePerfTelemetry } from "@/hooks/usePerfTelemetry";
 import { triggerCalibrationCompleteHaptic } from "@/utils/haptics";
 import { createLogger } from "@/utils/logger";
@@ -171,6 +172,7 @@ const Index = () => {
   });
 
   const cortex = useCortex();
+  const inference = useInference();
 
   // Conectar handleSignalRealtime al pipeline (con Cortex)
   const handleSignalWithCortex = useCallback((signal: ProcessedSignal) => {
@@ -183,14 +185,30 @@ const Index = () => {
     return () => setSignalCallback(null);
   }, [setSignalCallback, handleSignalWithCortex]);
 
-  // Iniciar/detener Cortex con la medición
+  // Iniciar/detener Cortex con la medición + modelo IA
   useEffect(() => {
     if (session.isMonitoring) {
       cortex.start();
+      inference.load();
+      inference.startPolling(3000);
     } else {
       cortex.stop();
+      inference.stopPolling();
     }
-  }, [session.isMonitoring, cortex]);
+  }, [session.isMonitoring, cortex, inference]);
+
+  // Alimentar inferencia del modelo al agente de colocación
+  useEffect(() => {
+    if (inference.lastResult && cortex.isActive) {
+      cortex.setInferenceResult({
+        label: inference.lastResult.label,
+        state: inference.lastResult.state,
+        confidence: inference.lastResult.confidence,
+        guidance: inference.lastResult.guidance,
+        frameRgb: inference.lastResult.frameRgb,
+      });
+    }
+  }, [inference.lastResult, cortex.isActive, cortex]);
 
   // Sincronizar isMonitoringRef
   useEffect(() => {
@@ -885,13 +903,18 @@ const Index = () => {
 
 
 
-          {/* STATUS BAR — contacto y alertas mínimas */}
+          {/* STATUS BAR — contacto y alertas mínimas + IA */}
           <div 
             className="absolute left-2 right-16 z-20 flex items-center gap-2 justify-center"
             style={{
               bottom: 'calc(56px + env(safe-area-inset-bottom, 0px))'
             }}
           >
+            {inference.status !== 'unloaded' && (
+              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${inference.status === 'ready' ? 'bg-fuchsia-500/10 text-fuchsia-400' : inference.status === 'loading' ? 'bg-amber-500/10 text-amber-400' : 'bg-red-500/10 text-red-400'}`}>
+                <Cpu className="w-2 h-2" />IA {inference.status === 'ready' ? '✓' : inference.status === 'loading' ? '...' : '✗'}
+              </span>
+            )}
             {riskResult && (
               <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${riskResult === 'IMMEDIATE' ? 'bg-red-500/10 text-red-400' : riskResult === 'SOON' ? 'bg-orange-500/10 text-orange-400' : riskResult === 'MONITOR' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
                 <Brain className="w-2 h-2" />{riskResult}

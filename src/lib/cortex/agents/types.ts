@@ -53,4 +53,10 @@ export interface FingerPlacementDecision {
     reason: string;
     decide: string;
   };
+  inference?: {
+    label: string;
+    modelConfidence: number;
+    modelGuidance: string;
+    frameRgb: string;
+  };
 }

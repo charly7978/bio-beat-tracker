@@ -59,6 +59,10 @@ export class CortexReasoner {
     this.placementAgent = new FingerPlacementAgent();
   }
 
+  setInferenceResult(result: { label: string; state: string; confidence: number; guidance: string; frameRgb: string }): void {
+    this.placementAgent.setInferenceResult(result);
+  }
+
   process(signal: ProcessedSignal): CortexFrame {
     this.history.push(signal);
     if (this.history.length > 32) this.history.shift();
