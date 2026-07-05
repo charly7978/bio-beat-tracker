@@ -23,6 +23,7 @@ import {
   drawFooter,
 } from '@/lib/ui/ppgCanvasRenderer';
 import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
+import { drawFingerWindow3D, fingerWindowMaskCss } from '@/lib/ui/fingerWindow';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
@@ -462,6 +463,8 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       // plot a opacidad plena, siempre por encima de la ventana del dedo.
       waveCtx.clearRect(0, 0, layoutRef.current.width, layoutRef.current.height);
       drawGrid3D(waveCtx, renderState, { skipBackground: true });
+      // Plataforma-objetivo del dedo: acostada sobre la grilla, DEBAJO de la onda.
+      drawFingerWindow3D(waveCtx, renderState);
       drawPressureGauge(waveCtx, renderState);
       drawSignal(waveCtx, renderState);
       drawAcquisitionOverlay(waveCtx, renderState);
@@ -513,76 +516,27 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   return (
     <div ref={containerRef} className="fixed inset-0 overflow-hidden">
       {/*
-        VENTANA DE DEDO — máscara radial CSS aplicada SOLO al canvas base
-        (fondo y paneles del monitor). Debajo está la <CameraView/> real
-        (absolute inset-0 en Index). El círculo transparente queda
-        perfectamente centrado, con radio útil ≈90px (yema de dedo) y un
-        feather suave de 90→126px, sin bordes duros. La onda PPG y las
-        grillas viven en un segundo canvas SIN máscara por encima, por lo
-        que conservan opacidad plena y el dedo nunca atraviesa la señal.
+        VENTANA DE DEDO 3D — máscara ELÍPTICA (perspectiva: el círculo queda
+        "acostado" sobre el piso-grilla, no parado de frente) aplicada SOLO al
+        canvas base. Debajo está la <CameraView/> real (absolute inset-0 en
+        Index). Centro levemente arriba del medio; geometría única compartida
+        con la guía interactiva (fingerWindow.ts). La onda PPG, las grillas y
+        la plataforma-guía viven en el canvas superior SIN máscara → opacidad
+        plena, el dedo nunca atraviesa la señal.
       */}
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
         style={{
-          WebkitMaskImage:
-            'radial-gradient(circle at 50% 50%, rgba(0,0,0,0.30) 0px, rgba(0,0,0,0.34) 58px, rgba(0,0,0,0.48) 90px, rgba(0,0,0,0.82) 110px, rgba(0,0,0,1) 126px)',
-          maskImage:
-            'radial-gradient(circle at 50% 50%, rgba(0,0,0,0.30) 0px, rgba(0,0,0,0.34) 58px, rgba(0,0,0,0.48) 90px, rgba(0,0,0,0.82) 110px, rgba(0,0,0,1) 126px)',
+          WebkitMaskImage: fingerWindowMaskCss(),
+          maskImage: fingerWindowMaskCss(),
         }}
       />
-      {/* Capa de señal: grillas + onda PPG, sin máscara, opacidad plena. */}
+      {/* Capa superior: grilla + plataforma-guía del dedo + onda PPG. */}
       <canvas
         ref={waveCanvasRef}
         className="pointer-events-none absolute inset-0 w-full h-full"
       />
-      {/*
-        Anillo médico sutil alrededor de la ventana — guía discreta con
-        halo degradado (sin trazos duros), radio útil 90px. SVG absoluto,
-        pointerEvents none.
-      */}
-      <svg
-        aria-hidden
-        className="pointer-events-none absolute left-1/2 top-1/2"
-        width={240}
-        height={240}
-        style={{ transform: 'translate(-50%, -50%)' }}
-      >
-        <defs>
-          <radialGradient id="peep-halo" cx="50%" cy="50%" r="50%">
-            <stop offset="62%" stopColor="rgba(148,163,184,0)" />
-            <stop offset="75%" stopColor="rgba(148,163,184,0.06)" />
-            <stop offset="82%" stopColor="rgba(148,163,184,0.05)" />
-            <stop offset="100%" stopColor="rgba(148,163,184,0)" />
-          </radialGradient>
-        </defs>
-        <circle cx="120" cy="120" r="120" fill="url(#peep-halo)" />
-        <circle
-          cx="120"
-          cy="120"
-          r="90"
-          fill="none"
-          stroke="rgba(226,232,240,0.10)"
-          strokeWidth="1.5"
-        />
-        {/* Marcas cardinales muy finas */}
-        {[
-          [120, 24, 120, 33],
-          [120, 207, 120, 216],
-          [24, 120, 33, 120],
-          [207, 120, 216, 120],
-        ].map(([x1, y1, x2, y2], i) => (
-          <line
-            key={i}
-            x1={x1}
-            y1={y1}
-            x2={x2}
-            y2={y2}
-            stroke="rgba(226,232,240,0.16)"
-            strokeWidth="0.75"
-          />
-        ))}
-      </svg>
       <PulseIndicator showPulse={showPulse} />
       <ActionButtons
         isMonitoring={isMonitoring}
