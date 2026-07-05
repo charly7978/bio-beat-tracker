@@ -22,6 +22,7 @@ export function useCortex() {
   }, []);
 
   const stop = useCallback(() => {
+    reasonerRef.current?.dispose();
     reasonerRef.current = null;
     setIsActive(false);
     setLastFrame(null);

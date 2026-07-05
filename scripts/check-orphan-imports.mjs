@@ -22,6 +22,7 @@ const ENTRYPOINTS = new Set([
   'src/integrations/supabase/client.ts',
   'src/integrations/supabase/types.ts',
   'src/workers/ppgSignal.worker.ts',
+  'src/workers/tcnInference.worker.ts',
 ]);
 const TYPES_GLOB = /\.d\.ts$/;
 
