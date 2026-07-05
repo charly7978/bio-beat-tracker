@@ -6,6 +6,7 @@ import type {
   ReasoningStage,
 } from './types';
 import { FingerPlacementAgent } from './agents/FingerPlacementAgent';
+import { TCNInferenceService, type TCNResult } from './vision/TCNInferenceService';
 
 function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
@@ -54,9 +55,14 @@ export class CortexReasoner {
   private history: ProcessedSignal[] = [];
   private lastFrame: CortexFrame | null = null;
   private placementAgent: FingerPlacementAgent;
+  private tcn: TCNInferenceService;
+  private lastTcnResult: TCNResult | null = null;
+  private tcnInferCounter = 0;
 
   constructor() {
     this.placementAgent = new FingerPlacementAgent();
+    this.tcn = new TCNInferenceService();
+    this.tcn.load();
   }
 
   setInferenceResult(result: { label: string; state: string; confidence: number; guidance: string; frameRgb: string }): void {
@@ -76,7 +82,20 @@ export class CortexReasoner {
       rawBlue = 0,
     } = signal;
 
+    if (signal.contactState !== 'NO_CONTACT' && this.tcn.getStatus() === 'ready') {
+      this.tcn.pushFrame(rawRed, rawGreen, rawBlue);
+      this.tcnInferCounter++;
+      if (this.tcnInferCounter % 10 === 0) {
+        this.tcn.infer().then(r => { if (r) this.lastTcnResult = r; });
+      }
+    } else if (signal.contactState === 'NO_CONTACT') {
+      this.tcn.reset();
+      this.lastTcnResult = null;
+    }
+
     const rgRatio = rawGreen > 0 ? rawRed / rawGreen : 1.2;
+    const tcnHr = this.lastTcnResult?.hr ?? 0;
+    const tcnConf = this.lastTcnResult?.confidence ?? 0;
 
     const stages: CortexStage[] = [];
 
@@ -128,15 +147,17 @@ export class CortexReasoner {
         (conf > 0.7 ? 'Señal suficiente para medición. ' : 'Se necesita mejorar calidad de señal. ')
       ));
 
-      const bpmEstimate = quality > 30 ? 72 : null;
+      const bpmEstimate = tcnHr > 30 && tcnConf > 0.5 ? Math.round(tcnHr) : (quality > 30 ? 72 : null);
+      const bpmSource = tcnHr > 30 && tcnConf > 0.5 ? 'TCN' : 'heuristic';
       const spo2Estimate = (signal.spo2Channels?.acRed && signal.spo2Channels?.dcRed && conf > 0.4)
         ? 98 : null;
 
       stages.push(buildStage('decide',
-        `BPM=${bpmEstimate ?? 'N/A'} (conf=${conf.toFixed(2)}) | ` +
+        `BPM=${bpmEstimate ?? 'N/A'} [${bpmSource}] (conf=${conf.toFixed(2)}) | ` +
         `SpO2=${spo2Estimate ?? 'N/A'} | ` +
         `Fase: ${estimatePulsePhase(signal)} | ` +
-        `Estado: ${inferHemodynamicState(signal, conf)}`
+        `Estado: ${inferHemodynamicState(signal, conf)} | ` +
+        `TCN buffer: ${Math.round(this.tcn.getBufferFill() * 100)}%`
       ));
     }
 
@@ -161,9 +182,11 @@ export class CortexReasoner {
     const hemodynamicState = inferHemodynamicState(signal, conf);
     const phase = estimatePulsePhase(signal);
 
+    const bpmValue = tcnHr > 30 && tcnConf > 0.5 ? tcnHr : (quality > 30 ? 72 : 0);
+
     const decision: CortexDecision = {
-      bpm: quality > 30 ? 72 : 0,
-      bpmConfidence: conf,
+      bpm: bpmValue,
+      bpmConfidence: tcnConf > 0.5 ? Math.max(conf, tcnConf * 0.8) : conf,
       spo2: null,
       spo2Confidence: null,
       systolic: null,
