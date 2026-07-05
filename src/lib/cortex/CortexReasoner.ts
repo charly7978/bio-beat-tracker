@@ -74,6 +74,25 @@ export class CortexReasoner {
     this.tcn.dispose();
   }
 
+  /**
+   * Alimenta el buffer del TCN y dispara inferencia. BARATO: pensado para
+   * correr en CADA frame de señal (~30/s) sin construir el frame de
+   * razonamiento (strings) ni tocar el árbol de React. Debe llamarse siempre,
+   * incluso cuando no se va a publicar un frame de razonamiento.
+   */
+  feed(signal: ProcessedSignal): void {
+    if (signal.contactState !== 'NO_CONTACT' && this.tcn.getStatus() === 'ready') {
+      this.tcn.pushFrame(signal.rawRed ?? 0, signal.rawGreen ?? 0, signal.rawBlue ?? 0);
+      this.tcnInferCounter++;
+      if (this.tcnInferCounter % 10 === 0) {
+        this.tcn.infer().then(r => { if (r) this.lastTcnResult = r; });
+      }
+    } else if (signal.contactState === 'NO_CONTACT') {
+      this.tcn.reset();
+      this.lastTcnResult = null;
+    }
+  }
+
   process(signal: ProcessedSignal): CortexFrame {
     this.history.push(signal);
     if (this.history.length > 32) this.history.shift();
@@ -86,17 +105,6 @@ export class CortexReasoner {
       rawGreen = 0,
       rawBlue = 0,
     } = signal;
-
-    if (signal.contactState !== 'NO_CONTACT' && this.tcn.getStatus() === 'ready') {
-      this.tcn.pushFrame(rawRed, rawGreen, rawBlue);
-      this.tcnInferCounter++;
-      if (this.tcnInferCounter % 10 === 0) {
-        this.tcn.infer().then(r => { if (r) this.lastTcnResult = r; });
-      }
-    } else if (signal.contactState === 'NO_CONTACT') {
-      this.tcn.reset();
-      this.lastTcnResult = null;
-    }
 
     const rgRatio = rawGreen > 0 ? rawRed / rawGreen : 1.2;
     const tcnHr = this.lastTcnResult?.hr ?? 0;
