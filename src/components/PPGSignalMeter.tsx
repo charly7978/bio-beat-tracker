@@ -576,7 +576,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
           }}
         >
           {/* Outer Corner Brackets (Tech HUD) */}
-          <svg className="absolute inset-0 w-full h-full text-emerald-500/30" viewBox="0 0 180 180" fill="none" stroke="currentColor" strokeWidth="1">
+          <svg className="absolute inset-0 w-full h-full text-emerald-500/10" viewBox="0 0 180 180" fill="none" stroke="currentColor" strokeWidth="0.75">
             <path d="M 12,28 L 12,12 L 28,12" />
             <path d="M 152,12 L 168,12 L 168,28" />
             <path d="M 12,152 L 12,168 L 28,168" />
@@ -584,16 +584,16 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
           </svg>
 
           {/* Telemetry HUD Labels (Flat inside 3D space) */}
-          <div className="absolute top-[12px] left-[14px] text-[6.5px] text-emerald-400/50 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
+          <div className="absolute top-[12px] left-[14px] text-[6.5px] text-emerald-400/20 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
             SYS.MODE: {isFingerDetected ? 'PPG_ACTIVE' : 'PPG_STANDBY'}
           </div>
-          <div className="absolute top-[12px] right-[14px] text-[6.5px] text-emerald-400/50 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
+          <div className="absolute top-[12px] right-[14px] text-[6.5px] text-emerald-400/20 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
             WL: 660nm
           </div>
-          <div className="absolute bottom-[12px] left-[14px] text-[6.5px] text-emerald-400/50 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
+          <div className="absolute bottom-[12px] left-[14px] text-[6.5px] text-emerald-400/20 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
             SENS: {isFingerDetected ? 'SIGNAL_LOCK' : 'SEARCH_SCAN'}
           </div>
-          <div className="absolute bottom-[12px] right-[14px] text-[6.5px] text-emerald-400/50 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
+          <div className="absolute bottom-[12px] right-[14px] text-[6.5px] text-emerald-400/20 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
             GAIN: {quality > 0 ? `${Math.round(quality)}%` : 'AUTO'}
           </div>
 
@@ -601,15 +601,22 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
           <div 
             className="absolute left-[20px] top-[20px] w-[140px] h-[140px] rounded-full overflow-hidden transition-all duration-700" 
             style={{
-              border: isFingerDetected ? '1px solid rgba(34, 197, 94, 0.45)' : '1px solid rgba(245, 158, 11, 0.35)',
+              border: isFingerDetected ? '1px solid rgba(34, 197, 94, 0.12)' : '1px solid rgba(245, 158, 11, 0.15)',
               boxShadow: isFingerDetected 
-                ? '0 0 15px rgba(34, 197, 94, 0.2), inset 0 0 15px rgba(34, 197, 94, 0.15)' 
-                : '0 0 10px rgba(245, 158, 11, 0.12), inset 0 0 10px rgba(245, 158, 11, 0.08)',
-              backgroundColor: '#000000',
+                ? '0 0 10px rgba(34, 197, 94, 0.1), inset 0 0 10px rgba(34, 197, 94, 0.08)' 
+                : '0 0 8px rgba(245, 158, 11, 0.08), inset 0 0 8px rgba(245, 158, 11, 0.05)',
+              backgroundColor: 'transparent',
             }}
           >
-            {/* CameraView with soft blur filter to smooth out skin/blood details */}
-            <div className="w-full h-full" style={{ filter: 'blur(10px) saturate(1.7) brightness(0.8)' }}>
+            {/* CameraView with heavy blur filter, reduced saturation/brightness, and low opacity to smooth out finger/blood details */}
+            <div 
+              className="w-full h-full transition-all duration-700" 
+              style={{ 
+                filter: 'blur(24px) saturate(0.8) brightness(0.4)', 
+                opacity: isFingerDetected ? 0.08 : 0.02,
+                mixBlendMode: 'screen'
+              }}
+            >
               <CameraView 
                 ref={cameraRef}
                 onStreamReady={onStreamReady}
@@ -622,7 +629,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
               className="absolute inset-0 pointer-events-none" 
               style={{
                 background: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.15), rgba(0,0,0,0.15) 1px, transparent 1px, transparent 3px)',
-                opacity: 0.5
+                opacity: 0.3
               }}
             />
             
@@ -646,7 +653,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
                 cx="70" 
                 cy="70" 
                 r="64" 
-                className={isFingerDetected ? 'text-emerald-500/20' : 'text-amber-500/15'}
+                className={isFingerDetected ? 'text-emerald-500/5' : 'text-amber-500/10'}
                 strokeWidth="0.75" 
                 strokeDasharray="2 6" 
                 style={{
@@ -660,7 +667,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
                 cx="70" 
                 cy="70" 
                 r="56" 
-                className={isFingerDetected ? 'text-emerald-500/12' : 'text-amber-500/8'}
+                className={isFingerDetected ? 'text-emerald-500/3' : 'text-amber-500/5'}
                 strokeWidth="1" 
                 strokeDasharray="40 12 5 12" 
                 style={{
@@ -670,7 +677,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
               />
 
               {/* Cardinal ticks / Crosshair (static) */}
-              <path d="M 70 4 L 70 10 M 70 130 L 70 136 M 4 70 L 10 70 M 130 70 L 136 70" stroke={isFingerDetected ? 'rgba(34,197,94,0.35)' : 'rgba(245,158,11,0.25)'} strokeWidth="0.75" />
+              <path d="M 70 4 L 70 10 M 70 130 L 70 136 M 4 70 L 10 70 M 130 70 L 136 70" stroke={isFingerDetected ? 'rgba(34,197,94,0.06)' : 'rgba(245,158,11,0.12)'} strokeWidth="0.75" />
             </svg>
             
             {/* Holographic Fingerprint Icon */}
@@ -679,15 +686,15 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
                 viewBox="0 0 64 64"
                 className={`w-14 h-14 transition-all duration-700 ${
                   isFingerDetected 
-                    ? 'text-emerald-500/10 scale-90 rotate-6 opacity-20' 
-                    : 'text-emerald-400/80 animate-pulse'
+                    ? 'opacity-0 scale-75' 
+                    : 'text-emerald-400/25 animate-pulse'
                 }`}
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="1.2"
                 strokeLinecap="round"
                 style={{
-                  filter: isFingerDetected ? 'none' : 'drop-shadow(0 0 6px rgba(52,211,153,0.35))'
+                  filter: isFingerDetected ? 'none' : 'drop-shadow(0 0 6px rgba(52,211,153,0.2))'
                 }}
               >
                 <path d="M20 50 C20 42, 24 38, 32 38 C40 38, 44 42, 44 50" />
@@ -702,7 +709,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
               {/* Rotating target ring */}
               {!isFingerDetected && (
                 <div 
-                  className="absolute w-20 h-20 border border-dashed border-emerald-400/15 rounded-full animate-spin" 
+                  className="absolute w-20 h-20 border border-dashed border-emerald-400/10 rounded-full animate-spin" 
                   style={{ animationDuration: '20s' }}
                 />
               )}
@@ -711,10 +718,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
             {/* Laser scanning line */}
             {!isFingerDetected && (
               <div 
-                className="absolute left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-emerald-400/80 to-transparent shadow-[0_0_8px_rgba(52,211,153,0.6)]"
+                className="absolute left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-emerald-400/50 to-transparent shadow-[0_0_4px_rgba(52,211,153,0.4)]"
                 style={{
                   top: '50%',
-                  animation: 'scan 3s infinite ease-in-out'
+                  animation: 'scan 3.5s infinite ease-in-out'
                 }}
               />
             )}
@@ -734,34 +741,34 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
           }}
         >
           <div 
-            className={`border px-3 py-1.5 rounded-xl font-mono text-[9px] tracking-wider text-center transition-all duration-500 shadow-lg ${
+            className={`border px-3 py-1.2 rounded-xl font-mono text-[8.5px] tracking-wider text-center transition-all duration-500 backdrop-blur-sm shadow-md ${
               isFingerDetected 
                 ? (diagnostics?.acquisitionStage === 'READY' 
-                    ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-400' 
-                    : 'bg-cyan-950/80 border-cyan-500/40 text-cyan-400')
-                : 'bg-amber-950/80 border-amber-500/40 text-amber-400'
+                    ? 'bg-emerald-950/30 border-emerald-500/15 text-emerald-400/60' 
+                    : 'bg-cyan-950/30 border-cyan-500/15 text-cyan-400/60')
+                : 'bg-amber-950/30 border-amber-500/15 text-amber-400/60'
             }`}
           >
             {isFingerDetected ? (
               diagnostics?.acquisitionStage === 'READY' ? (
                 <div className="flex items-center gap-1.5 justify-center">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400/60 animate-ping" />
                   <span>ANALIZANDO SEÑAL CARDIACA</span>
                 </div>
               ) : (
                 <div className="flex items-center gap-1.5 justify-center">
-                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400/60 animate-pulse" />
                   <span>ESTABILIZANDO CONTACTO...</span>
                 </div>
               )
             ) : (
               <div className="flex items-center gap-1.5 justify-center animate-pulse">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400/60 animate-ping" />
                 <span>CUBRE LA CÁMARA TRASERA CON TU DEDO</span>
               </div>
             )}
           </div>
-          <div className="w-[1px] h-[35px] border-l border-dashed border-slate-600/40 mt-1" />
+          <div className="w-[1px] h-[35px] border-l border-dashed border-slate-600/20 mt-1" />
         </div>
       )}
 
