@@ -44,7 +44,7 @@ function buildStage(stage: ReasoningStage, content: string): CortexStage {
   return { stage, content, timestamp: Date.now() };
 }
 
-function channelFromDecision(d: CortexDecision): 'red' | 'green' | 'blue' | 'rg_diff' | 'pos' {
+function _channelFromDecision(d: CortexDecision): 'red' | 'green' | 'blue' | 'rg_diff' | 'pos' {
   if (d.hemodynamicState === 'hypoperfusion') return 'green';
   if (d.recommendedChannel) return d.recommendedChannel;
   return 'green';

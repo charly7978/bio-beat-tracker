@@ -48,7 +48,7 @@ function guidanceFor(label: string, conf: number): string {
 }
 
 export class InferenceService {
-  private classifier: any = null;
+  private classifier: ((canvas: HTMLCanvasElement, labels: string[]) => Promise<Array<{ label: string; score: number }>>) | null = null;
   private frameCapture: FrameCapture;
   private status: ModelStatus = 'unloaded';
   private error: string | null = null;
@@ -74,9 +74,9 @@ export class InferenceService {
         { dtype: 'fp32', device: 'webgpu' }
       );
       this.status = 'ready';
-    } catch (err: any) {
+    } catch (err: unknown) {
       this.status = 'error';
-      this.error = err?.message ?? String(err);
+      this.error = (err as Error)?.message ?? String(err);
       console.error('[InferenceService] load failed:', err);
     }
   }
@@ -102,7 +102,7 @@ export class InferenceService {
         guidance: guidanceFor(top.label, top.score),
         frameRgb,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('[InferenceService] classify failed:', err);
       return null;
     }

@@ -15,7 +15,8 @@ export class FrameCapture {
     this.ctx.drawImage(videoEl, 0, 0, 224, 224);
     const data = this.ctx.getImageData(0, 0, 224, 224);
     const pixels = data.data;
-    let r = 0, g = 0, b = 0, n = pixels.length / 4;
+    let r = 0, g = 0, b = 0;
+    const n = pixels.length / 4;
     for (let i = 0; i < pixels.length; i += 4) {
       r += pixels[i];
       g += pixels[i + 1];

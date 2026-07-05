@@ -249,8 +249,11 @@ const Index = () => {
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showTelemedicine, setShowTelemedicine] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [webgpuAvail, setWebgpuAvail] = useState<'checking' | 'yes' | 'no'>('checking');
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [healthAvail, setHealthAvail] = useState<'checking' | 'yes' | 'no'>('checking');
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [encryptionReady, setEncryptionReady] = useState(false);
   const [riskResult, setRiskResult] = useState<string | null>(null);
   const [age, setAge] = useState<string>("35");
