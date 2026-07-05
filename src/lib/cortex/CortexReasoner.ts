@@ -69,6 +69,11 @@ export class CortexReasoner {
     this.placementAgent.setInferenceResult(result);
   }
 
+  /** Libera el Web Worker del TCN. Llamar al detener la medición. */
+  dispose(): void {
+    this.tcn.dispose();
+  }
+
   process(signal: ProcessedSignal): CortexFrame {
     this.history.push(signal);
     if (this.history.length > 32) this.history.shift();
