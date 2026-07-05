@@ -67,13 +67,6 @@ export class RingF32 {
     return this.buf[idx];
   }
 
-  /** Acceso indexado: 0 = más antiguo, length-1 = más reciente. */
-  get(i: number): number {
-    if (i < 0 || i >= this.filled) return 0;
-    const idx = (this.head - this.filled + i + this.size) % this.size;
-    return this.buf[idx];
-  }
-
   reset(): void {
     this.head = 0;
     this.filled = 0;

@@ -1,6 +1,5 @@
 import { PPGFeatureExtractor, CycleFeatures } from './PPGFeatureExtractor';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
-import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import { isPhysiologicalRR } from '../../utils/physio';
 import { median } from '../../utils/stats';
 import type { FingerPlacementMode } from '../../types/signal';
@@ -22,12 +21,12 @@ export interface BPEstimate {
   featureQuality: number;
 }
 
-const BUFFER_MAX = VITAL_THRESHOLDS.BP.CYCLE_BUFFER_MAX;
-const EMIT_EVERY_N_FRAMES = VITAL_THRESHOLDS.BP.EMIT_EVERY_N_FRAMES;
-const STALE_FRAMES_MAX = VITAL_THRESHOLDS.BP.STALE_FRAMES_MAX;
-const EMA_ALPHA = VITAL_THRESHOLDS.BP.EMA_ALPHA;
-const VARIANCE_WINDOW = VITAL_THRESHOLDS.BP.VARIANCE_WINDOW;
-const STALE_VARIANCE_THRESHOLD = VITAL_THRESHOLDS.BP.STALE_VARIANCE_THRESHOLD;
+const BUFFER_MAX = 24;
+const EMIT_EVERY_N_FRAMES = 6;
+const STALE_FRAMES_MAX = 30;
+const EMA_ALPHA = 0.20;
+const VARIANCE_WINDOW = 5;
+const STALE_VARIANCE_THRESHOLD = 3.0;
 
 export class BloodPressureProcessor {
   private readonly MIN_CYCLES = VITAL_THRESHOLDS.BP.MIN_CYCLES;
@@ -66,7 +65,7 @@ export class BloodPressureProcessor {
   estimate(
     signalBuffer: number[],
     rrIntervals: number[],
-    sampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE,
+    sampleRate: number = 30,
     externalHr?: number,
   ): BPEstimate {
     const insufficient: BPEstimate = {

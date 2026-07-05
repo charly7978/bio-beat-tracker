@@ -85,6 +85,7 @@ const WAVE_D_BACK = 0.17;
 // Paleta local (evita import de valores desde el renderer → sin ciclo en runtime).
 const C = {
   signal: '34, 197, 94', // verde ECG
+  signalBright: '74, 222, 128',
   arr: '239, 68, 68',
   cyan: '0, 242, 255',
   horizon: '103, 232, 249',
@@ -162,11 +163,9 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   // y en profundidad (Z) → celdas cuadradas que se escorzan hacia el horizonte.
   // Menos columnas = celdas más grandes. Líneas mayores cada 5 (estilo papel ECG).
   const TARGET_COLS = 11;
-  const GRID_WIDTH_FACTOR = 1.25;
   const cellPx = proj.plotW / TARGET_COLS;
   const halfCols = Math.ceil(TARGET_COLS / 2);
-  const colExtent = Math.ceil(halfCols * GRID_WIDTH_FACTOR);
-  const halfX = colExtent * cellPx;
+  const halfX = halfCols * cellPx;
   const dZ = cellPx / proj.floorSpanY; // paso de profundidad = ancho de celda → cuadrada
 
   // Filas (Z constante): cuadradas cerca, agrupándose al horizonte. Se cortan cuando
@@ -190,7 +189,7 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   }
 
   // Columnas (X constante): separadas cellPx en mundo → convergen al punto de fuga.
-  for (let k = -colExtent; k <= colExtent; k++) {
+  for (let k = -halfCols; k <= halfCols; k++) {
     const xw = k * cellPx;
     const near = proj.floorPoint(xw, proj.zNear);
     const far = proj.floorPoint(xw, proj.zFar);
@@ -278,7 +277,7 @@ export function drawWaveRibbon3D(
   const revealed = state.traceRevealed;
 
   // Amplitud normalizada honesta con soporte para valores negativos por debajo de la grilla (piso)
-  const hOf = (c: WaveCoord) => clamp(c.val / ((state.waveGain || 4.5) * 10.0), -0.5, 1.2) + 0.25;
+  const hOf = (c: WaveCoord) => clamp(c.val / ((state.waveGain || 4.2) * 10.0), -0.5, 1.2) + 0.25;
   const uOf = (c: WaveCoord) => clamp((c.x - plot.x) / plot.w, 0, 1);
 
   const Pf: ProjPoint[] = []; // cresta frontal (la onda honesta)
@@ -313,7 +312,10 @@ export function drawWaveRibbon3D(
       for (let i = s; i < e; i++) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
       ctx.strokeStyle = `rgba(${col}, ${isArr ? 0.35 : 0.12})`;
       ctx.lineWidth = isArr ? 8 : 6;
+      ctx.shadowColor = `rgba(${col}, ${isArr ? 0.30 : 0.05})`;
+      ctx.shadowBlur = isArr ? 12 : 0;
       ctx.stroke();
+      ctx.shadowBlur = 0;
       s = e;
     }
   }
@@ -338,25 +340,124 @@ export function drawWaveRibbon3D(
     }
   }
 
-  // 2) Trazo único de la cresta frontal (onda limpia, sin rellenos ni brillos)
-  const drawCrest = (s0: number, e0: number) => {
+  // 2) Cara superior de la cinta (entre cresta frontal y trasera) → grosor 3D.
+  if (revealed) {
     ctx.beginPath();
-    ctx.moveTo(Pf[s0].x, Pf[s0].y);
-    for (let k = s0 + 1; k < e0; k++) ctx.lineTo(Pf[k].x, Pf[k].y);
+    ctx.moveTo(Pf[0].x, Pf[0].y);
+    for (let i = 1; i < n; i++) ctx.lineTo(Pf[i].x, Pf[i].y);
+    for (let i = n - 1; i >= 0; i--) ctx.lineTo(Pb[i].x, Pb[i].y);
+    ctx.closePath();
+    ctx.fillStyle = `rgba(${C.signalBright}, 0.16)`;
+    ctx.fill();
+  }
+
+  // 3) Cara frontal (pared vertical de la cresta al piso) con degradado.
+  const wallGrad = ctx.createLinearGradient(0, proj.horizonY, 0, proj.nearY);
+  wallGrad.addColorStop(0, `rgba(${C.signal}, ${revealed ? 0.34 : 0.12})`);
+  wallGrad.addColorStop(1, `rgba(${C.signal}, 0.02)`);
+  ctx.beginPath();
+  ctx.moveTo(Pfloor[0].x, Pfloor[0].y);
+  for (let i = 0; i < n; i++) ctx.lineTo(Pf[i].x, Pf[i].y);
+  for (let i = n - 1; i >= 0; i--) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
+  ctx.closePath();
+  ctx.fillStyle = wallGrad;
+  ctx.fill();
+
+  // 3b) Sobre-pintado rojo translúcido en segmentos de arritmia.
+  let s = 0;
+  while (s < n) {
+    if (!coords[s].isArr) { s++; continue; }
+    let e = s;
+    while (e < n && coords[e].isArr) e++;
+    ctx.beginPath();
+    ctx.moveTo(Pfloor[s].x, Pfloor[s].y);
+    for (let i = s; i < e; i++) ctx.lineTo(Pf[i].x, Pf[i].y);
+    for (let i = e - 1; i >= s; i--) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
+    ctx.closePath();
+    ctx.fillStyle = `rgba(${C.arr}, 0.50)`;
+    ctx.fill();
+    s = e;
+  }
+
+  // 4) Cresta trasera (tenue, da volumen).
+  if (revealed) {
+    ctx.beginPath();
+    ctx.moveTo(Pb[0].x, Pb[0].y);
+    for (let i = 1; i < n; i++) ctx.lineTo(Pb[i].x, Pb[i].y);
+    ctx.strokeStyle = `rgba(${C.signal}, 0.28)`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // 5) Cresta frontal: la onda honesta con efecto de iluminación animada (estilo 2D)
+  const drawDirectCrestSegment = (startIdx: number, endIdx: number) => {
+    ctx.beginPath();
+    ctx.moveTo(Pf[startIdx].x, Pf[startIdx].y);
+    for (let k = startIdx + 1; k < endIdx; k++) {
+      ctx.lineTo(Pf[k].x, Pf[k].y);
+    }
   };
 
-  let seg = 0;
-  while (seg < n - 1) {
-    const isArr = coords[seg].isArr;
-    let end = seg;
-    while (end < n - 1 && coords[end].isArr === isArr) end++;
-    drawCrest(seg, end + 1 > n ? end : end + 1);
+  const recentCut = Math.max(0, n - Math.floor(n * 0.35));
+  const leadingCut = Math.max(0, n - Math.floor(n * 0.10));
+
+  // 5a) Trazo base (toda la línea)
+  s = 0;
+  while (s < n - 1) {
+    const isArr = coords[s].isArr;
+    let segEnd = s;
+    while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
+    drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
     ctx.strokeStyle = revealed
-      ? (isArr ? `rgba(${C.arr}, 0.65)` : `rgba(${C.signal}, 0.7)`)
-      : 'rgba(148, 163, 184, 0.35)';
-    ctx.lineWidth = 1.8;
+      ? (isArr ? `rgba(${C.arr}, 0.4)` : `rgba(${C.signal}, 0.45)`)
+      : 'rgba(148, 163, 184, 0.25)';
+    ctx.lineWidth = 2.0;
+    ctx.shadowBlur = 0;
     ctx.stroke();
-    seg = end;
+    s = segEnd;
+  }
+
+  if (revealed) {
+    // 5b) Trazo con brillo base (último 35%)
+    ctx.shadowColor = `rgba(${C.signal}, 0.45)`;
+    ctx.shadowBlur = 8; // SHADOW_BLUR_BASE
+    s = Math.max(recentCut, 0);
+    while (s < n - 1) {
+      const isArr = coords[s].isArr;
+      let segEnd = s;
+      while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
+      drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
+      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.65)` : `rgba(${C.signal}, 0.68)`;
+      ctx.lineWidth = 1.6; // GLOW_STROKE_WIDTH
+      ctx.stroke();
+      s = segEnd;
+    }
+
+    // 5c) Trazo líder de punta (último 10%)
+    ctx.shadowBlur = 15; // SHADOW_BLUR_LEADING
+    s = Math.max(leadingCut, 0);
+    while (s < n - 1) {
+      const isArr = coords[s].isArr;
+      let segEnd = s;
+      while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
+      drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
+      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.85)` : '#4ade80';
+      ctx.lineWidth = 1.5; // LEADING_STROKE_WIDTH
+      ctx.shadowColor = isArr ? `rgba(${C.arr}, 0.45)` : `rgba(${C.signal}, 0.45)`;
+      ctx.stroke();
+      s = segEnd;
+    }
+    ctx.shadowBlur = 0;
+  } else {
+    // Trazo de punta tenue sin brillo cuando se está estabilizando
+    s = Math.max(leadingCut, 0);
+    if (s < n - 1) {
+      drawDirectCrestSegment(s, n);
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)';
+      ctx.lineWidth = 2.0;
+      ctx.shadowBlur = 0;
+      ctx.stroke();
+    }
   }
 
   // 6) Marcadores fiduciales con VALORES en tiempo real: picos máximos (SYS),
@@ -379,7 +480,10 @@ export function drawWaveRibbon3D(
         ctx.beginPath();
         ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
         ctx.fillStyle = isArr ? `rgb(${C.arr})` : '#ffffff';
+        ctx.shadowColor = isArr ? `rgb(${C.arr})` : `rgb(${C.cyan})`;
+        ctx.shadowBlur = 8;
         ctx.fill();
+        ctx.shadowBlur = 0;
         ctx.font = `bold 9px ${FONT}`;
         ctx.fillStyle = isArr ? `rgb(${C.arr})` : `rgb(${C.cyan})`;
         ctx.fillText(v.toFixed(1), p.x, p.y - 11);
@@ -426,8 +530,16 @@ export function drawWaveRibbon3D(
     }
   }
 
-  // 7) Punto blanco en la punta conductora (cresta más reciente).
+  // 7) Halo pulsátil en la punta conductora (cresta más reciente).
   const head = Pf[n - 1];
+  const headArr = coords[n - 1].isArr;
+  const pulse = Math.max(state.sweepPulse, 0.04);
+  ctx.beginPath();
+  ctx.arc(head.x, head.y, (6 + pulse * 8) * (0.7 + 0.3 * head.scale), 0, Math.PI * 2);
+  ctx.fillStyle = revealed
+    ? headArr ? `rgba(${C.arr}, 0.3)` : `rgba(${C.cyan}, 0.3)`
+    : 'rgba(148, 163, 184, 0.18)';
+  ctx.fill();
   ctx.beginPath();
   ctx.arc(head.x, head.y, 3, 0, Math.PI * 2);
   ctx.fillStyle = '#ffffff';

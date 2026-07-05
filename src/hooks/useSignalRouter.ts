@@ -16,8 +16,6 @@ import {
   createStabilizationState,
   updateStabilization,
 } from '@/lib/measurement/signalStabilization';
-import { instantAcquisitionConfidence } from '@/lib/acquisition/AcquisitionStabilizer';
-import { FrameReservoir } from '@/lib/acquisition/FrameReservoir';
 import {
   DISPLAY_SMOOTH_ALPHAS,
   smoothDisplayPair,
@@ -122,6 +120,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const [rrIntervals, setRRIntervals] = useState<number[]>([]);
   const [currentDiagnostics, setCurrentDiagnostics] = useState<Record<string, unknown> | null>(null);
 
+
   // Refs de sesión compartidos
   const vitalSignsRef = useRef<VitalSignsResult>(vitalSigns);
   const totalBeatsRef = useRef(0);
@@ -154,12 +153,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   // mantiene durante toda la sesión de contacto.
   const acqReadyLatchRef = useRef(false);
   const stabilizationRef = useRef(createStabilizationState());
-  // Buffer elástico de "buenos frames" para colocación robusta: desacopla el
-  // ritmo de captura del de consumo y aporta una COBERTURA suavizada por
-  // ventana (goodCoverage) tolerante a microdescuadres. Solo alimenta la UX de
-  // colocación (diagnostics.placementCoverage/placementStable): NO toca la onda
-  // del pulso ni las compuertas de contacto/detección.
-  const placementReservoirRef = useRef(new FrameReservoir<number>());
 
   // Throttle timers
   const lastHrPushRef = useRef(0);
@@ -171,7 +164,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const lastPeakTimestampRef = useRef<number>(0);
   const lastPeakAmplitudeRef = useRef<number>(1.0);
   const runningPeakAverageRef = useRef<number>(0);
-  const recentAmplitudesRef = useRef<number[]>([]);
 
   // Sanity checker
   const [sanityProfileId, setSanityProfileId] = useState<string>(() => getActiveProfileId());
@@ -246,7 +238,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     unstableFrameCounter.current = 0;
     acqReadyLatchRef.current = false;
     stabilizationRef.current = createStabilizationState();
-    placementReservoirRef.current.reset();
     setRRIntervals([]);
     setBeatMarker(0);
     if (beatMarkerTimerRef.current) {
@@ -267,7 +258,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastPeakTimestampRef.current = 0;
     lastPeakAmplitudeRef.current = 1.0;
     runningPeakAverageRef.current = 0;
-    recentAmplitudesRef.current = [];
     ppgMeterRef?.current?.clearBuffer();
 
   }, [processHeartBeat, ppgMeterRef]);
@@ -295,7 +285,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastPeakTimestampRef.current = 0;
     lastPeakAmplitudeRef.current = 1.0;
     runningPeakAverageRef.current = 0;
-    recentAmplitudesRef.current = [];
     ppgMeterRef?.current?.clearBuffer();
 
   }, [ppgMeterRef]);
@@ -372,17 +361,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       }
     } else {
       lastHbInputRef.current = 0;
-    }
-
-    // Keep sliding window of unnormalized absolute amplitudes (10 frames ~ 330ms)
-    // to find the true peak crest robust to phase / frame timing offsets.
-    if (hasUsableContact) {
-      recentAmplitudesRef.current.push(Math.abs(hbInput));
-      if (recentAmplitudesRef.current.length > 10) {
-        recentAmplitudesRef.current.shift();
-      }
-    } else {
-      recentAmplitudesRef.current = [];
     }
 
     const heartBeatResult = processHeartBeat.processSignal(
@@ -473,30 +451,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     md.acquisitionStage = hasUsableContact ? stab.stage : 'SEARCHING';
     md.acquisitionProgress = stab.progress;
     md.stabilizationReason = stab.reason;
-
-    // Buffer elástico de colocación: calidad de contacto por frame (primitiva ya
-    // probada) → reservorio → cobertura suavizada tolerante a microdescuadres.
-    const contactQuality = hasUsableContact
-      ? instantAcquisitionConfidence({
-          fingerDetected: fingerConfirmed,
-          contactState,
-          perfusionIndex: lastSignal.perfusionIndex ?? 0,
-          periodicity: typeof sqm.periodicity === 'number' ? sqm.periodicity : 0,
-          sqi: rawSqi,
-          motionScore: typeof sqm.motionScore === 'number' ? sqm.motionScore : 0,
-          coverageRatio:
-            diag && typeof diag === 'object' && typeof diag.coverageRatio === 'number'
-              ? diag.coverageRatio
-              : 0,
-        })
-      : 0;
-    const reservoir = placementReservoirRef.current;
-    reservoir.push(signalValue, contactQuality, nowT);
-    const reservoirOut = reservoir.consume();
-    const placementCoverage = reservoirOut ? reservoirOut.goodCoverage : 0;
-    md.placementCoverage = placementCoverage;
-    md.placementStable =
-      placementCoverage >= VITAL_THRESHOLDS.ROUTER.PLACEMENT_STABLE_COVERAGE;
     if (nowT - lastDiagPushRef.current >= DIAG_PUSH_THROTTLE_MS) {
       lastDiagPushRef.current = nowT;
       setCurrentDiagnostics(mergedDiag);
@@ -523,8 +477,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     if (hasUsableContact && heartBeatResult.isPeak) {
       lastPeakTimestampRef.current = nowT;
-      // Find the true peak crest in our sliding window to avoid sub-millisecond phase offsets
-      const currentPeakAmp = Math.max(...recentAmplitudesRef.current, 0.001);
+      // Measure raw peak amplitude of unnormalized filtered signal (hbInput)
+      const currentPeakAmp = Math.abs(hbInput);
       if (runningPeakAverageRef.current === 0) {
         runningPeakAverageRef.current = currentPeakAmp;
       } else {
@@ -536,15 +490,14 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       if (runningPeakAverageRef.current > 1e-5) {
         ampScale = currentPeakAmp / runningPeakAverageRef.current;
       }
-      // Clamp to visually appealing range (0.75 to 1.25) to prevent overly tall spikes while preserving clear variation
-      lastPeakAmplitudeRef.current = Math.max(0.75, Math.min(1.25, ampScale));
+      // Clamp to visually appealing range (e.g. 0.5 to 1.6) to guarantee no excessive clipping
+      lastPeakAmplitudeRef.current = Math.max(0.5, Math.min(1.6, ampScale));
     }
 
     if (!hasUsableContact) {
       lastPeakTimestampRef.current = 0;
       lastPeakAmplitudeRef.current = 1.0;
       runningPeakAverageRef.current = 0;
-      recentAmplitudesRef.current = [];
     }
 
     let eegValue = 0;
@@ -552,9 +505,9 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       const elapsed = nowT - lastPeakTimestampRef.current;
       const ampScale = lastPeakAmplitudeRef.current;
       
-      const maxPeak = 8.0 * ampScale;
-      const minPeak = -3.2 * ampScale;
-      const peakRange = maxPeak - minPeak; // 11.2 * ampScale
+      const maxPeak = 10.0 * ampScale;
+      const minPeak = -4.0 * ampScale;
+      const peakRange = maxPeak - minPeak; // 14.0 * ampScale
 
       // EEG-style heartbeat spike:
       // 0ms: reached maximum peak (+10.0 * scale) at the exact moment of peak detection

@@ -208,7 +208,7 @@ const Index = () => {
       router.setVitalSigns(lastValidResults);
       session.setLocalShowResults(true);
     }
-  }, [lastValidResults, session.isMonitoring, router, session]);
+  }, [lastValidResults, session.isMonitoring]);
 
   // UI states
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
@@ -424,9 +424,9 @@ const Index = () => {
       import('@/lib/ml/riskAnalyzer').then(({ healthRiskAnalyzer }) => {
         const risk = healthRiskAnalyzer.analyze(vs);
         setRiskResult(risk.timeline);
-      }).catch(() => {/* ignore risk analysis error */});
+      }).catch(() => {});
     }
-  }, [lastValidResults?.heartRate.value, lastValidResults?.spo2.value, lastValidResults]);
+  }, [lastValidResults?.heartRate.value, lastValidResults?.spo2.value]);
 
   // Cargar datos antropométricos desde CalibrationManager al montar
   useEffect(() => {

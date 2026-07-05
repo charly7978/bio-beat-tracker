@@ -74,7 +74,7 @@ export class PeakDetectionEnsemble {
       samplingRateHz: fsEffective,
       sqi,
       minProminence: calibration.elgendiMinProminence,
-      beatOffset: calibration.elgendiOffsetWeight,
+      offsetWeight: calibration.elgendiOffsetWeight,
       beatWindowMs: input.beatWindowMs,
     });
 

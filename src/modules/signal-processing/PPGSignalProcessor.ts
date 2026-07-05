@@ -15,8 +15,8 @@ import {
   createDiagnosticStatusState,
   type DiagnosticStatusState,
 } from '../signal-quality/SignalQualityIndex';
-import { VITAL_THRESHOLDS, adaptiveMotionLimit } from '../../config/vitalThresholds';
-import { DSP_CONSTANTS, ENVELOPE_EQ } from '../../config/signalProcessing';
+import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
+import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 import {
   hasFingerHemoglobinSignature,
@@ -49,7 +49,6 @@ import {
   DEFAULT_PULSE_AGC,
   resetPulseAgc,
 } from './shared/pulseAgc';
-import { EnvelopeEqualizer } from '../../lib/signal/envelopeEqualizer';
 import {
   createAcquisitionState,
   updateAcquisition,
@@ -65,6 +64,7 @@ import { bandLimitedDominantFreq } from './shared/dsp';
 import { RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
 
 const log = createLogger('PPGSignalProcessor');
+// BUILD_STAMP: 2026-05-15 18:32:00
 
 interface ROIMetrics {
   rawRed: number;
@@ -100,15 +100,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private placementMode: FingerPlacementMode = 'hybrid';
   private placementStreak = { mode: 'hybrid' as FingerPlacementMode, count: 0 };
   private readonly pulseAgcState = createPulseAgcState();
-  /** Ecualización de envolvente del canal HR (A/B, flag ENVELOPE_EQ.ENABLED). */
-  private readonly envelopeEq = new EnvelopeEqualizer({
-    attack: ENVELOPE_EQ.ATTACK,
-    release: ENVELOPE_EQ.RELEASE,
-    slowAlpha: ENVELOPE_EQ.SLOW_ALPHA,
-    floorFrac: ENVELOPE_EQ.FLOOR_FRAC,
-    maxGain: ENVELOPE_EQ.MAX_GAIN,
-    mix: ENVELOPE_EQ.MIX,
-  });
 
   private readonly ACDC_WINDOW = 120;
   private readonly TILE_COLUMNS = 5;
@@ -308,9 +299,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     public onSignalReady?: (signal: ProcessedSignal) => void,
     public onError?: (error: ProcessingError) => void
   ) {
-    // Elgendi / NeuroKit2 estándar: 0.5-8Hz Butterworth 2º orden
-    this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate, 8.0);
-    // Morfología (BP): 0.5-8Hz — misma banda, preserva escotadura dicrótica
+    // Pulso (HR): 0.5-4.5Hz — rango cardíaco estándar, 4º orden para mejor rechazo
+    this.bandpassFilter = new BandpassFilter(this.estimatedSampleRate, 4.5);
+    // Morfología (BP): 0.5-8Hz — preserva escotadura dicrótica y forma completa del pulso
     this.morphBandpassFilter = new BandpassFilter(this.estimatedSampleRate, 8.0);
   }
 
@@ -385,9 +376,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     // Toleramos mayor movimiento físico (aceleración/giroscopio) si la calidad de
     // la señal óptica (SQI) sigue siendo buena, ya que el acoplamiento dedo-lente
     // puede permanecer estable a pesar de temblores o giros del celular.
-    const effectiveMotionThreshold = adaptiveMotionLimit(
-      this.signalQuality, this.MOTION_THRESHOLD,
-    );
+    const effectiveMotionThreshold = this.signalQuality >= 50
+      ? 1.8
+      : this.signalQuality >= 30
+        ? 1.2
+        : this.MOTION_THRESHOLD; // 0.6
     const motionArtifact = this.motionScore > effectiveMotionThreshold;
     const fingerEnsemble = updateFingerDetection(
       { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue, coverage: roi.coverageRatio, fingerScore: roi.fingerScore },
@@ -545,11 +538,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.contactState === 'STABLE_CONTACT',
     );
     endFilt();
-    // Ecualización de envolvente (A/B, flag OFF por defecto): comprime el rango
-    // dinámico del canal HR para rescatar latidos débiles sin bajar el umbral de
-    // ruido. Con ENABLED=false, detInput === enhanced (idéntico, sin costo).
-    const detInput = ENVELOPE_EQ.ENABLED ? this.envelopeEq.process(enhanced) : enhanced;
-    this.filteredBuffer.push(detInput);
+    this.filteredBuffer.push(enhanced);
 
     // === BANCO DE FILTROS POR CANAL VITAL (PPGSignalSplitter) ===
     // Cada signo vital recibe la señal pre-procesada con los requisitos DSP de su canal.
@@ -698,7 +687,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.onSignalReady({
       timestamp,
       rawValue: signalPathActive ? pulseSource.value : 0,
-      filteredValue: signalPathActive ? detInput : 0,
+      filteredValue: signalPathActive ? enhanced : 0,
       morphologyValue: signalPathActive ? morphFiltered : 0,
       // Canales del banco de filtros especializado por signo vital
       morphologyFiltered: signalPathActive ? splitOut.morphology : 0,
@@ -904,6 +893,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       fingerScore: roi.fingerScore,
     };
   }
+
 
 
   private fingerSpatial(roi: ROIMetrics) {
@@ -1705,7 +1695,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.signalSplitter.reset();
     this.lastKnownBpm = 0;
     resetPulseAgc(this.pulseAgcState);
-    this.envelopeEq.reset();
     this.roiRedPulseRing.reset();
     this.lastRoiRedCv = 0;
     this.signalMotionScore = 0;
