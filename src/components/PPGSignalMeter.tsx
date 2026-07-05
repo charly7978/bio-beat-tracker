@@ -26,6 +26,7 @@ import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
+import CameraView, { CameraViewHandle } from './CameraView';
 
 export interface PPGSignalMeterProps {
   value: number;
@@ -34,6 +35,9 @@ export interface PPGSignalMeterProps {
   onStartMeasurement: () => void;
   onReset: () => void;
   isMonitoring?: boolean;
+  cameraRef?: React.Ref<CameraViewHandle>;
+  isCameraOn?: boolean;
+  onStreamReady?: (stream: MediaStream) => void;
   arrhythmiaStatus?: string;
   rawArrhythmiaData?: {
     timestamp: number;
@@ -99,6 +103,9 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   onStartMeasurement,
   onReset,
   isMonitoring = false,
+  cameraRef,
+  isCameraOn = false,
+  onStreamReady,
   arrhythmiaStatus,
   rawArrhythmiaData,
   preserveResults = false,
@@ -137,6 +144,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   /** Latch: la onda se revela solo cuando la adquisición llega a READY (señal estable). */
   const traceRevealedRef = useRef(false);
   const [showPulse, setShowPulse] = useState(false);
+  const [layoutInfo, setLayoutInfo] = useState<{ plotX: number; plotY: number; plotW: number; plotH: number; floorCenterY: number } | null>(null);
 
   const lastArrhythmiaCountRef = useRef(0);
   const beatHistoryRef = useRef<{ isArrhythmia: boolean; time: number; rr: number }[]>([]);
@@ -327,6 +335,18 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const footer = { x: 0, y: cssH - buttonsH - footerH, w: cssW, h: footerH };
 
     layoutRef.current = { width: cssW, height: cssH, header, metrics, plot, trend, footer };
+
+    const horizonY = plot.y + plot.h * 0.08;
+    const nearY = plot.y + plot.h - 30;
+    const floorCenterY = (horizonY + nearY) / 2;
+
+    setLayoutInfo({
+      plotX: plot.x,
+      plotY: plot.y,
+      plotW: plot.w,
+      plotH: plot.h,
+      floorCenterY,
+    });
   }, []);
 
   useLayoutEffect(() => {
@@ -512,77 +532,168 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
 
   return (
     <div ref={containerRef} className="fixed inset-0 overflow-hidden">
-      {/*
-        VENTANA DE DEDO — máscara radial CSS aplicada SOLO al canvas base
-        (fondo y paneles del monitor). Debajo está la <CameraView/> real
-        (absolute inset-0 en Index). El círculo transparente queda
-        perfectamente centrado, con radio útil ≈90px (yema de dedo) y un
-        feather suave de 90→126px, sin bordes duros. La onda PPG y las
-        grillas viven en un segundo canvas SIN máscara por encima, por lo
-        que conservan opacidad plena y el dedo nunca atraviesa la señal.
-      */}
+      <style>{`
+        @keyframes scan {
+          0% { transform: translateY(-70px); opacity: 0.2; }
+          50% { transform: translateY(70px); opacity: 0.8; }
+          100% { transform: translateY(-70px); opacity: 0.2; }
+        }
+        @keyframes pulseGlow {
+          0% { box-shadow: 0 0 10px rgba(34, 197, 94, 0.2); }
+          50% { box-shadow: 0 0 25px rgba(34, 197, 94, 0.6); }
+          100% { box-shadow: 0 0 10px rgba(34, 197, 94, 0.2); }
+        }
+        @keyframes pulseGlowOrange {
+          0% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.2); }
+          50% { box-shadow: 0 0 20px rgba(245, 158, 11, 0.5); }
+          100% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.2); }
+        }
+      `}</style>
+
+      {/* Base Canvas: Background, panels. Mask removed. */}
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
-        style={{
-          WebkitMaskImage:
-            'radial-gradient(circle at 50% 50%, rgba(0,0,0,0.30) 0px, rgba(0,0,0,0.34) 58px, rgba(0,0,0,0.48) 90px, rgba(0,0,0,0.82) 110px, rgba(0,0,0,1) 126px)',
-          maskImage:
-            'radial-gradient(circle at 50% 50%, rgba(0,0,0,0.30) 0px, rgba(0,0,0,0.34) 58px, rgba(0,0,0,0.48) 90px, rgba(0,0,0,0.82) 110px, rgba(0,0,0,1) 126px)',
-        }}
       />
+
+      {/* 3D Camera Preview Window reposado en la grilla del piso en 3D */}
+      {isCameraOn && layoutInfo && (
+        <div 
+          className="absolute pointer-events-none"
+          style={{
+            position: 'absolute',
+            left: layoutInfo.plotX + layoutInfo.plotW / 2,
+            top: layoutInfo.floorCenterY,
+            width: '140px',
+            height: '140px',
+            transform: 'translate(-50%, -50%) perspective(400px) rotateX(55deg)',
+            transformStyle: 'preserve-3d',
+            pointerEvents: 'none',
+            zIndex: 5,
+          }}
+        >
+          {/* Glowing Border and Container */}
+          <div 
+            className="relative w-full h-full rounded-full overflow-hidden border-2 transition-all duration-500" 
+            style={{
+              borderColor: isFingerDetected ? 'rgba(34, 197, 94, 0.6)' : 'rgba(245, 158, 11, 0.5)',
+              animation: isFingerDetected ? 'pulseGlow 2s infinite ease-in-out' : 'pulseGlowOrange 1.5s infinite ease-in-out',
+              backgroundColor: '#000000',
+            }}
+          >
+            {/* CameraView with soft blur filter to smooth out skin/blood details */}
+            <div className="w-full h-full" style={{ filter: 'blur(10px) saturate(1.6) brightness(0.85)' }}>
+              <CameraView 
+                ref={cameraRef}
+                onStreamReady={onStreamReady}
+                isMonitoring={isCameraOn}
+              />
+            </div>
+            
+            {/* Vignette overlay */}
+            <div 
+              className="absolute inset-0 pointer-events-none" 
+              style={{
+                background: 'radial-gradient(circle, rgba(0,0,0,0) 40%, rgba(0,0,0,0.9) 100%)'
+              }}
+            />
+            
+            {/* Holographic Fingerprint Icon */}
+            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+              <svg
+                viewBox="0 0 64 64"
+                className={`w-16 h-16 transition-all duration-700 ${
+                  isFingerDetected 
+                    ? 'text-emerald-500/10 scale-90 rotate-6 opacity-30' 
+                    : 'text-emerald-400/80 animate-pulse'
+                }`}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                style={{
+                  filter: isFingerDetected ? 'none' : 'drop-shadow(0 0 8px rgba(52,211,153,0.4))'
+                }}
+              >
+                <path d="M20 50 C20 42, 24 38, 32 38 C40 38, 44 42, 44 50" />
+                <path d="M16 50 C16 38, 22 32, 32 32 C42 32, 48 38, 48 50" />
+                <path d="M12 50 C12 34, 20 26, 32 26 C44 26, 52 34, 52 50" />
+                <path d="M8 50 C8 30, 18 20, 32 20 C46 20, 56 30, 56 50" />
+                <path d="M24 50 C24 46, 28 44, 32 44 C36 44, 40 46, 40 50" />
+                <path d="M28 50 C28 48, 30 47, 32 47 C34 47, 36 48, 36 50" />
+                <path d="M32 50 L32 49" />
+              </svg>
+              
+              {/* Rotating target ring */}
+              {!isFingerDetected && (
+                <div 
+                  className="absolute w-24 h-24 border border-dashed border-emerald-400/20 rounded-full animate-spin" 
+                  style={{ animationDuration: '20s' }}
+                />
+              )}
+            </div>
+            
+            {/* Laser scanning line */}
+            {!isFingerDetected && (
+              <div 
+                className="absolute left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-emerald-400/80 to-transparent shadow-[0_0_8px_rgba(52,211,153,0.6)]"
+                style={{
+                  top: '50%',
+                  animation: 'scan 3s infinite ease-in-out'
+                }}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Subtle Pointer HUD Card */}
+      {isCameraOn && layoutInfo && (
+        <div 
+          className="absolute left-1/2 -translate-x-1/2 pointer-events-none flex flex-col items-center z-20"
+          style={{
+            top: layoutInfo.floorCenterY - 110,
+            width: '260px',
+            transition: 'top 0.3s ease-in-out',
+          }}
+        >
+          <div 
+            className={`border px-3 py-1.5 rounded-xl font-mono text-[9px] tracking-wider text-center transition-all duration-500 shadow-lg ${
+              isFingerDetected 
+                ? (diagnostics?.acquisitionStage === 'READY' 
+                    ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-400' 
+                    : 'bg-cyan-950/80 border-cyan-500/40 text-cyan-400')
+                : 'bg-amber-950/80 border-amber-500/40 text-amber-400'
+            }`}
+          >
+            {isFingerDetected ? (
+              diagnostics?.acquisitionStage === 'READY' ? (
+                <div className="flex items-center gap-1.5 justify-center">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  <span>ANALIZANDO SEÑAL CARDIACA</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 justify-center">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                  <span>ESTABILIZANDO CONTACTO...</span>
+                </div>
+              )
+            ) : (
+              <div className="flex items-center gap-1.5 justify-center animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                <span>CUBRE LA CÁMARA TRASERA CON TU DEDO</span>
+              </div>
+            )}
+          </div>
+          <div className="w-[1px] h-[35px] border-l border-dashed border-slate-600/40 mt-1" />
+        </div>
+      )}
+
       {/* Capa de señal: grillas + onda PPG, sin máscara, opacidad plena. */}
       <canvas
         ref={waveCanvasRef}
         className="pointer-events-none absolute inset-0 w-full h-full"
       />
-      {/*
-        Anillo médico sutil alrededor de la ventana — guía discreta con
-        halo degradado (sin trazos duros), radio útil 90px. SVG absoluto,
-        pointerEvents none.
-      */}
-      <svg
-        aria-hidden
-        className="pointer-events-none absolute left-1/2 top-1/2"
-        width={240}
-        height={240}
-        style={{ transform: 'translate(-50%, -50%)' }}
-      >
-        <defs>
-          <radialGradient id="peep-halo" cx="50%" cy="50%" r="50%">
-            <stop offset="62%" stopColor="rgba(148,163,184,0)" />
-            <stop offset="75%" stopColor="rgba(148,163,184,0.06)" />
-            <stop offset="82%" stopColor="rgba(148,163,184,0.05)" />
-            <stop offset="100%" stopColor="rgba(148,163,184,0)" />
-          </radialGradient>
-        </defs>
-        <circle cx="120" cy="120" r="120" fill="url(#peep-halo)" />
-        <circle
-          cx="120"
-          cy="120"
-          r="90"
-          fill="none"
-          stroke="rgba(226,232,240,0.10)"
-          strokeWidth="1.5"
-        />
-        {/* Marcas cardinales muy finas */}
-        {[
-          [120, 24, 120, 33],
-          [120, 207, 120, 216],
-          [24, 120, 33, 120],
-          [207, 120, 216, 120],
-        ].map(([x1, y1, x2, y2], i) => (
-          <line
-            key={i}
-            x1={x1}
-            y1={y1}
-            x2={x2}
-            y2={y2}
-            stroke="rgba(226,232,240,0.16)"
-            strokeWidth="0.75"
-          />
-        ))}
-      </svg>
       <PulseIndicator showPulse={showPulse} />
       <ActionButtons
         isMonitoring={isMonitoring}

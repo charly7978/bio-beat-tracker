@@ -250,9 +250,9 @@ export const CARDIAC_WAVE_CONFIG = {
    * - ¿Qué significa?: Distorsión no-lineal matemática aplicada exclusivamente al trazado del Canvas.
    * - Si se sube (ej. 1.3 - 1.7): Hace que la subida al pico sistólico y la caída posterior sean visualmente mucho más rápidas y agudas (efecto "látigo" o "relámpago").
    * - Si se baja (ej. 1.0): La onda se grafica de forma 100% lineal y fiel a la fisiología pura sin distorsión.
-   * - ¡ATENCIÓN!: Esta constante es 100% visual y estética. No afecta la lógica interna de captación de latidos ni las matemáticas médicas del procesador, por lo que es totalmente seguro calibrarla sin alterar la detección de pulso.
+   * ¡ATENCIÓN!: Esta constante es 100% visual y estética. No afecta la lógica interna de captación de latidos ni las matemáticas médicas del procesador, por lo que es totalmente seguro calibrarla sin alterar la detección de pulso.
    */
-  WAVE_SHARPNESS_EXPONENT: 1.75,
+  WAVE_SHARPNESS_EXPONENT: 1.35,
 };
 
 // Exportaciones individuales para mantener compatibilidad total con componentes importadores externos (como PPGSignalMeter.tsx)
@@ -842,6 +842,28 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
   if (coords.length < 2) return;
 
+  // Aplicar un filtro de media móvil de 5 puntos para suavizar la onda y eliminar el ruido
+  const smoothedCoords: typeof coords = [];
+  const halfWindow = 2; // Ventana de 5 puntos (i-2, i-1, i, i+1, i+2)
+  for (let i = 0; i < coords.length; i++) {
+    let sumY = 0;
+    let sumVal = 0;
+    let count = 0;
+    for (let w = -halfWindow; w <= halfWindow; w++) {
+      const idx = i + w;
+      if (idx >= 0 && idx < coords.length) {
+        sumY += coords[idx].y;
+        sumVal += coords[idx].val;
+        count++;
+      }
+    }
+    smoothedCoords.push({
+      ...coords[i],
+      y: sumY / count,
+      val: sumVal / count,
+    });
+  }
+
   ctx.save();
   ctx.beginPath();
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
@@ -851,8 +873,8 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   state.sweepPulse *= CARDIAC_WAVE_CONFIG.SWEEP_PULSE_DECAY;
 
     // ── MODO 3D: onda como cinta extruida sobre el piso en perspectiva. ──
-  // Reusa las MISMAS coords honestas → forma, amplitud y tiempo idénticos al 2D.
-  drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
+  // Reusa las MISMAS coords honestas y suavizadas → forma, amplitud y tiempo idénticos al 2D.
+  drawWaveRibbon3D(ctx, state, smoothedCoords, { waveBaseY, waveH, midValue });
 
 
   // Tachogram (panel clínico: 2D en ambos modos)
