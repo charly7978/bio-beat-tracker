@@ -18,7 +18,9 @@ import { WebrtcCallWidget } from "@/components/WebrtcCallWidget";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
 import { inferCameraRuntimeHints } from "@/lib/device/cameraDeviceProfile";
 import { isNative } from "@/lib/device/platform";
-import type { ContactState } from "@/types/signal";
+import type { ContactState, ProcessedSignal } from "@/types/signal";
+import { useCortex } from "@/lib/cortex/useCortex";
+import { CortexConsole } from "@/lib/cortex/components/CortexConsole";
 import { usePerfTelemetry } from "@/hooks/usePerfTelemetry";
 import { triggerCalibrationCompleteHaptic } from "@/utils/haptics";
 import { createLogger } from "@/utils/logger";
@@ -169,11 +171,27 @@ const Index = () => {
     setHeartBeatRuntimeHints,
   });
 
-  // Conectar handleSignalRealtime al pipeline
+  const cortex = useCortex();
+
+  // Conectar handleSignalRealtime al pipeline (con Cortex)
+  const handleSignalWithCortex = useCallback((signal: ProcessedSignal) => {
+    router.handleSignalRealtime(signal);
+    cortex.feedSignal(signal);
+  }, [router.handleSignalRealtime, cortex.feedSignal]);
+
   useEffect(() => {
-    setSignalCallback(router.handleSignalRealtime);
+    setSignalCallback(handleSignalWithCortex);
     return () => setSignalCallback(null);
-  }, [setSignalCallback, router.handleSignalRealtime]);
+  }, [setSignalCallback, handleSignalWithCortex]);
+
+  // Iniciar/detener Cortex con la medición
+  useEffect(() => {
+    if (session.isMonitoring) {
+      cortex.start();
+    } else {
+      cortex.stop();
+    }
+  }, [session.isMonitoring, cortex]);
 
   // Sincronizar isMonitoringRef
   useEffect(() => {
@@ -214,6 +232,7 @@ const Index = () => {
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showTelemedicine, setShowTelemedicine] = useState(false);
+  const [showCortex, setShowCortex] = useState(false);
   const [webgpuAvail, setWebgpuAvail] = useState<'checking' | 'yes' | 'no'>('checking');
   const [healthAvail, setHealthAvail] = useState<'checking' | 'yes' | 'no'>('checking');
   const [encryptionReady, setEncryptionReady] = useState(false);
@@ -799,6 +818,51 @@ const Index = () => {
         >
           <Activity className="h-4 w-4" />
         </button>
+
+        {/* CORTEX AI (atajo rápido) */}
+        <button
+          type="button"
+          onClick={() => {
+            if (!cortex.isActive && session.isMonitoring) {
+              cortex.start();
+            }
+            setShowCortex(prev => !prev);
+          }}
+          aria-label="Cortex AI"
+          className="absolute top-4 left-4 z-30 p-2.5 rounded-full bg-black/50 backdrop-blur-md border border-zinc-900 text-fuchsia-400/75 hover:text-fuchsia-400 hover:bg-black/80 hover:scale-105 active:scale-95 shadow-lg shadow-black/35 transition-all"
+        >
+          <Cpu className="h-4 w-4" />
+        </button>
+
+        {/* CORTEX CONSOLE */}
+        {showCortex && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in">
+            <div className="bg-black/95 border border-zinc-900/80 rounded-2xl max-w-sm w-[92%] shadow-2xl flex flex-col max-h-[80vh] animate-in zoom-in-95 duration-200">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-900">
+                <div className="flex items-center gap-2">
+                  <Cpu className="w-5 h-5 text-fuchsia-400" />
+                  <h3 className="text-white text-sm font-bold">BioBeat Cortex</h3>
+                </div>
+                <button onClick={() => setShowCortex(false)}
+                  className="p-1.5 rounded-full bg-zinc-950 hover:bg-zinc-900 text-zinc-400 hover:text-white transition-colors">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4">
+                {cortex.isActive ? (
+                  <CortexConsole frame={cortex.lastFrame} sessionActive={cortex.isActive} />
+                ) : (
+                  <div className="text-center py-12 space-y-3">
+                    <Cpu className="w-10 h-10 text-fuchsia-500/50 mx-auto animate-pulse" />
+                    <p className="text-zinc-500 text-xs font-semibold">
+                      Inicia una medición para activar el razonamiento de Cortex.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* TELEMEDICINA DIALOG */}
         {showTelemedicine && (
