@@ -13,6 +13,7 @@ import { useFrameLoop } from "@/hooks/useFrameLoop";
 import { useSignalRouter } from "@/hooks/useSignalRouter";
 import { useMeasurementSession } from "@/hooks/useMeasurementSession";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
+import FingerPeephole from "@/components/FingerPeephole";
 import { PoincarePlot } from "@/components/PoincarePlot";
 import { WebrtcCallWidget } from "@/components/WebrtcCallWidget";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
@@ -864,6 +865,19 @@ const Index = () => {
               diagnostics={router.currentDiagnostics as unknown as import('@/components/PPGSignalMeter').PPGSignalMeterProps['diagnostics']}
             />
           </div>
+
+          {/* PEEPHOLE — pequeño visor circular con el feed real de la cámara,
+              para que el usuario vea si su dedo cubre bien el lente. Se ubica
+              en la parte superior central para no competir con la onda PPG. */}
+          <FingerPeephole
+            cameraRef={cameraRef}
+            isActive={session.isCameraOn}
+            isFingerDetected={
+              !!lastSignal?.fingerDetected &&
+              lastSignal?.contactState !== 'NO_CONTACT'
+            }
+            quality={lastSignal?.quality || 0}
+          />
 
           {/* STATUS BAR — sobre los botones INICIAR/RESET (h-12) y a la izquierda del toggle 3D */}
           <div 
