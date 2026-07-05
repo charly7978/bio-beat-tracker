@@ -526,11 +526,27 @@ export function drawFingerWindow3D(
   // ── 11. Micro-guía textual: susurrada, solo si hay algo accionable ───────
   if (pl.hint) {
     const a = 0.30 + breath * 0.10;
-    ctx.font = '500 10.5px ui-sans-serif, system-ui, sans-serif';
+    ctx.font = '600 13px ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillStyle = `rgba(${baseCol},${Math.min(a, MAX_ALPHA).toFixed(3)})`;
     ctx.fillText(pl.hint, cx, cy + ry + 18);
+  }
+
+  // ── 12. Guía grande de colocación (visible desde lejos) ──────────────────
+  if (pl.hint && !pl.positionOk) {
+    const guideAlpha = 0.50 + breath * 0.12;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    // Símbolo grande según acción
+    const symbol = !pl.hasFinger ? '⊙' : pl.coverage < 0.50 ? '⊙' : pl.motion > 0.4 ? '—' : pl.bloodWarn ? '↓' : '↑';
+    ctx.font = `bold 24px ui-sans-serif, system-ui, sans-serif`;
+    ctx.fillStyle = `rgba(${baseCol},${(guideAlpha * 0.6).toFixed(3)})`;
+    ctx.fillText(symbol, cx, cy + ry + 38);
+
+    ctx.restore();
   }
 
   ctx.restore();
