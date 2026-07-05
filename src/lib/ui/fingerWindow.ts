@@ -1,39 +1,40 @@
 import type { PpgRenderState } from './ppgCanvasRenderer';
 
 /**
- * VENTANA DE DEDO — guía de colocación como "susurro visual".
+ * VENTANA DE DEDO — instrumento sutil de colocación.
  *
- * Filosofía (prioridad absoluta de las ondas):
- *   1. Las sondas y el monitor cardíaco MANDAN. Esta guía se dibuja SIEMPRE
- *      por debajo de la onda (en la capa de señal, antes de drawSignal) y con
- *      alphas mínimos → nunca compite con el trazo. La onda pasa "por encima"
- *      y hasta atraviesa los huecos que la guía deja a las 3 y 9 en punto.
- *   2. No es un semáforo on/off. Guía de verdad, con DATOS REALES:
- *        - coverageRatio  → cuánto falta cubrir el lente (aro que se completa)
- *        - perfusionIndex → presión: si aprieta de más, invita a aflojar
- *        - motionScore    → si tiembla, pide sostener quieto
- *        - underexposure  → si está oscuro/flojo, pide más contacto
- *        - acquisitionProgress → progreso REAL de estabilización
- *   3. Delicada y sofisticada: elipse acostada sobre la grilla, respiración
- *      lenta, invitación que atrae la yema al centro, y silencio total cuando
- *      la señal ya es estable (solo un latido casi imperceptible).
+ * Reglas duras:
+ *   1. El MONITOR CARDÍACO es prioridad visual. Toda alpha usada acá vive
+ *      debajo de MAX_ALPHA para que ni el "brillo del fondo" supere la
+ *      luminosidad de las ondas. La guía se dibuja ANTES de la grilla y las
+ *      sondas → siempre queda hundida en el piso; nunca por encima.
+ *   2. La luz que ilumina el círculo sube desde el CENTRO del fondo, como si
+ *      viniera del interior del monitor, y se detiene en un techo bajo.
+ *   3. Rojo (color de sangre) es LO DE MENOS — solo aparece como
+ *      advertencia física ("aflojá la presión") a nivel casi imperceptible.
+ *   4. Nada es on/off: todo se apaga/enciende con datos reales
+ *      (coverageRatio, perfusionIndex, motionScore, underexposureRatio,
+ *      acquisitionProgress) y con animaciones suavizadas por frame.
  *
- * La geometría (FINGER_WINDOW) es la ÚNICA fuente de verdad, compartida entre
- * la máscara CSS (abre la transparencia hacia la cámara) y este dibujo.
+ * Novedad: cuando el usuario **encuentra la posición correcta** (cobertura
+ * alta + quieto + perfusión detectable, sostenido ≥400 ms), en el círculo
+ * se materializa una HUELLA DACTILAR procedural (arcos concéntricos con
+ * núcleo y deltas, tipo whorl/loop) con fade-in animado — la señal exacta
+ * de "acá está bien". Al perder la posición, se desmaterializa suavemente.
  */
+
+// ── Geometría (fuente única de verdad para máscara y dibujo) ────────────────
 export const FINGER_WINDOW = {
-  /** Centro X como fracción del ancho. */
   cxFrac: 0.5,
-  /** Centro Y como fracción del alto — levemente arriba del medio. */
   cyFrac: 0.44,
-  /** Radio horizontal útil ≈ yema de dedo. */
-  rx: 98,
-  /** Radio vertical achatado (perspectiva ≈ 0.55 → "acostado" en el piso). */
-  ry: 54,
-  /** Radios exteriores del feather de la máscara (borde sin corte duro). */
-  featherRx: 146,
-  featherRy: 84,
+  rx: 100,
+  ry: 56,
+  featherRx: 150,
+  featherRy: 86,
 } as const;
+
+/** Techo de brillo global de la guía — ninguna alpha lo supera. */
+const MAX_ALPHA = 0.28;
 
 /** Máscara CSS elíptica: transparencia centrada + feather muy suave. */
 export function fingerWindowMaskCss(): string {
@@ -41,17 +42,18 @@ export function fingerWindowMaskCss(): string {
   const at = `at ${cxFrac * 100}% ${cyFrac * 100}%`;
   return (
     `radial-gradient(ellipse ${featherRx}px ${featherRy}px ${at}, ` +
-    `rgba(0,0,0,0.26) 0%, rgba(0,0,0,0.30) 46%, rgba(0,0,0,0.42) 67%, ` +
-    `rgba(0,0,0,0.78) 86%, rgba(0,0,0,1) 100%)`
+    `rgba(0,0,0,0.24) 0%, rgba(0,0,0,0.30) 46%, rgba(0,0,0,0.44) 68%, ` +
+    `rgba(0,0,0,0.80) 88%, rgba(0,0,0,1) 100%)`
   );
 }
 
-// ── Paleta delicada (RGB sin alpha; el alpha se aplica por elemento) ────────
+// ── Paleta: neutra, sin rojo protagónico ───────────────────────────────────
 const COL = {
-  invite: '129, 187, 248', // azul suave — invitación / búsqueda
-  locking: '250, 204, 120', // ámbar tenue — estabilizando
-  good: '110, 231, 160', // verde señal — contacto sano
-  warn: '248, 180, 120', // ámbar cálido — corrección (presión/movimiento)
+  invite: '148, 197, 240', // azul plata — invitación
+  locking: '212, 214, 200', // marfil frío — estabilizando
+  good: '154, 214, 178', // verde suave — posición correcta
+  warn: '232, 196, 156', // arena — corrección
+  bloodHint: '210, 128, 128', // rojo apagado — solo si perfusión colapsa
 } as const;
 
 const TAU = Math.PI * 2;
@@ -59,17 +61,13 @@ const TAU = Math.PI * 2;
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
-
 function num(d: Record<string, unknown> | undefined, key: string): number {
   const v = d?.[key];
   return typeof v === 'number' && Number.isFinite(v) ? v : 0;
 }
-
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
-
-/** Mezcla dos colores "r,g,b" por t∈[0,1]. */
 function mix(a: string, b: string, t: number): string {
   const pa = a.split(',').map(Number);
   const pb = b.split(',').map(Number);
@@ -77,19 +75,24 @@ function mix(a: string, b: string, t: number): string {
     lerp(pa[1], pb[1], t),
   )},${Math.round(lerp(pa[2], pb[2], t))}`;
 }
+function ellipsePt(cx: number, cy: number, rx: number, ry: number, a: number) {
+  return { x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) };
+}
 
 interface Placement {
   hasFinger: boolean;
-  coverage: number; // 0..1
-  perfusion: number; // fracción pequeña (~0.001..0.02)
-  motion: number; // 0..1 (mayor = más temblor)
-  under: number; // 0..1 subexposición
-  progress: number; // 0..1 estabilización
+  coverage: number;
+  perfusion: number;
+  motion: number;
+  under: number;
+  progress: number;
   ready: boolean;
-  /** Calidad global de colocación 0..1 (funde los elementos ruidosos). */
   quality: number;
-  /** Sugerencia accionable (o null = silencio). */
   hint: string | null;
+  /** ¿Está en la posición correcta AHORA? (gate para la huella). */
+  positionOk: boolean;
+  /** Si conviene mostrar el rojo apagado (colapso de perfusión). */
+  bloodWarn: boolean;
 }
 
 function readPlacement(state: PpgRenderState): Placement {
@@ -105,40 +108,89 @@ function readPlacement(state: PpgRenderState): Placement {
   const progress = clamp01(num(diag, 'acquisitionProgress'));
   const ready = diag?.acquisitionStage === 'READY';
 
-  // Calidad de colocación: cubre bien + perfunde + quieto.
   const perfQ = clamp01(perfusion / 0.008);
   const quality = hasFinger
-    ? clamp01(0.45 * coverage + 0.4 * perfQ + 0.15 * (1 - motion))
+    ? clamp01(0.42 * coverage + 0.42 * perfQ + 0.16 * (1 - motion))
     : 0;
 
-  // Sugerencia accionable — una sola, priorizada, y solo si hace falta.
+  // Posición correcta: bien cubierto, quieto, y con perfusión mínima real.
+  const positionOk =
+    hasFinger && coverage > 0.7 && motion < 0.35 && perfusion > 0.0018;
+
+  const bloodWarn =
+    hasFinger && coverage > 0.75 && perfusion > 0 && perfusion < 0.002;
+
   let hint: string | null = null;
-  if (!hasFinger) {
-    hint = 'apoyá la yema en el lente';
-  } else if (coverage < 0.55) {
-    hint = 'cubrí bien el lente';
-  } else if (motion > 0.55) {
-    hint = 'sostené el dedo quieto';
-  } else if (coverage > 0.7 && perfusion > 0 && perfusion < 0.0025) {
-    hint = 'aflojá un poco la presión';
-  } else if (under > 0.45) {
-    hint = 'apoyá con un poco más de firmeza';
-  }
-  // En señal estable: silencio (salvo que algo crítico rompa la calidad).
+  if (!hasFinger) hint = 'apoyá la yema en el lente';
+  else if (coverage < 0.55) hint = 'cubrí bien el lente';
+  else if (motion > 0.55) hint = 'sostené el dedo quieto';
+  else if (bloodWarn) hint = 'aflojá un poco la presión';
+  else if (under > 0.45) hint = 'apoyá con un poco más de firmeza';
   if (ready && quality > 0.6) hint = null;
 
-  return { hasFinger, coverage, perfusion, motion, under, progress, ready, quality, hint };
+  return {
+    hasFinger,
+    coverage,
+    perfusion,
+    motion,
+    under,
+    progress,
+    ready,
+    quality,
+    hint,
+    positionOk,
+    bloodWarn,
+  };
 }
 
-/** Punto sobre la elipse (ángulo desde +X, horario en pantalla). */
-function ellipsePt(cx: number, cy: number, rx: number, ry: number, a: number) {
-  return { x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) };
+// ── Estado de animación persistente entre frames ────────────────────────────
+// Se guarda en el `state` (que es el mismo objeto entre renders del meter).
+interface FingerAnim {
+  /** 0 = oculto, 1 = huella completamente materializada. */
+  fingerprint: number;
+  /** Ángulo actual del "cursor de búsqueda" (rotación lenta). */
+  scanAngle: number;
+  /** Tiempo desde el que la posición está OK sostenida (ms) — histéresis. */
+  positionOkSince: number;
+  /** Última marca de tiempo (para dt real). */
+  lastNow: number;
+  /** Presencia global suavizada (evita parpadeos). */
+  presenceSmoothed: number;
+  /** Anillo de arranque: pulso que aparece al detectar dedo (0→1→0). */
+  contactPulse: number;
+  /** Marca de la última transición hasFinger false→true. */
+  contactAt: number;
+  /** Recuerdo previo de hasFinger. */
+  hadFingerLast: boolean;
+}
+
+function getAnim(state: PpgRenderState): FingerAnim {
+  type Bag = { fingerAnim?: FingerAnim };
+  const bag = state as unknown as Bag;
+  if (!bag.fingerAnim) {
+    bag.fingerAnim = {
+      fingerprint: 0,
+      scanAngle: 0,
+      positionOkSince: 0,
+      lastNow: state.now,
+      presenceSmoothed: 1,
+      contactPulse: 0,
+      contactAt: 0,
+      hadFingerLast: false,
+    };
+  }
+  return bag.fingerAnim;
+}
+
+/** Aproximación crítica-amortiguada: converge a `target` con constante τ (ms). */
+function approach(current: number, target: number, dt: number, tauMs: number): number {
+  const k = 1 - Math.exp(-dt / Math.max(1, tauMs));
+  return current + (target - current) * k;
 }
 
 /**
- * Dibuja un arco elíptico como segmentos, dejando HUECOS cerca de las 3 y 9 en
- * punto (donde corre horizontalmente la onda) para que el trazo "pase" por la
- * guía sin chocarla. `from`/`span` en radianes; `gap` = semiancho del hueco.
+ * Traza un arco elíptico con HUECOS en 3 y 9 (por donde corre la onda),
+ * de modo que la guía nunca compita con el trazo cardíaco.
  */
 function softArc(
   ctx: CanvasRenderingContext2D,
@@ -150,12 +202,11 @@ function softArc(
   span: number,
   gap: number,
 ) {
-  const steps = Math.max(24, Math.round((Math.abs(span) / TAU) * 96));
+  const steps = Math.max(28, Math.round((Math.abs(span) / TAU) * 128));
   const gapSin = Math.sin(gap);
   let drawing = false;
   for (let i = 0; i <= steps; i++) {
     const a = from + (span * i) / steps;
-    // Hueco cerca del eje horizontal (3 y 9 en punto) → deja pasar la onda.
     const inGap = Math.abs(Math.sin(a)) < gapSin;
     if (inGap) {
       drawing = false;
@@ -171,7 +222,6 @@ function softArc(
   }
 }
 
-/** Dibuja una elipse completa como trazo suave con huecos para la onda. */
 function ring(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -183,14 +233,85 @@ function ring(
   alpha: number,
   lineWidth: number,
 ) {
-  if (alpha <= 0.002) return;
-  ctx.strokeStyle = `rgba(${color},${alpha.toFixed(3)})`;
+  if (alpha <= 0.003) return;
+  ctx.strokeStyle = `rgba(${color},${Math.min(alpha, MAX_ALPHA).toFixed(3)})`;
   ctx.lineWidth = lineWidth;
   ctx.beginPath();
   softArc(ctx, cx, cy, rx, ry, -Math.PI / 2, TAU, gap);
   ctx.stroke();
 }
 
+// ── HUELLA DACTILAR procedural (estilo whorl con núcleo desplazado) ─────────
+/**
+ * Dibuja una huella dactilar procedural centrada en (cx, cy), dimensionada
+ * como la ventana, con opacidad `alpha` global (ya recortada por MAX_ALPHA).
+ * No es aleatoria: es la misma huella siempre, para que se lea como *señal*
+ * (aparece cuando la posición está bien) y no como ruido.
+ */
+function drawFingerprint(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  color: string,
+  alpha: number,
+) {
+  if (alpha <= 0.003) return;
+  const a = Math.min(alpha, MAX_ALPHA);
+  ctx.save();
+  ctx.translate(cx, cy);
+  // La huella "se acuesta" con la elipse.
+  ctx.scale(1, ry / rx);
+  ctx.strokeStyle = `rgba(${color},${a.toFixed(3)})`;
+  ctx.lineWidth = 1;
+  ctx.lineCap = 'round';
+
+  // 12 crestas concéntricas suavemente deformadas hacia arriba-izquierda
+  // (núcleo desplazado como whorl real).
+  const coreX = -rx * 0.08;
+  const coreY = -rx * 0.06;
+  const rings = 11;
+  for (let i = 1; i <= rings; i++) {
+    const t = i / (rings + 1);
+    const rBase = rx * (0.16 + t * 0.72);
+    // Deformación: el radio crece hacia el "delta" (abajo-derecha).
+    ctx.beginPath();
+    const steps = 96;
+    for (let s = 0; s <= steps; s++) {
+      const ang = (s / steps) * TAU;
+      // Desplaza el centro efectivo hacia el núcleo, y añade un
+      // "pinch" en la dirección de -π/4 para el delta.
+      const pull = 0.14 * Math.cos(ang + Math.PI / 4);
+      const r = rBase * (1 + pull * (1 - t) * 0.6);
+      const x = coreX * (1 - t) + r * Math.cos(ang);
+      const y = coreY * (1 - t) + r * Math.sin(ang);
+      if (s === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // Delta corto: dos rayitas finas donde convergen las crestas.
+  ctx.strokeStyle = `rgba(${color},${(a * 0.8).toFixed(3)})`;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(rx * 0.44, rx * 0.30);
+  ctx.lineTo(rx * 0.62, rx * 0.42);
+  ctx.moveTo(rx * 0.36, rx * 0.42);
+  ctx.lineTo(rx * 0.54, rx * 0.52);
+  ctx.stroke();
+
+  // Núcleo: pequeño ojo del whorl.
+  ctx.fillStyle = `rgba(${color},${(a * 0.9).toFixed(3)})`;
+  ctx.beginPath();
+  ctx.arc(coreX, coreY, 2.4, 0, TAU);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// ── Dibujo principal ────────────────────────────────────────────────────────
 export function drawFingerWindow3D(
   ctx: CanvasRenderingContext2D,
   state: PpgRenderState,
@@ -200,115 +321,201 @@ export function drawFingerWindow3D(
   const cx = width * FINGER_WINDOW.cxFrac;
   const cy = height * FINGER_WINDOW.cyFrac;
   const { rx, ry } = FINGER_WINDOW;
-  const gap = 0.30; // hueco angular a las 3 y 9 en punto → pasa la onda
+  const gap = 0.32; // hueco angular para la onda a las 3 y 9
 
   const pl = readPlacement(state);
+  const anim = getAnim(state);
+  const dt = Math.max(0, Math.min(120, now - anim.lastNow));
+  anim.lastNow = now;
 
-  // Color: sin dedo→azul; corrigiendo→ámbar cálido; estabilizando→ámbar→verde.
+  // ── Estados temporales (histéresis y suavizados) ─────────────────────────
+  // Pulso de contacto: sube al 1 al detectar dedo, decae en ~700 ms.
+  if (pl.hasFinger && !anim.hadFingerLast) {
+    anim.contactAt = now;
+    anim.contactPulse = 1;
+  }
+  anim.hadFingerLast = pl.hasFinger;
+  anim.contactPulse = approach(anim.contactPulse, 0, dt, 400);
+
+  // Huella: se materializa después de 400 ms de posición OK sostenida
+  // y se desmaterializa en cuanto se rompe (con τ chico).
+  if (pl.positionOk) {
+    if (anim.positionOkSince === 0) anim.positionOkSince = now;
+    const held = now - anim.positionOkSince;
+    const target = held > 380 ? 1 : 0;
+    anim.fingerprint = approach(anim.fingerprint, target, dt, 260);
+  } else {
+    anim.positionOkSince = 0;
+    anim.fingerprint = approach(anim.fingerprint, 0, dt, 200);
+  }
+
+  // Presencia global: se apaga a medida que la calidad crece.
+  const targetPresence = pl.ready ? 0.16 : lerp(1, 0.24, pl.quality);
+  anim.presenceSmoothed = approach(anim.presenceSmoothed, targetPresence, dt, 500);
+  const presence = anim.presenceSmoothed;
+
+  // Cursor de escaneo (rotación lenta y continua): 8 s por vuelta.
+  anim.scanAngle = (anim.scanAngle + (dt / 8000) * TAU) % TAU;
+
+  // Color base según necesidad — sin rojo protagónico.
   let baseCol: string;
   if (!pl.hasFinger) baseCol = COL.invite;
+  else if (pl.positionOk) baseCol = COL.good;
   else if (pl.hint) baseCol = COL.warn;
-  else if (pl.ready) baseCol = COL.good;
   else baseCol = mix(COL.locking, COL.good, pl.quality);
 
-  const breath = 0.5 + 0.5 * Math.sin(now / 1400);
-  // presencia global: la guía se apaga a medida que la colocación mejora.
-  const presence = pl.ready ? 0.14 : lerp(1, 0.2, pl.quality);
-  // necesidad de invitación: máxima sin dedo o con poca cobertura.
-  const need = pl.hasFinger ? clamp01((0.7 - pl.quality) / 0.7) : 1;
+  const breath = 0.5 + 0.5 * Math.sin(now / 1600);
 
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  // ── 1. RECESIÓN: vignette elíptico que hunde el centro (marco oscuro suave
-  //       alrededor de la ventana). Da el efecto de "pozo" bajo el piso. ─────
+  // ── 1. LUZ QUE VIENE DEL FONDO (interior del monitor) ────────────────────
+  // Vignette de recesión + brillo central. TOPE DURO de alpha (0.10).
   ctx.save();
   ctx.translate(cx, cy);
   ctx.scale(1, ry / rx);
-  const vig = ctx.createRadialGradient(0, 0, rx * 0.55, 0, 0, rx * 1.75);
-  vig.addColorStop(0, 'rgba(2,6,12,0)');
-  vig.addColorStop(0.72, `rgba(2,6,12,${(0.34 * presence).toFixed(3)})`);
-  vig.addColorStop(1, 'rgba(2,6,12,0)');
+  const vig = ctx.createRadialGradient(0, 0, rx * 0.5, 0, 0, rx * 1.8);
+  vig.addColorStop(0, 'rgba(1,4,8,0)');
+  vig.addColorStop(0.7, `rgba(1,4,8,${(0.26 * presence).toFixed(3)})`);
+  vig.addColorStop(1, 'rgba(1,4,8,0)');
   ctx.fillStyle = vig;
   ctx.beginPath();
-  ctx.arc(0, 0, rx * 1.75, 0, TAU);
+  ctx.arc(0, 0, rx * 1.8, 0, TAU);
   ctx.fill();
 
-  // Brillo central del fondo del pozo (muy tenue) — "acá va la yema".
-  const glowA = (0.06 + breath * 0.035) * presence;
-  const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, rx * 0.95);
+  const glowA = Math.min(MAX_ALPHA * 0.36, (0.05 + breath * 0.025) * presence);
+  const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, rx * 1.0);
   glow.addColorStop(0, `rgba(${baseCol},${glowA.toFixed(3)})`);
-  glow.addColorStop(0.6, `rgba(${baseCol},${(glowA * 0.4).toFixed(3)})`);
+  glow.addColorStop(0.55, `rgba(${baseCol},${(glowA * 0.45).toFixed(3)})`);
   glow.addColorStop(1, `rgba(${baseCol},0)`);
   ctx.fillStyle = glow;
   ctx.beginPath();
-  ctx.arc(0, 0, rx * 0.95, 0, TAU);
+  ctx.arc(0, 0, rx * 1.0, 0, TAU);
   ctx.fill();
   ctx.restore();
 
-  // ── 2. EMBUDO: anillos concéntricos que se cierran hacia el centro (paredes
-  //       del pozo en perspectiva). Los más internos, más juntos y tenues. ──
-  const funnel = [1.06, 0.86, 0.68, 0.52, 0.38];
+  // ── 2. Aro-objetivo tenue + embudo (paredes del pozo) ─────────────────────
+  ring(ctx, cx, cy, rx, ry, gap, baseCol, (0.13 + breath * 0.04) * presence, 1.2);
+  const funnel = [0.86, 0.7, 0.55, 0.42];
   for (let i = 0; i < funnel.length; i++) {
     const f = funnel[i];
-    const a = (0.05 + 0.02 * i) * presence; // se aclara hacia afuera
+    const a = (0.04 + 0.014 * i) * presence;
     ring(ctx, cx, cy, rx * f, ry * f, gap, baseCol, a, 1);
   }
 
-  // ── 3. ONDAS CONVERGENTES: ripples que viajan HACIA el centro para atraer
-  //       la yema. Solo cuando falta colocar; se apagan al estabilizar. ─────
-  if (need > 0.03) {
-    const RIPPLES = 3;
-    for (let i = 0; i < RIPPLES; i++) {
-      const phase = ((now / 2600 + i / RIPPLES) % 1); // 0→1
-      const r = lerp(1.18, 0.32, phase); // de afuera hacia adentro
-      const env = Math.sin(phase * Math.PI); // fade en extremos
-      const a = 0.12 * env * need * presence;
-      ring(ctx, cx, cy, rx * r, ry * r, gap, baseCol, a, 1.1);
-    }
-  }
-
-  // ── 4. ARO-OBJETIVO + COBERTURA REAL (cuánto falta cubrir el lente) ──────
-  // Objetivo (borde de la ventana), tenue.
-  ring(ctx, cx, cy, rx, ry, gap, baseCol, (0.14 + breath * 0.04) * presence, 1.2);
-  if (pl.hasFinger) {
-    const cov = clamp01(pl.coverage);
-    // Fantasma del objetivo de cobertura.
-    ring(ctx, cx, cy, rx * 0.9, ry * 0.9, gap, baseCol, 0.06 * presence, 2);
-    // Parte cubierta (se llena desde arriba).
-    if (cov > 0.02) {
-      ctx.strokeStyle = `rgba(${baseCol},${(0.42 * lerp(1, 0.4, pl.quality)).toFixed(3)})`;
-      ctx.lineWidth = 2;
+  // ── 3. Marcadores cardinales DENTRO del propio anillo (no colgados) ──────
+  // 12 ticks, cardinales más largos; se apagan al mejorar la colocación.
+  if (presence > 0.25) {
+    const tickA = (0.10 + breath * 0.03) * presence;
+    ctx.strokeStyle = `rgba(${baseCol},${Math.min(tickA, MAX_ALPHA).toFixed(3)})`;
+    for (let i = 0; i < 12; i++) {
+      const ang = (i / 12) * TAU - Math.PI / 2;
+      if (Math.abs(Math.sin(ang)) < Math.sin(gap)) continue; // deja pasar la onda
+      const cardinal = i % 3 === 0;
+      const rOut = 0.98;
+      const rIn = cardinal ? 0.88 : 0.93;
+      const p1 = ellipsePt(cx, cy, rx * rIn, ry * rIn, ang);
+      const p2 = ellipsePt(cx, cy, rx * rOut, ry * rOut, ang);
+      ctx.lineWidth = cardinal ? 1.1 : 0.7;
       ctx.beginPath();
-      softArc(ctx, cx, cy, rx * 0.9, ry * 0.9, -Math.PI / 2, TAU * cov, gap);
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
       ctx.stroke();
     }
   }
 
-  // ── 5. PROGRESO REAL de estabilización (aro exterior fino) ───────────────
-  if (pl.hasFinger && !pl.ready && pl.progress > 0.01) {
-    const col = mix(COL.locking, COL.good, pl.progress);
-    ctx.strokeStyle = `rgba(${col},${(0.3 * presence + 0.08).toFixed(3)})`;
-    ctx.lineWidth = 1.6;
+  // ── 4. CURSOR DE ESCANEO: un arco corto que rota lento, invita a apoyar.
+  //       Solo cuando NO hay dedo, o cuando la posición es pobre. ───────────
+  const inviteStrength = pl.hasFinger ? clamp01(0.7 - pl.quality) : 1;
+  if (inviteStrength > 0.03) {
+    const a = 0.16 * inviteStrength * presence;
+    ctx.strokeStyle = `rgba(${baseCol},${Math.min(a, MAX_ALPHA).toFixed(3)})`;
+    ctx.lineWidth = 1.4;
+    // Un arco corto (~36°) que ignora el eje horizontal para no chocar la onda.
+    const from = anim.scanAngle - 0.18;
+    const span = 0.36;
     ctx.beginPath();
-    softArc(ctx, cx, cy, rx * 1.16, ry * 1.16, -Math.PI / 2, TAU * pl.progress, gap);
+    softArc(ctx, cx, cy, rx * 1.02, ry * 1.02, from, span, gap);
     ctx.stroke();
   }
 
-  // ── 6. LATIDO casi imperceptible en señal estable ────────────────────────
-  if (pl.ready && state.sweepPulse > 0.04) {
-    const k = state.sweepPulse;
-    ring(ctx, cx, cy, rx * (1 + (1 - k) * 0.08), ry * (1 + (1 - k) * 0.08), gap, COL.good, 0.16 * k, 1 + k * 0.8);
+  // ── 5. Aro de COBERTURA real (la guía verdadera del "cuánto falta") ──────
+  if (pl.hasFinger) {
+    const cov = clamp01(pl.coverage);
+    ring(ctx, cx, cy, rx * 0.94, ry * 0.94, gap, baseCol, 0.05 * presence, 2);
+    if (cov > 0.02) {
+      const a = 0.32 * lerp(1, 0.5, pl.quality);
+      ctx.strokeStyle = `rgba(${baseCol},${Math.min(a, MAX_ALPHA).toFixed(3)})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      softArc(ctx, cx, cy, rx * 0.94, ry * 0.94, -Math.PI / 2, TAU * cov, gap);
+      ctx.stroke();
+    }
   }
 
-  // ── 7. MICRO-GUÍA textual: susurrada, minúscula, solo si hay algo que hacer.
+  // ── 6. PULSO DE CONTACTO: al detectar dedo por primera vez ───────────────
+  if (anim.contactPulse > 0.02) {
+    const k = anim.contactPulse;
+    const grow = 1 + (1 - k) * 0.14;
+    ring(
+      ctx,
+      cx,
+      cy,
+      rx * grow,
+      ry * grow,
+      gap,
+      baseCol,
+      0.22 * k * presence,
+      1 + k * 0.6,
+    );
+  }
+
+  // ── 7. HUELLA DACTILAR: aparece al encontrar la posición correcta ────────
+  if (anim.fingerprint > 0.01) {
+    // Color: verde en READY, azul/gris antes → siempre atenuado.
+    const fpCol = pl.ready ? COL.good : mix(COL.invite, COL.good, pl.quality);
+    // La huella respira levemente (respiración humana).
+    const fpAlpha = anim.fingerprint * (0.18 + breath * 0.06);
+    drawFingerprint(ctx, cx, cy, rx * 0.9, ry * 0.9, fpCol, fpAlpha);
+  }
+
+  // ── 8. Progreso REAL de estabilización (aro exterior fino) ───────────────
+  if (pl.hasFinger && !pl.ready && pl.progress > 0.01) {
+    const col = mix(COL.locking, COL.good, pl.progress);
+    ring(ctx, cx, cy, rx * 1.14, ry * 1.14, gap, col, 0.22 * presence + 0.05, 1.4);
+    // Solo la porción "cubierta" del progreso:
+    ctx.strokeStyle = `rgba(${col},${Math.min(0.24, MAX_ALPHA).toFixed(3)})`;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    softArc(ctx, cx, cy, rx * 1.14, ry * 1.14, -Math.PI / 2, TAU * pl.progress, gap);
+    ctx.stroke();
+  }
+
+  // ── 9. Advertencia física de "aflojá presión" ────────────────────────────
+  // Rojo apagado como último recurso, muy tenue, solo si la sangre no fluye.
+  if (pl.bloodWarn) {
+    const a = 0.08 * presence;
+    ctx.strokeStyle = `rgba(${COL.bloodHint},${a.toFixed(3)})`;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    softArc(ctx, cx, cy, rx * 0.78, ry * 0.78, -Math.PI / 2, TAU, gap);
+    ctx.stroke();
+  }
+
+  // ── 10. Latido casi imperceptible en señal estable ───────────────────────
+  if (pl.ready && state.sweepPulse > 0.04) {
+    const k = state.sweepPulse;
+    ring(ctx, cx, cy, rx * (1 + (1 - k) * 0.06), ry * (1 + (1 - k) * 0.06), gap, COL.good, 0.14 * k, 1 + k * 0.6);
+  }
+
+  // ── 11. Micro-guía textual: susurrada, solo si hay algo accionable ───────
   if (pl.hint) {
-    const a = 0.32 + breath * 0.12;
+    const a = 0.30 + breath * 0.10;
     ctx.font = '500 10.5px ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillStyle = `rgba(${baseCol},${a.toFixed(3)})`;
+    ctx.fillStyle = `rgba(${baseCol},${Math.min(a, MAX_ALPHA).toFixed(3)})`;
     ctx.fillText(pl.hint, cx, cy + ry + 18);
   }
 
