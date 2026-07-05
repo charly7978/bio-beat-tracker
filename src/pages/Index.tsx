@@ -13,7 +13,6 @@ import { useFrameLoop } from "@/hooks/useFrameLoop";
 import { useSignalRouter } from "@/hooks/useSignalRouter";
 import { useMeasurementSession } from "@/hooks/useMeasurementSession";
 import PPGSignalMeter from "@/components/PPGSignalMeter";
-import FingerPeephole from "@/components/FingerPeephole";
 import { PoincarePlot } from "@/components/PoincarePlot";
 import { WebrtcCallWidget } from "@/components/WebrtcCallWidget";
 import { resolveAcquisitionStatus } from "@/lib/acquisition/resolveAcquisitionStatus";
