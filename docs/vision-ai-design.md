@@ -215,3 +215,121 @@ acciones automáticas — la experiencia visible.
 
 Cada fase entra por feature flag, mergeable sola, app idéntica con el flag
 apagado.
+
+---
+
+# EL TRABAJO COMPLETO — Mapa de capacidades de la IA
+
+Las Fases 1–3 construyen el **sistema nervioso** (ojos, cerebro, voz, manos).
+Esto de abajo es el **trabajo real**: el catálogo de intervenciones de la IA a
+lo largo de toda la experiencia. Cada ítem indica qué nivel de la pirámide lo
+ejecuta (A=Retina, B=Vigía, C=Analista) y sobre qué parte del código actúa.
+Se implementan en oleadas sobre el motor ya construido — agregar una capacidad
+nueva es agregar reglas/prompts, no re-arquitectar.
+
+## Etapa 0 · Apertura de la app (antes de tocar nada)
+
+1. Detectar si es un usuario nuevo o recurrente y adaptar el tono (B).
+2. Verificar permisos de cámara y explicar en humano por qué se necesitan (B→UI).
+3. Chequear capacidades del dispositivo (torch, WebGPU, exposureMode de
+   `CameraView`) y pre-configurar el perfil óptimo (A→`cameraDeviceProfile`).
+4. Detectar condiciones del entorno al abrir la cámara: oscuridad, contraluz,
+   lente sucio (A) y avisar antes de que el usuario intente medir.
+5. Si el usuario recurrente suele fallar en el mismo paso, anticiparlo:
+   "la última vez el dedo quedó corrido a la izquierda, probá centrarlo" (B+memoria local).
+
+## Etapa 1 · Aproximación (el usuario va a apoyar el dedo)
+
+6. Ver la mano/dedo acercándose al lente (A, frame a frame).
+7. Pre-encender la linterna ANTES del contacto (`optimizeForFinger`) (A→CameraView).
+8. Pre-fijar exposición/ISO/white balance para piel (A→constraints existentes).
+9. Detectar QUÉ dedo es y si viene con uña, anillo, curita, esmalte (B) —
+   cada uno degrada la señal distinto y tiene consejo distinto.
+10. Detectar dedo frío (palidez inusual en primer contacto) → "frotá el dedo
+    10 segundos" (B).
+11. Si lo que se apoya NO es un dedo (tela, mesa, otra parte del cuerpo),
+    decirlo con nombre y apellido (A identifica, B explica).
+12. Guiar el centrado en vivo con dirección exacta: "un poco más abajo…
+    ahí" (A→`placementHint`, háptica).
+13. Detectar presión excesiva (blanqueo de la yema = se corta la perfusión)
+    y presión insuficiente (bordes con luz) (A+PPG).
+14. Confirmar contacto óptimo con feedback positivo inmediato (háptica + voz).
+
+## Etapa 2 · Adquisición (los primeros segundos críticos)
+
+15. Supervisar la estabilización (`AcquisitionStabilizer`) y narrar el
+    progreso solo si tarda más de lo normal (B).
+16. Distinguir POR QUÉ no arranca: dedo movido vs. luz ambiente vs. hardware
+    vs. perfusión baja — cada causa, su consejo (A+C cruzando cámara y señal).
+17. Detectar micro-movimientos que el usuario no percibe y pedir quietud (A).
+18. Detectar respiración agitada (oscilación de baja frecuencia en la señal +
+    movimiento) → "respirá tranquilo unos segundos" (C).
+19. Ajustar ROI del PPG al cuadrante con mejor perfusión (A→`PPGSignalProcessor`).
+20. Decidir reintento automático vs. pedir recolocación (política en `VisionGuide`).
+21. Si hay luz solar directa (saturación con patrón), pedir sombra (A).
+22. Cronometrar la paciencia del usuario: si está por rendirse (dedo
+    retirándose), intervenir con el consejo más efectivo pendiente (A+B).
+
+## Etapa 3 · Medición estable (el silencio sagrado, con vigilancia total)
+
+23. Vigilar cada frame SIN hablar: la intervención solo si peligra la medición (A).
+24. Detectar deriva lenta del dedo antes de que rompa la señal (A).
+25. Detectar cambios de presión gradual (la gente se cansa) y corregir con
+    un toque háptico suave antes que con voz (A).
+26. Validar coherencia cámara↔señal: si el PPG dice "señal perfecta" pero la
+    cámara ve el dedo a medias → desconfiar y marcar la medición (A+C→`MeasurementWindowValidator`).
+27. Contextualizar eventos de arritmia EN VIVO: distinguir "latido ectópico
+    aislado" de "artefacto por movimiento" mirando qué pasó en el lente en
+    ese instante exacto (A registra timeline, C razona).
+28. Anotar la medición con metadatos de visión (calidad de colocación,
+    movimiento, iluminación) → van al guardado (`useSaveMeasurement`).
+29. Si la medición se arruina a mitad de camino, decidir si los datos
+    parciales sirven o se descarta y explica (C).
+30. Mantener sesión de conversación abierta: el usuario puede preguntar
+    "¿va bien?" y el Vigía responde viendo la señal y el lente (B).
+
+## Etapa 4 · Resultados (traducir números a humano)
+
+31. Explicar cada métrica en lenguaje del usuario: qué significa SU 72 BPM,
+    SU SpO2, SU HRV — no definiciones de manual (B/C).
+32. Contextualizar contra su historial local: "5 latidos menos que tu
+    promedio de la semana" (C+Supabase existente).
+33. Explicar la CONFIANZA de la medición con honestidad: qué salió bien, qué
+    flojo, si conviene repetir (C con los metadatos de visión).
+34. Responder repreguntas en conversación natural ("¿y eso es malo?") (B).
+35. Guardrail médico permanente: nunca diagnostica; ante patrones
+    preocupantes recurrentes, recomienda consulta profesional con calma (B/C, system prompt).
+36. Sugerir el mejor momento del día para medir según el historial (C).
+
+## Etapa 5 · Transversal (siempre activo)
+
+37. Accesibilidad total por voz: la app usable con los ojos cerrados —
+    crítico porque el dedo está EN la cámara (B).
+38. Multiidioma automático del asistente (los modelos ya son multilingües).
+39. Aprender el perfil del usuario y su dispositivo: qué colocación, presión
+    y luz le funcionan (memoria local en Preferences, alimenta las reglas).
+40. Auto-telemetría de la propia IA: acierta/no acierta sus consejos,
+    latencias, cuota consumida → ajustar cadencias (`usePerfTelemetry`).
+41. Modo educativo bajo demanda: "¿cómo funciona esto?" → explicación viendo
+    el dedo del usuario en vivo como material didáctico (B).
+42. Detección de mal uso creativo (medir a un perro, un dibujo, otra
+    persona) con respuesta simpática pero honesta sobre la validez (A+B).
+43. Cuidado de batería/térmica: si el dispositivo se calienta, degradar
+    elegante (bajar fps de Retina, pausar Vigía) sin perder la medición (A).
+44. Privacidad activa: si la cámara trasera enfoca de repente una escena con
+    personas (se cayó el teléfono, etc.), cortar el envío de frames a la
+    nube hasta re-detectar dedo (A decide local — el guardián de privacidad
+    es la IA local, no la nube).
+
+## Cómo se relaciona con las fases
+
+- **Fases 1–3 (el motor)** habilitan TODO lo anterior: sin Retina no hay
+  ítems 6–29; sin Vigía no hay conversación (30, 34, 41); sin Guía no hay
+  oportunidad ni anti-spam.
+- **Oleadas de capacidades** (post-Fase 3): W1 = etapas 1–2 completas
+  (colocación perfecta), W2 = etapa 3 (vigilancia de medición), W3 = etapa 4
+  (resultados conversacionales), W4 = etapa 5 (perfil, accesibilidad,
+  educación). Cada oleada es solo agregar reglas al `VisionGuide` y prompts
+  al Vigía — el motor no se toca.
+- Este catálogo es vivo: cada ítem se convierte en issue/checklist en la
+  implementación de su oleada.
