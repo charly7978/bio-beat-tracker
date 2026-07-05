@@ -3,7 +3,6 @@ import { isPhysiologicalRR } from '../../utils/physio';
 import {
   buildRhythmPanel,
   formatContactState,
-  levelColor,
 } from './ppgMonitorClinical';
 import { drawWaveRibbon3D } from './ppg3dProjection';
 

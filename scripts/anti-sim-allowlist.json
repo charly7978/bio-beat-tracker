@@ -7,6 +7,20 @@
       "pattern": "MATH_RANDOM",
       "reason": "React internals (event listener key, fiber id) and @supabase localStorage probe use Math.random for non-medical, non-signal-path identifier generation. Verified: zero references reach src/modules/signal-processing/** or src/modules/vital-signs/**.",
       "ref": "GUARDRAIL-DIST-RUNTIME"
+    },
+    {
+      "file": "src/lib/cortex/agents/FingerPlacementAgent.ts",
+      "line": 24,
+      "pattern": "MATH_RANDOM",
+      "reason": "Legitimate UI feature: random guidance message selection for varied user experience. pick<T>() selects random element from guidance templates array for UX variety, not for medical signal processing.",
+      "ref": "CORTEX-GUIDANCE"
+    },
+    {
+      "file": "src/lib/ui/fingerWindow.ts",
+      "line": 99,
+      "pattern": "MATH_RANDOM",
+      "reason": "Legitimate UI feature: random guidance message selection for varied user experience. pick<T>() selects random element from guidance templates array for UX variety, not for medical signal processing.",
+      "ref": "CORTEX-GUIDANCE"
     }
   ]
 }

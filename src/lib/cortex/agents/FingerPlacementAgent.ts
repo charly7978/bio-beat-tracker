@@ -61,7 +61,7 @@ const guidanceTemplates: Record<string, { text: string[]; action: GuidanceAction
   ],
 };
 
-function generateGuidance(state: FingerPlacementState, metrics: PlacementMetrics): PlacementGuidance {
+function generateGuidance(state: FingerPlacementState, _metrics: PlacementMetrics): PlacementGuidance {
   const templates = guidanceTemplates[state] ?? guidanceTemplates.UNKNOWN;
   const chosen = pick(templates);
   return {
