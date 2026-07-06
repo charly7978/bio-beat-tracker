@@ -771,6 +771,15 @@ const Index = () => {
 
       <div className="flex-1 relative">
 
+        {/* CÁMARA */}
+        <div className="absolute inset-0">
+          <CameraView 
+            ref={cameraRef}
+            onStreamReady={session.handleStreamReady}
+            isMonitoring={session.isCameraOn}
+          />
+        </div>
+
         {/* AJUSTES */}
         <button
           type="button"
@@ -819,9 +828,6 @@ const Index = () => {
           <div className="flex-1 h-full">
             <PPGSignalMeter 
               ref={ppgMeterRef}
-              cameraRef={cameraRef}
-              isCameraOn={session.isCameraOn}
-              onStreamReady={session.handleStreamReady}
               value={router.heartbeatSignal}
               quality={lastSignal?.quality || 0}
               isFingerDetected={
@@ -858,9 +864,6 @@ const Index = () => {
               diagnostics={router.currentDiagnostics as unknown as import('@/components/PPGSignalMeter').PPGSignalMeterProps['diagnostics']}
             />
           </div>
-
-
-
 
           {/* STATUS BAR — sobre los botones INICIAR/RESET (h-12) y a la izquierda del toggle 3D */}
           <div 

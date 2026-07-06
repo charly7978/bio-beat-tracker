@@ -137,11 +137,7 @@ export function makeProjector(state: PpgRenderState): Projector {
  * Dibuja la GRILLA-PISO en perspectiva (reemplaza `drawECGGrid` cuando 3D está activo).
  * Mantiene la semántica ECG (líneas mayores/menores) pero con profundidad real.
  */
-export function drawGrid3D(
-  ctx: CanvasRenderingContext2D,
-  state: PpgRenderState,
-  opts?: { skipBackground?: boolean },
-): void {
+export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const proj = makeProjector(state);
   const { plot } = state.layout;
 
@@ -150,12 +146,9 @@ export function drawGrid3D(
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
-  // Fondo NEGRO sólido detrás de la grilla. Se omite cuando la grilla se
-  // dibuja en la capa superior sin máscara (el fondo vive en la capa base).
-  if (!opts?.skipBackground) {
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
-  }
+  // Fondo NEGRO sólido detrás de la grilla.
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
 
   // Línea de horizonte (tenue, marca el punto de fuga).
   ctx.strokeStyle = `rgba(${C.gridMinor}, 0.35)`;

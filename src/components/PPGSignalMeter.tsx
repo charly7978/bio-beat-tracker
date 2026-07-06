@@ -26,7 +26,6 @@ import { drawGrid3D } from '@/lib/ui/ppg3dProjection';
 import { realSignalStrength } from '@/lib/ui/waveHonesty';
 import { PulseIndicator } from './PulseIndicator';
 import { ActionButtons } from './ActionButtons';
-import CameraView, { CameraViewHandle } from './CameraView';
 
 export interface PPGSignalMeterProps {
   value: number;
@@ -35,9 +34,6 @@ export interface PPGSignalMeterProps {
   onStartMeasurement: () => void;
   onReset: () => void;
   isMonitoring?: boolean;
-  cameraRef?: React.Ref<CameraViewHandle>;
-  isCameraOn?: boolean;
-  onStreamReady?: (stream: MediaStream) => void;
   arrhythmiaStatus?: string;
   rawArrhythmiaData?: {
     timestamp: number;
@@ -103,9 +99,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   onStartMeasurement,
   onReset,
   isMonitoring = false,
-  cameraRef,
-  isCameraOn = false,
-  onStreamReady,
   arrhythmiaStatus,
   rawArrhythmiaData,
   preserveResults = false,
@@ -123,8 +116,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   diagnostics,
 }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  /** Capa superior SIN máscara: grillas + onda PPG siempre a opacidad plena. */
-  const waveCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const animationRef = useRef<number | null>(null);
   const isRunningRef = useRef(false);
@@ -144,7 +135,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
   /** Latch: la onda se revela solo cuando la adquisición llega a READY (señal estable). */
   const traceRevealedRef = useRef(false);
   const [showPulse, setShowPulse] = useState(false);
-  const [layoutInfo, setLayoutInfo] = useState<{ plotX: number; plotY: number; plotW: number; plotH: number; floorCenterY: number } | null>(null);
 
   const lastArrhythmiaCountRef = useRef(0);
   const beatHistoryRef = useRef<{ isArrhythmia: boolean; time: number; rr: number }[]>([]);
@@ -303,15 +293,12 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
     const cssW = Math.max(320, Math.floor(rect.width));
     const cssH = Math.max(480, Math.floor(rect.height));
-    for (const c of [canvas, waveCanvasRef.current]) {
-      if (!c) continue;
-      c.width = Math.floor(cssW * dpr);
-      c.height = Math.floor(cssH * dpr);
-      c.style.width = `${cssW}px`;
-      c.style.height = `${cssH}px`;
-      const ctx = c.getContext('2d', { alpha: true });
-      if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
+    canvas.width = Math.floor(cssW * dpr);
+    canvas.height = Math.floor(cssH * dpr);
+    canvas.style.width = `${cssW}px`;
+    canvas.style.height = `${cssH}px`;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const header = { x: 0, y: 0, w: cssW, h: 36 };
     const metricsH = Math.max(92, Math.min(108, Math.round(cssH * 0.11)));
@@ -335,18 +322,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const footer = { x: 0, y: cssH - buttonsH - footerH, w: cssW, h: footerH };
 
     layoutRef.current = { width: cssW, height: cssH, header, metrics, plot, trend, footer };
-
-    const horizonY = plot.y + plot.h * 0.08;
-    const nearY = plot.y + plot.h - 30;
-    const floorCenterY = (horizonY + nearY) / 2;
-
-    setLayoutInfo({
-      plotX: plot.x,
-      plotY: plot.y,
-      plotW: plot.w,
-      plotH: plot.h,
-      floorCenterY,
-    });
   }, []);
 
   useLayoutEffect(() => {
@@ -370,15 +345,13 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const render = () => {
       if (!isRunningRef.current) return;
       const canvas = canvasRef.current;
-      const waveCanvas = waveCanvasRef.current;
       const buffer = dataBufferRef.current;
-      if (!canvas || !waveCanvas || !buffer) {
+      if (!canvas || !buffer) {
         animationRef.current = requestAnimationFrame(render);
         return;
       }
-      const ctx = canvas.getContext('2d', { alpha: true });
-      const waveCtx = waveCanvas.getContext('2d', { alpha: true });
-      if (!ctx || !waveCtx) {
+      const ctx = canvas.getContext('2d', { alpha: false });
+      if (!ctx) {
         animationRef.current = requestAnimationFrame(render);
         return;
       }
@@ -463,28 +436,15 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
         signalStrength: signalStrengthNow,
       };
 
-      // Capa base (canvas enmascarado): fondo y paneles del monitor.
       drawBackground(ctx, layoutRef.current.width, layoutRef.current.height);
       drawHeader(ctx, renderState);
       drawMetricsBar(ctx, renderState);
-      // Fondo negro del área de plot (la grilla vive en la capa superior).
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(
-        layoutRef.current.plot.x,
-        layoutRef.current.plot.y,
-        layoutRef.current.plot.w,
-        layoutRef.current.plot.h,
-      );
+      drawGrid3D(ctx, renderState);
+      drawPressureGauge(ctx, renderState);
+      drawSignal(ctx, renderState);
+      drawAcquisitionOverlay(ctx, renderState);
       drawTrendStrip(ctx, renderState);
       drawFooter(ctx, renderState);
-
-      // Capa superior (canvas SIN máscara): grillas, onda PPG y overlays del
-      // plot a opacidad plena, siempre por encima de la ventana del dedo.
-      waveCtx.clearRect(0, 0, layoutRef.current.width, layoutRef.current.height);
-      drawGrid3D(waveCtx, renderState, { skipBackground: true });
-      drawPressureGauge(waveCtx, renderState);
-      drawSignal(waveCtx, renderState);
-      drawAcquisitionOverlay(waveCtx, renderState);
 
       sweepPulseRef.current = renderState.sweepPulse;
       lastPeakProcessedRef.current = renderState.lastPeakProcessedTime;
@@ -504,6 +464,7 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
     };
   }, []);
+
   const handleReset = useCallback(() => {
     dataBufferRef.current?.clear();
     amplitudeStatsRef.current = { min: -50, max: 50, range: 100 };
@@ -521,262 +482,14 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       ctx.fillStyle = '#000000';
       ctx.fillRect(0, 0, canvas!.width, canvas!.height);
     }
-    const waveCanvas = waveCanvasRef.current;
-    const waveCtx = waveCanvas?.getContext('2d');
-    if (waveCtx) {
-      waveCtx.clearRect(0, 0, waveCanvas!.width, waveCanvas!.height);
-    }
     onReset();
   }, [onReset]);
 
   return (
-    <div ref={containerRef} className="fixed inset-0 overflow-hidden">
-      <style>{`
-        @keyframes scan {
-          0% { transform: translateY(-70px); opacity: 0.2; }
-          50% { transform: translateY(70px); opacity: 0.8; }
-          100% { transform: translateY(-70px); opacity: 0.2; }
-        }
-        @keyframes spinClockwise {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        @keyframes spinCounterClockwise {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(-360deg); }
-        }
-        @keyframes pulseTelemetry {
-          0% { opacity: 0.35; }
-          50% { opacity: 0.85; }
-          100% { opacity: 0.35; }
-        }
-      `}</style>
-
-      {/* Base Canvas: Background, panels. Mask removed. */}
+    <div ref={containerRef} className="fixed inset-0 bg-slate-950 overflow-hidden">
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
-        style={{ zIndex: 1 }}
-      />
-
-      {/* 3D Camera Preview Window reposado en la grilla del piso en 3D */}
-      {isCameraOn && layoutInfo && (
-        <div 
-          className="absolute pointer-events-none font-mono"
-          style={{
-            position: 'absolute',
-            left: layoutInfo.plotX + layoutInfo.plotW / 2,
-            top: layoutInfo.floorCenterY,
-            width: '180px',
-            height: '180px',
-            transform: 'translate(-50%, -50%) perspective(450px) rotateX(55deg)',
-            transformStyle: 'preserve-3d',
-            pointerEvents: 'none',
-            zIndex: 2,
-          }}
-        >
-          {/* Outer Corner Brackets (Tech HUD) */}
-          <svg className="absolute inset-0 w-full h-full text-emerald-500/10" viewBox="0 0 180 180" fill="none" stroke="currentColor" strokeWidth="0.75">
-            <path d="M 12,28 L 12,12 L 28,12" />
-            <path d="M 152,12 L 168,12 L 168,28" />
-            <path d="M 12,152 L 12,168 L 28,168" />
-            <path d="M 168,152 L 168,168 L 152,168" />
-          </svg>
-
-          {/* Telemetry HUD Labels (Flat inside 3D space) */}
-          <div className="absolute top-[12px] left-[14px] text-[6.5px] text-emerald-400/20 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
-            SYS.MODE: {isFingerDetected ? 'PPG_ACTIVE' : 'PPG_STANDBY'}
-          </div>
-          <div className="absolute top-[12px] right-[14px] text-[6.5px] text-emerald-400/20 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
-            WL: 660nm
-          </div>
-          <div className="absolute bottom-[12px] left-[14px] text-[6.5px] text-emerald-400/20 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
-            SENS: {isFingerDetected ? 'SIGNAL_LOCK' : 'SEARCH_SCAN'}
-          </div>
-          <div className="absolute bottom-[12px] right-[14px] text-[6.5px] text-emerald-400/20 tracking-wider" style={{ animation: 'pulseTelemetry 3s infinite' }}>
-            GAIN: {quality > 0 ? `${Math.round(quality)}%` : 'AUTO'}
-          </div>
-
-          {/* Central Circular Camera Viewport */}
-          <div 
-            className="absolute left-[20px] top-[20px] w-[140px] h-[140px] rounded-full overflow-hidden transition-all duration-700" 
-            style={{
-              border: isFingerDetected ? '1px solid rgba(34, 197, 94, 0.12)' : '1px solid rgba(245, 158, 11, 0.15)',
-              boxShadow: isFingerDetected 
-                ? '0 0 10px rgba(34, 197, 94, 0.1), inset 0 0 10px rgba(34, 197, 94, 0.08)' 
-                : '0 0 8px rgba(245, 158, 11, 0.08), inset 0 0 8px rgba(245, 158, 11, 0.05)',
-              backgroundColor: 'transparent',
-            }}
-          >
-            {/* CameraView with heavy blur filter, reduced saturation/brightness, and low opacity to smooth out finger/blood details */}
-            <div 
-              className="w-full h-full transition-all duration-700" 
-              style={{ 
-                filter: 'blur(24px) saturate(0.8) brightness(0.4)', 
-                opacity: isFingerDetected ? 0.08 : 0.02,
-                mixBlendMode: 'screen'
-              }}
-            >
-              <CameraView 
-                ref={cameraRef}
-                onStreamReady={onStreamReady}
-                isMonitoring={isCameraOn}
-              />
-            </div>
-            
-            {/* CRT scanlines overlay */}
-            <div 
-              className="absolute inset-0 pointer-events-none" 
-              style={{
-                background: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.15), rgba(0,0,0,0.15) 1px, transparent 1px, transparent 3px)',
-                opacity: 0.3
-              }}
-            />
-            
-            {/* Vignette overlay */}
-            <div 
-              className="absolute inset-0 pointer-events-none" 
-              style={{
-                background: 'radial-gradient(circle, rgba(0,0,0,0) 45%, rgba(0,0,0,0.85) 100%)'
-              }}
-            />
-            
-            {/* Spinning HUD Reticle Circles */}
-            <svg 
-              className="absolute inset-0 w-full h-full pointer-events-none" 
-              viewBox="0 0 140 140" 
-              fill="none" 
-              stroke="currentColor"
-            >
-              {/* Outer ticking ring (spinning clockwise) */}
-              <circle 
-                cx="70" 
-                cy="70" 
-                r="64" 
-                className={isFingerDetected ? 'text-emerald-500/5' : 'text-amber-500/10'}
-                strokeWidth="0.75" 
-                strokeDasharray="2 6" 
-                style={{
-                  transformOrigin: '70px 70px',
-                  animation: 'spinClockwise 15s linear infinite'
-                }}
-              />
-              
-              {/* Inner segmented tech ring (spinning counter-clockwise) */}
-              <circle 
-                cx="70" 
-                cy="70" 
-                r="56" 
-                className={isFingerDetected ? 'text-emerald-500/3' : 'text-amber-500/5'}
-                strokeWidth="1" 
-                strokeDasharray="40 12 5 12" 
-                style={{
-                  transformOrigin: '70px 70px',
-                  animation: 'spinCounterClockwise 10s linear infinite'
-                }}
-              />
-
-              {/* Cardinal ticks / Crosshair (static) */}
-              <path d="M 70 4 L 70 10 M 70 130 L 70 136 M 4 70 L 10 70 M 130 70 L 136 70" stroke={isFingerDetected ? 'rgba(34,197,94,0.06)' : 'rgba(245,158,11,0.12)'} strokeWidth="0.75" />
-            </svg>
-            
-            {/* Holographic Fingerprint Icon */}
-            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-              <svg
-                viewBox="0 0 64 64"
-                className={`w-14 h-14 transition-all duration-700 ${
-                  isFingerDetected 
-                    ? 'opacity-0 scale-75' 
-                    : 'text-emerald-400/25 animate-pulse'
-                }`}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.2"
-                strokeLinecap="round"
-                style={{
-                  filter: isFingerDetected ? 'none' : 'drop-shadow(0 0 6px rgba(52,211,153,0.2))'
-                }}
-              >
-                <path d="M20 50 C20 42, 24 38, 32 38 C40 38, 44 42, 44 50" />
-                <path d="M16 50 C16 38, 22 32, 32 32 C42 32, 48 38, 48 50" />
-                <path d="M12 50 C12 34, 20 26, 32 26 C44 26, 52 34, 52 50" />
-                <path d="M8 50 C8 30, 18 20, 32 20 C46 20, 56 30, 56 50" />
-                <path d="M24 50 C24 46, 28 44, 32 44 C36 44, 40 46, 40 50" />
-                <path d="M28 50 C28 48, 30 47, 32 47 C34 47, 36 48, 36 50" />
-                <path d="M32 50 L32 49" />
-              </svg>
-              
-              {/* Rotating target ring */}
-              {!isFingerDetected && (
-                <div 
-                  className="absolute w-20 h-20 border border-dashed border-emerald-400/10 rounded-full animate-spin" 
-                  style={{ animationDuration: '20s' }}
-                />
-              )}
-            </div>
-            
-            {/* Laser scanning line */}
-            {!isFingerDetected && (
-              <div 
-                className="absolute left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-emerald-400/50 to-transparent shadow-[0_0_4px_rgba(52,211,153,0.4)]"
-                style={{
-                  top: '50%',
-                  animation: 'scan 3.5s infinite ease-in-out'
-                }}
-              />
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Subtle Pointer HUD Card */}
-      {isCameraOn && layoutInfo && (
-        <div 
-          className="absolute left-1/2 -translate-x-1/2 pointer-events-none flex flex-col items-center"
-          style={{
-            top: layoutInfo.floorCenterY - 110,
-            width: '260px',
-            transition: 'top 0.3s ease-in-out',
-            zIndex: 4,
-          }}
-        >
-          <div 
-            className={`border px-3 py-1.2 rounded-xl font-mono text-[8.5px] tracking-wider text-center transition-all duration-500 backdrop-blur-sm shadow-md ${
-              isFingerDetected 
-                ? (diagnostics?.acquisitionStage === 'READY' 
-                    ? 'bg-emerald-950/30 border-emerald-500/15 text-emerald-400/60' 
-                    : 'bg-cyan-950/30 border-cyan-500/15 text-cyan-400/60')
-                : 'bg-amber-950/30 border-amber-500/15 text-amber-400/60'
-            }`}
-          >
-            {isFingerDetected ? (
-              diagnostics?.acquisitionStage === 'READY' ? (
-                <div className="flex items-center gap-1.5 justify-center">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400/60 animate-ping" />
-                  <span>ANALIZANDO SEÑAL CARDIACA</span>
-                </div>
-              ) : (
-                <div className="flex items-center gap-1.5 justify-center">
-                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400/60 animate-pulse" />
-                  <span>ESTABILIZANDO CONTACTO...</span>
-                </div>
-              )
-            ) : (
-              <div className="flex items-center gap-1.5 justify-center animate-pulse">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400/60 animate-ping" />
-                <span>CUBRE LA CÁMARA TRASERA CON TU DEDO</span>
-              </div>
-            )}
-          </div>
-          <div className="w-[1px] h-[35px] border-l border-dashed border-slate-600/20 mt-1" />
-        </div>
-      )}
-
-      {/* Capa de señal: grillas + onda PPG, sin máscara, opacidad plena. */}
-      <canvas
-        ref={waveCanvasRef}
-        className="pointer-events-none absolute inset-0 w-full h-full"
-        style={{ zIndex: 3 }}
       />
       <PulseIndicator showPulse={showPulse} />
       <ActionButtons
