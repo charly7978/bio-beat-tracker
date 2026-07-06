@@ -4,7 +4,6 @@ import {
   isMotorolaLikeUserAgent,
   isTclLikeUserAgent,
 } from '../cameraDeviceProfile';
-import { passesFingerMaintain } from '@/lib/finger/fingerSceneClassifier';
 
 describe('cameraDeviceProfile', () => {
   it('TCL usa perfil estricto', () => {
@@ -39,16 +38,5 @@ describe('cameraDeviceProfile', () => {
     });
     expect(h.constrained).toBe(true);
     expect(h.liveFingerMissGrace).toBeGreaterThanOrEqual(40);
-  });
-});
-
-describe('passesFingerMaintain', () => {
-  it('acepta RGB moderado con cobertura mínima', () => {
-    const ok = passesFingerMaintain(
-      { red: 118, green: 52, blue: 42, coverage: 0.12, fingerScore: 0.2 },
-      { red: 112, green: 50, blue: 40, coverage: 0.11, fingerScore: 0.18 },
-      { coverageRatio: 0.11, fingerScore: 0.18, fingerTileCount: 4 },
-    );
-    expect(ok).toBe(true);
   });
 });

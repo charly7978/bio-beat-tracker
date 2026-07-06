@@ -1,5 +1,5 @@
 import { CalibrationInfo } from '../../types/measurements';
-import type { AnthropometricProfile } from '@/lib/vitals/pwaPhysiologicalBpEngine';
+import type { AnthropometricProfile } from './BloodPressureProcessor';
 
 export type CalibrationType = 'SPO2' | 'BP' | 'DEVICE' | 'PPG_BASELINE';
 

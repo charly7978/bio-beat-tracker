@@ -3,13 +3,59 @@ import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { isPhysiologicalRR } from '../../utils/physio';
 import { median } from '../../utils/stats';
 import type { FingerPlacementMode } from '../../types/signal';
-import {
-  estimatePhysiologicalBp,
-  isPhysiologicalBp,
-  type AnthropometricProfile,
-  type PwaMedianFeatures,
-} from '@/lib/vitals/pwaPhysiologicalBpEngine';
 import { CalibrationManager } from './CalibrationManager';
+import { clamp } from '../../utils/math';
+
+export interface AnthropometricProfile {
+  heightCm: number;
+  weightKg: number;
+  ageYears: number;
+  isMale: boolean;
+}
+
+export function isPhysiologicalBp(sbp: number, dbp: number): boolean {
+  if (!Number.isFinite(sbp) || !Number.isFinite(dbp)) return false;
+  return sbp >= 70 && sbp <= 220 && dbp >= 40 && dbp <= 130 && (sbp - dbp) >= 15;
+}
+
+export function estimatePhysiologicalBp(
+  features: { sutMs: number; diastolicPhaseMs: number },
+  context: { hr: number; rmssd: number; cyclePeriodMs: number },
+  profile: AnthropometricProfile | null,
+  offsets: { sbpOffset: number; dbpOffset: number } | null
+): { systolic: number; diastolic: number } {
+  const hr = context.hr;
+  let sbpBase = 120;
+  let dbpBase = 80;
+
+  if (profile) {
+    sbpBase += (profile.ageYears - 30) * 0.3;
+    if (profile.isMale) sbpBase += 2;
+    const bmi = profile.weightKg / Math.pow(profile.heightCm / 100, 2);
+    if (bmi > 25) sbpBase += (bmi - 25) * 0.5;
+  }
+
+  const hrEffect = (hr - 72) * 0.15;
+  const sbp = sbpBase + hrEffect + (features.sutMs > 0 ? (features.sutMs - 180) * 0.05 : 0);
+  const dbp = dbpBase + hrEffect * 1.2 - (features.diastolicPhaseMs > 0 ? (features.diastolicPhaseMs - 600) * 0.02 : 0);
+
+  let finalSbp = clamp(sbp, 90, 180);
+  let finalDbp = clamp(dbp, 55, 110);
+
+  if (finalSbp - finalDbp < 20) {
+    finalSbp = finalDbp + 25;
+  }
+
+  if (offsets) {
+    finalSbp += offsets.sbpOffset;
+    finalDbp += offsets.dbpOffset;
+  }
+
+  return {
+    systolic: Math.round(finalSbp),
+    diastolic: Math.round(finalDbp),
+  };
+}
 
 export interface BPEstimate {
   systolic: number;

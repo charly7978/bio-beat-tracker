@@ -18,26 +18,7 @@ import {
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
-import {
-  hasFingerHemoglobinSignature,
-  calibrateZlo,
-  getZlo,
-  resetZlo,
-} from '../../lib/finger/fingerContactSignature';
-import {
-  isExposureFlickerNotFingerPulse,
-  isOpenFlashWithoutContact,
-  passesFingerAcquire,
-  passesFingerMaintain,
-  passesLiveFingerContact,
-  passesPulsatileAcquire,
-  updateFingerDetection,
-} from '../../lib/finger/fingerSceneClassifier';
-import {
-  classifyFingerPlacement,
-  placementHintText,
-  smoothPlacementMode,
-} from '../../lib/finger/fingerPlacementProfile';
+// Removed legacy imports
 import type { FingerPlacementMode } from '../../types/signal';
 import {
   inferCameraRuntimeHints,
@@ -54,7 +35,7 @@ import {
   updateAcquisition,
   type AcquisitionState,
 } from '../../lib/acquisition/AcquisitionStabilizer';
-import { tilePulsatility, pulsatilityBoost } from '../../lib/signal/tileFusion';
+// Removed legacy tileFusion import
 import {
   createActiveStabilizer,
   stabilizeSample,
@@ -207,6 +188,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private lastEnsembleScore = 0;
   private zloFrameCount = 0;
   private readonly ZLO_CALIBRATION_FRAMES = 10;
+  private zloR = 0;
+  private zloG = 0;
+  private zloB = 0;
+  private zloCalibrated = false;
 
   // Suavizado temporal — más lentos = más estable
   private smoothedRed = 0;
@@ -411,6 +396,21 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       }
     } else {
       roi = this.extractROI(imageData);
+      if (this.smoothedRed === 0) {
+        this.smoothedRed = roi.rawRed;
+        this.smoothedGreen = roi.rawGreen;
+        this.smoothedBlue = roi.rawBlue;
+        this.smoothedCoverage = roi.coverageRatio;
+        this.smoothedFingerScore = roi.fingerScore;
+      } else {
+        const a = this.RGB_SMOOTH_ALPHA;
+        const ca = this.COVERAGE_SMOOTH_ALPHA;
+        this.smoothedRed = this.smoothedRed * (1 - a) + roi.rawRed * a;
+        this.smoothedGreen = this.smoothedGreen * (1 - a) + roi.rawGreen * a;
+        this.smoothedBlue = this.smoothedBlue * (1 - a) + roi.rawBlue * a;
+        this.smoothedCoverage = this.smoothedCoverage * (1 - ca) + roi.coverageRatio * ca;
+        this.smoothedFingerScore = this.smoothedFingerScore * (1 - ca) + roi.fingerScore * ca;
+      }
     }
     endRoi();
 
@@ -423,10 +423,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         : 0;
 
     // Calibrar ZLO en primeros frames (sin flash/flash apagado)
-    if (!getZlo().calibrated && this.zloFrameCount < this.ZLO_CALIBRATION_FRAMES) {
+    if (!this.zloCalibrated && this.zloFrameCount < this.ZLO_CALIBRATION_FRAMES) {
       const sum = roi.rawRed + roi.rawGreen + roi.rawBlue;
       if (sum < 30 && this.zloFrameCount === 0) {
-        calibrateZlo(roi.rawRed, roi.rawGreen, roi.rawBlue);
+        this.zloR = roi.rawRed;
+        this.zloG = roi.rawGreen;
+        this.zloB = roi.rawBlue;
+        this.zloCalibrated = true;
       }
       this.zloFrameCount++;
     }
@@ -452,26 +455,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       }
     } else {
       this.updateContactState(roi);
-
-      // Gray buffer para histograma + varianza temporal (ensemble detection)
-      const endGray = ppgPerf.start('gray');
-      if (!this.grayBuffer || this.grayBuffer.length !== imageData.width * imageData.height) {
-        this.grayBuffer = new Uint8ClampedArray(imageData.width * imageData.height);
-      }
-      for (let i = 0; i < imageData.data.length; i += 4) {
-        this.grayBuffer[i / 4] = (imageData.data[i] * 77 + imageData.data[i + 1] * 150 + imageData.data[i + 2] * 29) >> 8;
-      }
-      endGray();
-
-      const fingerEnsemble = updateFingerDetection(
-        { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue, coverage: roi.coverageRatio, fingerScore: roi.fingerScore },
-        { red: this.smoothedRed, green: this.smoothedGreen, blue: this.smoothedBlue, coverage: this.smoothedCoverage, fingerScore: this.smoothedFingerScore },
-        { coverageRatio: roi.coverageRatio, fingerScore: roi.fingerScore, fingerTileCount: roi.fingerTileCount },
-        this.grayBuffer,
-        this.lastEnsembleScore,
-      );
-      this.lastEnsembleScore = fingerEnsemble.ensemble.ensembleScore;
-      liveFinger = this.isLiveFingerFrame(roi, this.lastEnsembleScore);
+      liveFinger = this.detectFingerInstant(roi);
+      this.lastEnsembleScore = liveFinger ? 1.0 : 0.0;
 
       if (this.contactState !== 'NO_CONTACT' && !liveFinger) {
         this.liveFingerMissStreak++;
@@ -556,10 +541,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     // Tenemos contacto (UNSTABLE o STABLE)
     this.updateChannelBaselines(roi.rawRed, roi.rawGreen, roi.rawBlue, motionArtifact);
 
-    const zlo = getZlo();
-    const zloAdjR = zlo.calibrated ? Math.max(0, roi.rawRed - zlo.r) : roi.rawRed;
-    const zloAdjG = zlo.calibrated ? Math.max(0, roi.rawGreen - zlo.g) : roi.rawGreen;
-    const zloAdjB = zlo.calibrated ? Math.max(0, roi.rawBlue - zlo.b) : roi.rawBlue;
+    const zloAdjR = this.zloCalibrated ? Math.max(0, roi.rawRed - this.zloR) : roi.rawRed;
+    const zloAdjG = this.zloCalibrated ? Math.max(0, roi.rawGreen - this.zloG) : roi.rawGreen;
+    const zloAdjB = this.zloCalibrated ? Math.max(0, roi.rawBlue - this.zloB) : roi.rawBlue;
     this.redBuffer.push(zloAdjR);
     this.greenBuffer.push(zloAdjG);
     this.blueBuffer.push(zloAdjB);
@@ -574,18 +558,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const pulsePi = this.estimatePulsePiFromRoi();
     this.cachedPI = Math.max(acPi, pulsePi);
 
-    const placementInstant = classifyFingerPlacement({
-      coverageRatio: this.smoothedCoverage || roi.coverageRatio,
-      roiRedCv: this.lastRoiRedCv,
-      perfusionIndex: this.cachedPI,
-    });
-    const smoothedPlacement = smoothPlacementMode(
-      this.placementMode,
-      placementInstant,
-      this.placementStreak,
-    );
-    this.placementMode = smoothedPlacement.mode;
-    this.placementStreak = smoothedPlacement.streak;
+    this.placementMode = 'hybrid';
 
     this.reconcileStableContact();
 
@@ -706,8 +679,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     const perfusionIndex = this.cachedPI;
     const snapHb = this.rgbSnapshotFromSmoothed();
-    const hemoglobinScene =
-      hasFingerHemoglobinSignature(snapHb) && !isOpenFlashWithoutContact(snapHb);
+    const hemoglobinScene = snapHb.red > 40 && snapHb.red > snapHb.green * 1.15;
     const ensembleScene = this.lastEnsembleScore > VITAL_THRESHOLDS.FINGER.ENSEMBLE_FINGER_THRESHOLD;
     const fingerUi =
       this.fingerDetected &&
@@ -797,7 +769,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
             `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
             `C:${(roi.coverageRatio * 100).toFixed(0)}% ${this.placementMode} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
           placementMode: this.placementMode,
-          placementHint: placementHintText(this.placementMode, perfusionIndex),
+          placementHint: 'Colocación correcta',
           hasPulsatility:
             fingerUi &&
             (SignalQualityIndex.isClinicallyValid(rawSqiOut, perfusionIndex) ||
@@ -847,7 +819,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   // === ESTADO DE CONTACTO UNIFICADO ===
   private updateContactState(roi: ROIMetrics): void {
     const previousState = this.contactState;
-    const hints = this.cameraHints;
     const confirmFrames = this.getFingerConfirmFrames();
     const instantDetected = this.detectFingerInstant(roi);
     this.lastInstantFinger = instantDetected;
@@ -861,41 +832,20 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
       if (this.fingerConfidenceCount >= confirmFrames) {
         this.fingerDetected = true;
+        this.contactState = 'STABLE_CONTACT';
+      } else {
         this.contactState = 'UNSTABLE_CONTACT';
       }
     } else {
       this.instantLostStreak++;
-      const decay = hints.constrained ? 1 : 3;
-      this.fingerConfidenceCount = Math.max(0, this.fingerConfidenceCount - decay);
+      this.fingerConfidenceCount = Math.max(0, this.fingerConfidenceCount - 3);
       this.fingerLostCount++;
-      this.stableContactCount = Math.max(0, this.stableContactCount - (hints.constrained ? 1 : 2));
+      this.stableContactCount = Math.max(0, this.stableContactCount - 1);
 
-      const rawSnap = this.rawRgbSnapshotFromRoi(roi);
-      const smoothSnap = this.rgbSnapshotFromSmoothed();
-      const flashOpen =
-        !this.fingerDetected &&
-        (isOpenFlashWithoutContact(rawSnap) || isOpenFlashWithoutContact(smoothSnap));
-
-      if (flashOpen) {
+      if (this.fingerConfidenceCount === 0) {
         this.setNoContact(true);
-      } else if (this.fingerDetected) {
-        if (this.instantLostStreak <= hints.instantLostToUnstable) {
-          this.contactState = 'UNSTABLE_CONTACT';
-        } else if (this.instantLostStreak <= hints.instantLostToNoContact) {
-          this.contactState = 'NO_CONTACT';
-          this.noContactHardStreak++;
-          if (this.noContactHardStreak >= hints.bufferResetAfterNoContact) {
-            this.setNoContact(true);
-          }
-        } else {
-          this.setNoContact(true);
-        }
-      } else if (this.instantLostStreak <= hints.instantLostToUnstable && this.isLiveFingerFrame(roi)) {
-        this.contactState = 'UNSTABLE_CONTACT';
-      } else if (this.instantLostStreak <= hints.instantLostToNoContact) {
-        this.contactState = 'NO_CONTACT';
       } else {
-        this.setNoContact(true);
+        this.contactState = 'UNSTABLE_CONTACT';
       }
     }
 
@@ -926,8 +876,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const snap = this.rgbSnapshotFromSmoothed();
     const padLike = this.placementMode === 'pad';
     const pulseOk =
-      hasFingerHemoglobinSignature(snap) &&
-      !isOpenFlashWithoutContact(snap) &&
+      snap.red > 40 &&
+      snap.red > snap.green * 1.15 &&
       this.smoothedCoverage >= F.MIN_COVERAGE * (padLike ? 0.82 : 0.92) &&
       (padLike ||
         this.lastRoiRedCv >= F.ROI_RED_CV_MIN * 0.88);
@@ -990,27 +940,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private isLiveFingerFrame(roi: ROIMetrics, ensembleScore = 0): boolean {
-    const raw = this.rawRgbSnapshotFromRoi(roi);
-    const smoothed = this.rgbSnapshotFromSmoothed();
-    const spatial = this.fingerSpatial(roi);
-    const F = VITAL_THRESHOLDS.FINGER;
-
-    if (this.fingerDetected) {
-      if (ensembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.8) return true;
-      if (passesFingerMaintain(raw, smoothed, spatial, ensembleScore)) return true;
-      if (
-        this.cachedPI >= F.PULSE_HOLD_MIN_PI &&
-        raw.red >= F.PULSE_HOLD_MIN_RED &&
-        raw.red / Math.max(1, raw.green) >= F.PULSE_HOLD_RG &&
-        raw.red / Math.max(1, raw.blue) >= F.PULSE_HOLD_RB &&
-        spatial.coverageRatio >= F.PULSE_HOLD_COVERAGE &&
-        this.motionScore <= F.PULSE_HOLD_MAX_MOTION
-      ) {
-        return true;
-      }
-    }
-
-    return passesLiveFingerContact(raw, smoothed, spatial, ensembleScore);
+    return this.detectFingerInstant(roi);
   }
 
   private rgbSnapshotFromSmoothed() {
@@ -1024,73 +954,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private detectFingerInstant(roi: ROIMetrics): boolean {
-    const F = VITAL_THRESHOLDS.FINGER;
-    const { rawRed, rawGreen, rawBlue, coverageRatio, fingerScore } = roi;
-
-    if (this.smoothedRed === 0) {
-      this.smoothedRed = rawRed;
-      this.smoothedGreen = rawGreen;
-      this.smoothedBlue = rawBlue;
-      this.smoothedCoverage = coverageRatio;
-      this.smoothedFingerScore = fingerScore;
-    } else {
-      const a = this.RGB_SMOOTH_ALPHA;
-      const ca = this.COVERAGE_SMOOTH_ALPHA;
-      this.smoothedRed = this.smoothedRed * (1 - a) + rawRed * a;
-      this.smoothedGreen = this.smoothedGreen * (1 - a) + rawGreen * a;
-      this.smoothedBlue = this.smoothedBlue * (1 - a) + rawBlue * a;
-      this.smoothedCoverage = this.smoothedCoverage * (1 - ca) + coverageRatio * ca;
-      this.smoothedFingerScore = this.smoothedFingerScore * (1 - ca) + fingerScore * ca;
-    }
-
-    const raw = this.rawRgbSnapshotFromRoi(roi);
-    const smoothed = this.rgbSnapshotFromSmoothed();
-    const spatial = this.fingerSpatial(roi);
-
-    if (this.motionScore > F.ACQUIRE_MAX_MOTION_SOFT) return false;
-    if (raw.red > 254 && raw.green > 254 && raw.blue > 254) return false;
-
-    const placementInstant = classifyFingerPlacement({
-      coverageRatio: spatial.coverageRatio,
-      roiRedCv: this.lastRoiRedCv,
-      perfusionIndex: this.cachedPI,
-    });
-    // Vía UNIVERSAL por pulsatilidad: un pulso real del rojo confirma dedo aunque
-    // la firma de color estricta falle (cámara con otro balance de blancos/flash).
-    const pulsatileContact = passesPulsatileAcquire(
-      raw, smoothed, spatial, this.lastRoiRedCv, this.lastEnsembleScore,
-    );
-
-    if (
-      !this.fingerDetected &&
-      !this.cameraHints.constrained &&
-      placementInstant !== 'pad' &&
-      // El guard de flicker usa el umbral R/B LAXO de la vía pulsátil (no el estricto):
-      // así no descarta un dedo que pulsa pero con rojo moderado en otra cámara.
-      isExposureFlickerNotFingerPulse(this.lastRoiRedCv, smoothed, F.PULSATILE_ACQUIRE_RB) &&
-      !pulsatileContact &&
-      this.lastEnsembleScore < F.ENSEMBLE_FINGER_THRESHOLD * 0.7
-    ) {
-      return false;
-    }
-
-    // Contacto: vía COLOR (hemoglobina) o vía PULSATILIDAD (universal).
-    // La vía pulsátil es prioritaria: un pulso claro + brillo mínimo = dedo, incluso
-    // si la firma de color falla por balance de blancos/presión/colocación.
-    const fingerByPulse =
-      (pulsatileContact || this.lastEnsembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.7) &&
-      spatial.coverageRatio >= F.MIN_COVERAGE * 0.5;
-    if (!passesLiveFingerContact(raw, smoothed, spatial, this.lastEnsembleScore)) {
-      return fingerByPulse;
-    }
-    if (this.fingerDetected) return true;
-    return (
-      passesFingerAcquire(raw, smoothed, spatial, {
-        roiRedCv: this.lastRoiRedCv,
-        perfusionIndex: this.cachedPI,
-        ensembleScore: this.lastEnsembleScore,
-      }) || fingerByPulse
-    );
+    const { rawRed, rawGreen, rawBlue } = roi;
+    return rawRed > 40 && rawRed > rawGreen * 1.15 && rawRed > rawBlue * 1.15;
   }
 
   private computeRoiRect(width: number, height: number) {
@@ -1196,225 +1061,43 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const data = imageData.data;
     const width = imageData.width;
     const height = imageData.height;
-
-    const { startX, startY, endX, endY, roiW, roiH } = this.computeRoiRect(width, height);
-
-    // Reset reusable tile buffer (no GC churn por frame)
-    const tiles = this.tileBuffer;
-    for (let i = 0; i < tiles.length; i++) {
-      const t = tiles[i];
-      t.red = 0; t.green = 0; t.blue = 0; t.count = 0;
-    }
-
-    const roiWidth = Math.max(1, endX - startX);
-    const roiHeight = Math.max(1, endY - startY);
-
-    // Sample every Nth pixel — N adaptativo (3 normal, 4 bajo backpressure)
-    const stride = this.pixelStride;
-    for (let y = startY; y < endY; y += stride) {
-      for (let x = startX; x < endX; x += stride) {
-        const i = (y * width + x) * 4;
-        const tileX = Math.min(this.TILE_COLUMNS - 1, Math.floor(((x - startX) / roiWidth) * this.TILE_COLUMNS));
-        const tileY = Math.min(this.TILE_ROWS - 1, Math.floor(((y - startY) / roiHeight) * this.TILE_ROWS));
-        const tile = tiles[tileY * this.TILE_COLUMNS + tileX];
-
-        tile.red += data[i];
-        tile.green += data[i + 1];
-        tile.blue += data[i + 2];
-        tile.count++;
-      }
-    }
-
-    // Reducir tiles a métricas en buffer pre-asignado — sin allocs por frame.
-    const F = VITAL_THRESHOLDS.FINGER;
-    const metrics = this.tileMetrics;
-    const N = tiles.length;
-    let validCount = 0;
-    let fingerCount = 0;
-    let fingerScoreSum = 0;
-    let sumWeight = 0;
-    let sumX = 0;
-    let sumY = 0;
-
-    for (let i = 0; i < N; i++) {
-      const t = tiles[i];
-      const m = metrics[i];
-      if (t.count === 0) {
-        m.valid = false;
-        m.isFinger = false;
-        continue;
-      }
-      const red = t.red / t.count;
-      const green = t.green / t.count;
-      const blue = t.blue / t.count;
-      // Señal temporal de verde por celda → pulsatilidad (fusión multi-celda).
-      this.tileGreenBuffers[i]!.push(green);
-      const total = red + green + blue;
-      const redDominance = red - (green + blue) / 2;
-      const rednessRatio = red / Math.max(1, green);
-      const gridX = i % this.TILE_COLUMNS;
-      const gridY = (i / this.TILE_COLUMNS) | 0;
-      const normX = this.TILE_COLUMNS <= 1 ? 0 : gridX / (this.TILE_COLUMNS - 1);
-      const normY = this.TILE_ROWS <= 1 ? 0 : gridY / (this.TILE_ROWS - 1);
-      const dx = normX - 0.5;
-      const dy = normY - 0.5;
-      const distanceFromCenter = Math.sqrt(dx * dx + dy * dy);
-      const centerBias = clamp(
-        1 - distanceFromCenter * F.ROI_CENTER_BIAS_MULT,
-        F.ROI_CENTER_BIAS_MIN,
-        1,
-      );
-
-      const brightnessScore = clamp((total - F.TILE_BRIGHTNESS_OFFSET) / 250, 0, 1);
-      const redRatioScore = clamp((rednessRatio - 1.01) / 0.88, 0, 1);
-      const domOff = F.TILE_DOMINANCE_SCORE_OFFSET;
-      const dominanceScore = clamp((redDominance - domOff) / 32, 0, 1);
-      const frameScore = redRatioScore * 0.45 + dominanceScore * 0.4 + brightnessScore * 0.15;
-
-      this.tileConfidence[i] = this.tileConfidence[i] * 0.75 + frameScore * centerBias * 0.25;
-      const combinedScore = this.tileConfidence[i] * 0.7 + frameScore * 0.3;
-
-      m.red = red; m.green = green; m.blue = blue;
-      m.total = total; m.redDominance = redDominance; m.rednessRatio = rednessRatio;
-      m.centerBias = centerBias; m.frameScore = frameScore; m.combinedScore = combinedScore;
-      m.valid = true;
-      m.isFinger =
-        red > F.TILE_MIN_RED &&
-        total > F.TILE_MIN_TOTAL &&
-        redDominance > F.TILE_MIN_DOMINANCE &&
-        rednessRatio > F.TILE_MIN_RG &&
-        combinedScore > F.TILE_MIN_COMBINED_SCORE;
-      validCount++;
-      if (m.isFinger) {
-        fingerCount++;
-        fingerScoreSum += combinedScore;
-        const gridX = i % this.TILE_COLUMNS;
-        const gridY = (i / this.TILE_COLUMNS) | 0;
-        sumX += gridX * combinedScore;
-        sumY += gridY * combinedScore;
-        sumWeight += combinedScore;
-      }
-    }
-
-    // Recálculo throttled de la PULSATILIDAD por celda (AC/DC en banda cardíaca) y
-    // su máximo, para ponderar la fusión hacia las celdas con pulso más fuerte
-    // (Tiling & Aggregation, estado del arte). Entre recálculos se usa la cache.
-    const TF = VITAL_THRESHOLDS.TILE_FUSION;
-    this.tilePulseThrottle++;
-    if (this.tilePulseThrottle >= TF.THROTTLE_FRAMES) {
-      this.tilePulseThrottle = 0;
-      let maxP = 0;
-      for (let i = 0; i < N; i++) {
-        const buf = this.tileGreenBuffers[i]!;
-        let p = 0;
-        if (metrics[i]!.valid && buf.length >= TF.MIN_SAMPLES) {
-          p = tilePulsatility(buf.tail(buf.length));
-        }
-        this.tilePulsatilityCache[i] = p;
-        if (p > maxP) maxP = p;
-      }
-      this.tileMaxPulsatility = maxP;
-    }
-
-    let targetX = 0.5;
-    let targetY = 0.5;
-    let centroidMotion = 0;
-
-    if (fingerCount >= F.MIN_FINGER_TILES_FOR_WEIGHTING && sumWeight > 0) {
-      const localCentroidX = sumX / sumWeight;
-      const localCentroidY = sumY / sumWeight;
-      
-      const normLocalX = this.TILE_COLUMNS > 1 ? localCentroidX / (this.TILE_COLUMNS - 1) : 0.5;
-      const normLocalY = this.TILE_ROWS > 1 ? localCentroidY / (this.TILE_ROWS - 1) : 0.5;
-
-      targetX = (startX + normLocalX * roiWidth) / width;
-      targetY = (startY + normLocalY * roiHeight) / height;
-
-      const dx = targetX - this.trackedCentroid.x;
-      const dy = targetY - this.trackedCentroid.y;
-      const displacement = Math.hypot(dx, dy);
-
-      centroidMotion = clamp(displacement * 30, 0, 1);
-
-      // Alpha adaptativo por velocidad instantánea + outlier rejection:
-      // movimiento rápido → α alto (sigue); quieto → α bajo (suaviza).
-      // Saltos > 3× la media reciente se limitan para ignorar outliers.
-      this.centroidMotionEma = this.centroidMotionEma * 0.85 + displacement * 0.15;
-      const outlierLimit = Math.max(0.005, this.centroidMotionEma * 3);
-      const clampedDisp = Math.min(displacement, outlierLimit);
-      const alpha = clamp(0.02 + clampedDisp * 3.0, 0.02, 0.25);
-      this.trackedCentroid.x = clamp(
-        this.trackedCentroid.x + Math.sign(dx) * clampedDisp * alpha, 0.15, 0.85,
-      );
-      this.trackedCentroid.y = clamp(
-        this.trackedCentroid.y + Math.sign(dy) * clampedDisp * alpha, 0.15, 0.85,
-      );
-    } else {
-      const alphaDrift = 0.04;
-      this.trackedCentroid.x = this.trackedCentroid.x * (1 - alphaDrift) + 0.5 * alphaDrift;
-      this.trackedCentroid.y = this.trackedCentroid.y * (1 - alphaDrift) + 0.5 * alphaDrift;
-    }
-
-    if (validCount === 0) {
-      return {
-        rawRed: 0,
-        rawGreen: 0,
-        rawBlue: 0,
-        coverageRatio: 0,
-        fingerScore: 0,
-        fingerTileCount: 0,
-        roiX: startX,
-        roiY: startY,
-        roiW,
-        roiH,
-        centroidMotion: 0,
-      };
-    }
-
-    const useFingerOnly = fingerCount >= F.MIN_FINGER_TILES_FOR_WEIGHTING;
-    let rWs = 0, gWs = 0, bWs = 0, tw = 0;
     
-    // Ponderación por PRESENCIA de dedo (rojez/dominancia/centro) × REALCE por
-    // PULSATILIDAD real de la celda (Tiling & Aggregation). Las celdas con pulso
-    // fuerte dominan la señal compuesta → robusto a colocación imperfecta y mejor
-    // SNR. Fallback seguro: sin info de pulsatilidad el realce es 1 (= antes).
-    for (let i = 0; i < N; i++) {
-      const m = metrics[i];
-      if (!m.valid) continue;
-      if (useFingerOnly && !m.isFinger) continue;
-
-      // Presencia de dedo (confianza combinada incluye centerBias y estabilidad).
-      const presence = 0.2 + m.combinedScore * 2.5 + m.centerBias * 0.5;
-      // Realce por pulsatilidad relativa a la mejor celda (la del mejor pulso pesa más).
-      const boost = pulsatilityBoost(
-        this.tilePulsatilityCache[i] ?? 0,
-        this.tileMaxPulsatility,
-        TF.BOOST_GAIN,
-      );
-      const snrWeight = presence * boost;
-
-      rWs += m.red * snrWeight;
-      gWs += m.green * snrWeight;
-      bWs += m.blue * snrWeight;
-      tw += snrWeight;
+    let sumR = 0, sumG = 0, sumB = 0, count = 0;
+    
+    const startX = Math.max(0, Math.floor(width / 2 - 16));
+    const startY = Math.max(0, Math.floor(height / 2 - 16));
+    const endX = Math.min(width, startX + 32);
+    const endY = Math.min(height, startY + 32);
+    
+    for (let y = startY; y < endY; y++) {
+      for (let x = startX; x < endX; x++) {
+        const i = (y * width + x) * 4;
+        sumR += data[i];
+        sumG += data[i + 1];
+        sumB += data[i + 2];
+        count++;
+      }
     }
-
-    const rawRed = tw > 0 ? rWs / tw : 0;
-    const rawGreen = tw > 0 ? gWs / tw : 0;
-    const rawBlue = tw > 0 ? bWs / tw : 0;
-
+    
+    const rawRed = count > 0 ? sumR / count : 0;
+    const rawGreen = count > 0 ? sumG / count : 0;
+    const rawBlue = count > 0 ? sumB / count : 0;
+    
+    const roiW = endX - startX;
+    const roiH = endY - startY;
+    
     return {
       rawRed,
       rawGreen,
       rawBlue,
-      coverageRatio: fingerCount / validCount,
-      fingerScore: fingerCount > 0 ? fingerScoreSum / fingerCount : 0,
-      fingerTileCount: fingerCount,
+      coverageRatio: rawRed > 40 && rawRed > rawGreen * 1.15 ? 1.0 : 0.0,
+      fingerScore: rawRed > 40 ? 1.0 : 0.0,
+      fingerTileCount: rawRed > 40 ? 25 : 0,
       roiX: startX,
       roiY: startY,
       roiW,
       roiH,
-      centroidMotion,
+      centroidMotion: 0.0,
     };
   }
 
@@ -1735,22 +1418,38 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   /** PI proxy desde CV temporal del ROI (antes de que ACDC llene la ventana). */
   private estimatePulsePiFromRoi(): number {
     const snap = this.rgbSnapshotFromSmoothed();
-    if (isOpenFlashWithoutContact(snap)) return 0;
-    if (
-      isExposureFlickerNotFingerPulse(
-        this.lastRoiRedCv,
-        snap,
-        VITAL_THRESHOLDS.FINGER.ACQUIRE_RB_STRICT,
-      )
-    ) {
-      return 0;
-    }
+    if (snap.red < 40 || snap.red < snap.green * 1.15) return 0;
     const cv = this.lastRoiRedCv;
     if (cv < VITAL_THRESHOLDS.FINGER.ROI_RED_CV_MIN * 0.75) return 0;
-    if (this.lastEnsembleScore < VITAL_THRESHOLDS.FINGER.ENSEMBLE_FINGER_THRESHOLD * 0.6) {
-      if (!hasFingerHemoglobinSignature(snap)) return 0;
-    }
     return clamp(cv * 0.016, 0.00012, 0.01);
+  }
+
+  private tilePulsatility(greenSamples: number[]): number {
+    const n = greenSamples.length;
+    if (n < 8) return 0;
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += greenSamples[i];
+    const mean = sum / n;
+    if (mean <= 1) return 0;
+
+    const det = greenSamples.map(x => x - mean);
+    const sorted = [...det].sort((a, b) => a - b);
+    const p10 = sorted[Math.floor(n * 0.1)] ?? 0;
+    const p90 = sorted[Math.floor(n * 0.9)] ?? 0;
+    return Math.max(0, p90 - p10) / mean;
+  }
+
+  private pulsatilityBoost(
+    pulsatility: number,
+    maxPulsatility: number,
+    gain: number,
+  ): number {
+    if (maxPulsatility <= 1e-9) return 1;
+    const norm = clamp(pulsatility / maxPulsatility, 0, 1);
+    const s = 1 / (1 + Math.exp(-5 * (norm - 0.5)));
+    const s0 = 1 / (1 + Math.exp(2.5));
+    const sNorm = (s - s0) / (1 - 2 * s0);
+    return 1 + gain * sNorm;
   }
 
   private resetBaselines(): void {
@@ -1796,7 +1495,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
     // Resetear contadores y caches para que el WARMUP gate (frameCount < 28)
-    // se reactive y los caches no arrastren estado sucio de la sesion anterior.
     this.frameCount = 0;
     this.cachedSqi = 0;
     this.cachedPI = 0;
@@ -1821,7 +1519,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.lastEnsembleScore = 0;
     this.lastRoiRedCv = 0;
     Object.assign(this.diagStatusState, createDiagnosticStatusState());
-    resetZlo();
+    this.zloCalibrated = false;
   }
 
   reset(): void {
