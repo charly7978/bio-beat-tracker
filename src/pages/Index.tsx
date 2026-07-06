@@ -268,6 +268,48 @@ const Index = () => {
     return () => clearInterval(interval);
   }, [session.isMonitoring, isDebugMode, lastSignal?.cortexMetrics]);
 
+  // Speech synthesis for AI Guidance
+  const prevContactStateRef = useRef<string>("");
+  const lastSpeakTimeRef = useRef<number>(0);
+  
+  useEffect(() => {
+    if (!session.isMonitoring || !lastSignal) {
+      prevContactStateRef.current = "";
+      return;
+    }
+
+    const cs = lastSignal.contactState;
+    const isMotion = lastSignal.motionArtifact;
+    const now = Date.now();
+    
+    // Throttle speech outputs to avoid overlapping speech queues (min 4s between messages)
+    if (now - lastSpeakTimeRef.current < 4000) return;
+
+    const speak = (text: string) => {
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'es-ES';
+        utterance.rate = 1.0;
+        window.speechSynthesis.speak(utterance);
+        lastSpeakTimeRef.current = now;
+      }
+    };
+
+    if (isMotion) {
+      speak("Movimiento detectado. Por favor, mantén el dedo quieto.");
+    } else if (cs !== prevContactStateRef.current) {
+      prevContactStateRef.current = cs;
+      if (cs === "NO_CONTACT") {
+        speak("Coloca tu dedo sobre la cámara trasera y el flash.");
+      } else if (cs === "UNSTABLE_CONTACT") {
+        speak("Ajustando posición, mantén presionado suavemente.");
+      } else if (cs === "STABLE_CONTACT") {
+        speak("Contacto estable. Iniciando análisis hemodinámico.");
+      }
+    }
+  }, [lastSignal, session.isMonitoring]);
+
   // UI states
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -857,8 +899,14 @@ const Index = () => {
               <div className="space-y-1">
                 <div className="text-zinc-500 font-semibold text-[8px] tracking-widest uppercase">2. On-Device Vision Cortex</div>
                 <div className="flex justify-between">
+                  <span>Pipeline Mode:</span>
+                  <span className="text-emerald-400 font-bold">
+                    {lastSignal.cortexMetrics.inferenceTimeMs > 0.2 ? "ONNX INFERENCE (5Hz)" : "CENTROID TRACKING (30Hz)"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
                   <span>Latency:</span>
-                  <span className="text-cyan-400 font-bold">{lastSignal.cortexMetrics.inferenceTimeMs.toFixed(1)} ms</span>
+                  <span className="text-cyan-400 font-bold">{lastSignal.cortexMetrics.inferenceTimeMs.toFixed(2)} ms</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Finger Detected:</span>

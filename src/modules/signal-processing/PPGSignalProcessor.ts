@@ -431,27 +431,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.zloFrameCount++;
     }
 
-    // Gray buffer para histograma + varianza temporal (ensemble detection)
-    const endGray = ppgPerf.start('gray');
-    if (!this.grayBuffer || this.grayBuffer.length !== imageData.width * imageData.height) {
-      this.grayBuffer = new Uint8ClampedArray(imageData.width * imageData.height);
-    }
-    for (let i = 0; i < imageData.data.length; i += 4) {
-      this.grayBuffer[i / 4] = (imageData.data[i] * 77 + imageData.data[i + 1] * 150 + imageData.data[i + 2] * 29) >> 8;
-    }
-    endGray();
-
-    if (visionMetrics) {
-      this.fingerDetected = visionMetrics.fingerDetected;
-      this.contactState = visionMetrics.fingerDetected ? 'STABLE_CONTACT' : 'NO_CONTACT';
-      this.lastInstantFinger = visionMetrics.fingerDetected;
-      if (!visionMetrics.fingerDetected) {
-        this.setNoContact(true);
-      }
-    } else {
-      this.updateContactState(roi);
-    }
-
     // Toleramos mayor movimiento físico (aceleración/giroscopio) si la calidad de
     // la señal óptica (SQI) sigue siendo buena, ya que el acoplamiento dedo-lente
     // puede permanecer estable a pesar de temblores o giros del celular.
@@ -461,17 +440,39 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         ? 1.2
         : this.MOTION_THRESHOLD; // 0.6
     const motionArtifact = this.motionScore > effectiveMotionThreshold;
-    const fingerEnsemble = updateFingerDetection(
-      { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue, coverage: roi.coverageRatio, fingerScore: roi.fingerScore },
-      { red: this.smoothedRed, green: this.smoothedGreen, blue: this.smoothedBlue, coverage: this.smoothedCoverage, fingerScore: this.smoothedFingerScore },
-      { coverageRatio: roi.coverageRatio, fingerScore: roi.fingerScore, fingerTileCount: roi.fingerTileCount },
-      this.grayBuffer,
-      this.lastEnsembleScore,
-    );
-    this.lastEnsembleScore = fingerEnsemble.ensemble.ensembleScore;
-    const liveFinger = visionMetrics ? visionMetrics.fingerDetected : this.isLiveFingerFrame(roi, this.lastEnsembleScore);
 
-    if (!visionMetrics) {
+    let liveFinger = false;
+    if (visionMetrics) {
+      this.fingerDetected = visionMetrics.fingerDetected;
+      this.contactState = visionMetrics.fingerDetected ? 'STABLE_CONTACT' : 'NO_CONTACT';
+      this.lastInstantFinger = visionMetrics.fingerDetected;
+      liveFinger = visionMetrics.fingerDetected;
+      if (!visionMetrics.fingerDetected) {
+        this.setNoContact(true);
+      }
+    } else {
+      this.updateContactState(roi);
+
+      // Gray buffer para histograma + varianza temporal (ensemble detection)
+      const endGray = ppgPerf.start('gray');
+      if (!this.grayBuffer || this.grayBuffer.length !== imageData.width * imageData.height) {
+        this.grayBuffer = new Uint8ClampedArray(imageData.width * imageData.height);
+      }
+      for (let i = 0; i < imageData.data.length; i += 4) {
+        this.grayBuffer[i / 4] = (imageData.data[i] * 77 + imageData.data[i + 1] * 150 + imageData.data[i + 2] * 29) >> 8;
+      }
+      endGray();
+
+      const fingerEnsemble = updateFingerDetection(
+        { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue, coverage: roi.coverageRatio, fingerScore: roi.fingerScore },
+        { red: this.smoothedRed, green: this.smoothedGreen, blue: this.smoothedBlue, coverage: this.smoothedCoverage, fingerScore: this.smoothedFingerScore },
+        { coverageRatio: roi.coverageRatio, fingerScore: roi.fingerScore, fingerTileCount: roi.fingerTileCount },
+        this.grayBuffer,
+        this.lastEnsembleScore,
+      );
+      this.lastEnsembleScore = fingerEnsemble.ensemble.ensembleScore;
+      liveFinger = this.isLiveFingerFrame(roi, this.lastEnsembleScore);
+
       if (this.contactState !== 'NO_CONTACT' && !liveFinger) {
         this.liveFingerMissStreak++;
         const grace = this.cameraHints.liveFingerMissGrace;
