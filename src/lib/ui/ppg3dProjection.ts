@@ -77,10 +77,18 @@ const Z_FAR = 5.2; // compresión de profundidad (mayor = horizonte más comprim
 // Grilla más GRANDE: horizonte subido (más piso visible) y margen inferior menor.
 const HORIZON_FRAC = 0.08; // horizonte más alto → piso (grilla) más grande
 const NEAR_MARGIN_PX = 30; // sitio para el tacograma + etiquetas de tiempo del eje
-const MAX_LIFT_FRAC = 0.62; // altura máx. de la onda como fracción del piso visible
+const MAX_LIFT_FRAC = 0.56; // altura máx. onda (reducida sutilmente: menos verticalidad)
 // Banda de profundidad que ocupa la cinta de onda (grosor 3D real del trazo).
 const WAVE_D_FRONT = 0.05;
 const WAVE_D_BACK = 0.17;
+// Ensanche sutil del piso más allá del ancho del gráfico. Se preserva el punto de
+// fuga (vpX/horizonY no cambian) → la perspectiva 3D queda intacta; sólo se ven
+// más "baldosas" laterales por el clip del canvas.
+const FLOOR_WIDEN = 1.18;
+// Período de una baldosa completa desplazándose hacia el observador (treadmill).
+// Un ciclo == avanzar una celda; al empatar exactamente con `dZ`, el patrón se
+// repite y NO hay costura visible al reciclar.
+const FLOOR_FLOW_PERIOD_MS = 3400;
 
 // Paleta local (evita import de valores desde el renderer → sin ciclo en runtime).
 const C = {
@@ -164,19 +172,34 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   // Menos columnas = celdas más grandes. Líneas mayores cada 5 (estilo papel ECG).
   const TARGET_COLS = 11;
   const cellPx = proj.plotW / TARGET_COLS;
-  const halfCols = Math.ceil(TARGET_COLS / 2);
+  // Ancho subrepticiamente extendido: FLOOR_WIDEN sólo agrega baldosas laterales
+  // (recortadas por el clip). vpX y horizonY no cambian → 3D intacto.
+  const halfCols = Math.ceil((TARGET_COLS * FLOOR_WIDEN) / 2);
   const halfX = halfCols * cellPx;
   const dZ = cellPx / proj.floorSpanY; // paso de profundidad = ancho de celda → cuadrada
 
-  // Filas (Z constante): cuadradas cerca, agrupándose al horizonte. Se cortan cuando
-  // dos filas quedan a < 2 px (evita el moiré en la lejanía).
-  let rowIdx = 0;
+  // Treadmill infinito: desplazamos TODAS las filas por una fracción de celda que
+  // avanza continuamente. Al empatar el período con `dZ`, la última fila que se
+  // recicla al horizonte y la nueva que emerge del zNear ocupan posiciones idénticas
+  // en el patrón → CERO costura, CERO parpadeo. `cycleCount` compensa la numeración
+  // de major/minor cuando phaseFrac se reinicia (0 → 1) para que las líneas fuertes
+  // (major) sigan la misma cadencia visual sin saltos discretos.
+  const rawPhase = state.now / FLOOR_FLOW_PERIOD_MS;
+  const cycleCount = Math.floor(rawPhase);
+  const phaseFrac = rawPhase - cycleCount;
+
+  // Filas (Z variable con phaseFrac): cuadradas cerca, condensadas al horizonte.
+  // Cortamos cuando dos filas quedan a < 2 px (evita moiré en la lejanía).
   let prevRowY = Number.POSITIVE_INFINITY;
-  for (let z = proj.zNear; z <= proj.zFar + 1e-6; z += dZ, rowIdx++) {
+  const kStart = Math.ceil(phaseFrac - 1e-6); // primera fila con z ≥ zNear
+  for (let k = kStart; k < 400; k++) {
+    const z = proj.zNear + (k - phaseFrac) * dZ;
+    if (z > proj.zFar + 1e-6) break;
     const a = proj.floorPoint(-halfX, z);
     if (prevRowY - a.y < 2) break;
     const b = proj.floorPoint(halfX, z);
-    const isMajor = rowIdx % 5 === 0;
+    const rowMajorIdx = k + cycleCount;
+    const isMajor = ((rowMajorIdx % 5) + 5) % 5 === 0;
     const fade = 0.3 + 0.7 * a.scale;
     const alpha = (isMajor ? 0.55 : 0.25) * fade;
     ctx.strokeStyle = `rgba(${C.gridMinor}, ${alpha.toFixed(3)})`;
@@ -188,7 +211,8 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     prevRowY = a.y;
   }
 
-  // Columnas (X constante): separadas cellPx en mundo → convergen al punto de fuga.
+  // Columnas (X constante, estáticas): dan la sensación de "vías" fijas por donde
+  // la cinta se desliza. Convergen al punto de fuga → refuerzan el 3D.
   for (let k = -halfCols; k <= halfCols; k++) {
     const xw = k * cellPx;
     const near = proj.floorPoint(xw, proj.zNear);
@@ -276,8 +300,10 @@ export function drawWaveRibbon3D(
   const { plot } = state.layout;
   const revealed = state.traceRevealed;
 
-  // Amplitud normalizada honesta con soporte para valores negativos por debajo de la grilla (piso)
-  const hOf = (c: WaveCoord) => clamp(c.val / ((state.waveGain || 4.2) * 10.0), -0.5, 1.2) + 0.25;
+  // Amplitud normalizada honesta con soporte para valores negativos por debajo de la grilla (piso).
+  // Divisor incrementado sutilmente (10.0 → 11.5) → menos verticalidad, más elegancia
+  // clínica sin aplanar la fisiología (el rango [-0.5, 1.2] preserva picos y valles).
+  const hOf = (c: WaveCoord) => clamp(c.val / ((state.waveGain || 4.2) * 11.5), -0.5, 1.2) + 0.25;
   const uOf = (c: WaveCoord) => clamp((c.x - plot.x) / plot.w, 0, 1);
 
   const Pf: ProjPoint[] = []; // cresta frontal (la onda honesta)
@@ -337,6 +363,53 @@ export function drawWaveRibbon3D(
       ctx.strokeStyle = `rgba(${C.arr}, ${(0.08 + 0.12 * fade).toFixed(3)})`;
       ctx.lineWidth = 1.5 + 1.5 * fade;
       ctx.stroke();
+    }
+  }
+
+  // 1c) Rayos cian/verdes desde CADA PICO SISTÓLICO NORMAL hacia el punto de fuga.
+  // A diferencia de los rayos rojos (por muestra), aquí sólo disparamos UN rayo por
+  // latido — desde el máximo local — para no saturar la escena y mantener la clase.
+  // Los rayos usan gradiente cian→verde (misma paleta que el trazo) y decaen con la
+  // profundidad → sensación de "energía viajando al infinito" en cada latido.
+  if (revealed) {
+    for (let i = 2; i < n - 2; i++) {
+      if (coords[i].isArr) continue;
+      const v = coords[i].val;
+      // Mismo criterio de pico usado luego por los marcadores fiduciales SYS.
+      if (
+        v > coords[i - 1].val &&
+        v > coords[i + 1].val &&
+        v > coords[i - 2].val &&
+        v > coords[i + 2].val &&
+        v > geom.midValue
+      ) {
+        const p = Pfloor[i];
+        const dx = proj.vpX - p.x;
+        const dy = proj.horizonY - p.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 1) continue;
+        const nx = dx / dist, ny = dy / dist;
+        const fade = Math.min(1, (p.y - proj.horizonY) / (proj.nearY - proj.horizonY));
+        // Rayo largo (llega casi al horizonte) con degradado cian→verde tenue.
+        const rayLen = dist * 0.92;
+        const endX = p.x + nx * rayLen;
+        const endY = p.y + ny * rayLen;
+        const grad = ctx.createLinearGradient(p.x, p.y, endX, endY);
+        grad.addColorStop(0, `rgba(${C.cyan}, ${(0.16 + 0.20 * fade).toFixed(3)})`);
+        grad.addColorStop(0.55, `rgba(${C.signal}, ${(0.10 + 0.14 * fade).toFixed(3)})`);
+        grad.addColorStop(1, `rgba(${C.signal}, 0.0)`);
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 1.1 + 1.3 * fade;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+        // Núcleo brillante corto en la base del rayo → "chispa" al ras del piso.
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.8 + 1.4 * fade, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${C.cyan}, ${(0.35 + 0.35 * fade).toFixed(3)})`;
+        ctx.fill();
+      }
     }
   }
 
@@ -418,34 +491,46 @@ export function drawWaveRibbon3D(
   }
 
   if (revealed) {
-    // 5b) Trazo con brillo base (último 35%)
-    ctx.shadowColor = `rgba(${C.signal}, 0.45)`;
-    ctx.shadowBlur = 8; // SHADOW_BLUR_BASE
+    // 5b) Trazo con brillo base (último 35%) — glow reforzado sutilmente.
+    ctx.shadowColor = `rgba(${C.signal}, 0.55)`;
+    ctx.shadowBlur = 12; // era 8 — luminosidad más potente sin perder finesse
     s = Math.max(recentCut, 0);
     while (s < n - 1) {
       const isArr = coords[s].isArr;
       let segEnd = s;
       while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
       drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
-      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.65)` : `rgba(${C.signal}, 0.68)`;
-      ctx.lineWidth = 1.6; // GLOW_STROKE_WIDTH
+      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.72)` : `rgba(${C.signal}, 0.78)`;
+      ctx.lineWidth = 1.7;
       ctx.stroke();
       s = segEnd;
     }
 
-    // 5c) Trazo líder de punta (último 10%)
-    ctx.shadowBlur = 15; // SHADOW_BLUR_LEADING
+    // 5c) Trazo líder de punta (último 10%) — halo amplio, cabeza más viva.
+    ctx.shadowBlur = 22; // era 15 — bloom más ancho, todavía elegante
     s = Math.max(leadingCut, 0);
     while (s < n - 1) {
       const isArr = coords[s].isArr;
       let segEnd = s;
       while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
       drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
-      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.85)` : '#4ade80';
-      ctx.lineWidth = 1.5; // LEADING_STROKE_WIDTH
-      ctx.shadowColor = isArr ? `rgba(${C.arr}, 0.45)` : `rgba(${C.signal}, 0.45)`;
+      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.92)` : '#7bf5a2';
+      ctx.lineWidth = 1.6;
+      ctx.shadowColor = isArr ? `rgba(${C.arr}, 0.55)` : `rgba(${C.signal}, 0.60)`;
       ctx.stroke();
       s = segEnd;
+    }
+
+    // 5d) Capa exterior de bloom ULTRA suave sobre la punta (blur muy grande,
+    //     alpha muy baja) → aureola de "monitor médico premium" sin repintar la señal.
+    ctx.shadowBlur = 34;
+    ctx.shadowColor = `rgba(${C.signal}, 0.35)`;
+    s = Math.max(leadingCut, 0);
+    if (s < n - 1) {
+      drawDirectCrestSegment(s, n);
+      ctx.strokeStyle = `rgba(${C.signalBright}, 0.18)`;
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
     }
     ctx.shadowBlur = 0;
   } else {
