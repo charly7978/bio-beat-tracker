@@ -416,42 +416,36 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.textAlign = 'left';
   ctx.fillText(state.props.isMonitoring ? 'MONITOREANDO' : (state.props.preserveResults ? 'RESULTADOS' : 'EN ESPERA'), 28, header.y + 22);
 
+  const d = new Date(state.now);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
   const t = Math.max(0, Math.floor(elapsed || 0));
   const em = String(Math.floor(t / 60)).padStart(2, '0');
   const es = String(t % 60).padStart(2, '0');
 
-  // Un SOLO indicador temporal centrado: cronómetro de medición mientras
-  // monitorea, reloj de pared en espera. Antes se dibujaban AMBOS en el mismo
-  // punto (reloj de pared centrado + cronómetro en x=160) y se superponían,
-  // produciendo el amasijo de dígitos ilegible en pantallas angostas.
   ctx.font = `11px ${FONT_MONO}`;
+  ctx.fillStyle = COLORS.TEXT_SECONDARY;
   ctx.textAlign = 'center';
-  if (state.props.isMonitoring) {
-    ctx.fillStyle = COLORS.TEXT_INFO;
-    ctx.fillText(`⏱ ${em}:${es}`, header.w / 2, header.y + 22);
-  } else {
-    const d = new Date(state.now);
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    const ss = String(d.getSeconds()).padStart(2, '0');
-    ctx.fillStyle = COLORS.TEXT_SECONDARY;
-    ctx.fillText(`${hh}:${mm}:${ss}`, header.w / 2, header.y + 22);
-  }
+  ctx.fillText(`${hh}:${mm}:${ss}`, header.w / 2, header.y + 22);
 
   ctx.textAlign = 'right';
   const qColor = quality > 60 ? COLORS.TEXT_PRIMARY : quality > 30 ? COLORS.TEXT_WARN : (quality > 0 ? COLORS.TEXT_DANGER : COLORS.TEXT_DIM);
   ctx.fillStyle = qColor;
   ctx.fillText(`SQI ${Math.round(quality)}%`, header.w - 16, header.y + 22);
 
-  // Estado de contacto: se muestra de forma autoritativa en el pie del gráfico
-  // ("SIN CONTACTO") y como hint central grande. En el header solo marcamos el
-  // caso positivo (dedo OK) para no chocar con el cronómetro centrado.
-  if (detected) {
-    ctx.font = `10px ${FONT_MONO}`;
-    ctx.textAlign = 'right';
-    ctx.fillStyle = COLORS.TEXT_PRIMARY;
-    ctx.fillText('● DEDO OK', header.w - 92, header.y + 22);
+  if (state.props.isMonitoring) {
+    const elapStr = `⏱ ${em}:${es}`;
+    ctx.font = `11px ${FONT_MONO}`;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = COLORS.TEXT_INFO;
+    ctx.fillText(elapStr, 160, header.y + 22);
   }
+
+  ctx.font = `10px ${FONT_MONO}`;
+  ctx.textAlign = 'right';
+  ctx.fillStyle = detected ? COLORS.TEXT_PRIMARY : COLORS.TEXT_DIM;
+  ctx.fillText(detected ? '● DEDO OK' : '○ SIN DEDO', header.w - 110, header.y + 22);
 
   const diag = diagnostics;
   const hideLowFlicker =
@@ -498,25 +492,6 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   }
 }
 
-/**
- * Ajusta el tamaño de fuente (px) de una etiqueta para que ENTRE en `maxWidth`.
- * Deja `ctx.font` seteado listo para dibujar. Evita que etiquetas largas como
- * "FRECUENCIA CARDÍACA" desborden su columna y pisen la de al lado en pantallas
- * angostas (la causa del header "aplastado"). Nunca agranda por encima de basePx.
- */
-function setFittedFont(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  basePx: number,
-  maxWidth: number,
-  weight = 'bold',
-): void {
-  ctx.font = `${weight} ${basePx}px ${FONT_MONO}`;
-  const w = ctx.measureText(text).width;
-  const px = w <= maxWidth ? basePx : Math.max(7, Math.floor((basePx * maxWidth) / w));
-  if (px !== basePx) ctx.font = `${weight} ${px}px ${FONT_MONO}`;
-}
-
 export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderState): void {
   const { metrics } = state.layout;
   const { pressure, perfusionIndex: pi, arrhythmiaStatus: arr, arrhythmiaCount: arrCnt } = state.props;
@@ -549,7 +524,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     : dispBpm <= 120 ? COLORS.TEXT_WARN
     : COLORS.TEXT_DANGER;
 
-  setFittedFont(ctx, 'FRECUENCIA CARDÍACA', 10, colW - 24);
+  ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
   ctx.textAlign = 'left';
   ctx.fillText('FRECUENCIA CARDÍACA', 16, metrics.y + 26);
@@ -598,7 +573,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     : dispSpo2 >= 90 ? COLORS.TEXT_WARN
     : COLORS.TEXT_DANGER;
 
-  setFittedFont(ctx, 'SATURACIÓN O₂', 10, colW - 24);
+  ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
   ctx.textAlign = 'left';
   ctx.fillText('SATURACIÓN O₂', colW + 16, metrics.y + 26);
@@ -643,7 +618,7 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
 
   const bpX = colW * 2 + 4;
 
-  setFittedFont(ctx, 'PRESIÓN ART.', 10, colW - 12);
+  ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
   ctx.textAlign = 'left';
   ctx.fillText('PRESIÓN ART.', bpX, metrics.y + 26);
