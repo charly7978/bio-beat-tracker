@@ -62,6 +62,18 @@ export interface ProcessedSignal {
     /** Progreso monótono de estabilización [0..1] para la UI. */
     acquisitionProgress?: number;
   };
+  cortexMetrics?: {
+    fingerDetected: boolean;
+    roiCentroid: { x: number; y: number };
+    signalRgb: { r: number; g: number; b: number };
+    latentVector: number[];
+    hemoParams?: {
+      co: number;
+      contractility: number;
+      vascularLoad: number;
+    };
+    inferenceTimeMs: number;
+  };
 }
 
 export interface ProcessingError {

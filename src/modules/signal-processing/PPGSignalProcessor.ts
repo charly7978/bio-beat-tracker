@@ -330,7 +330,24 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.cameraHints = inferCameraRuntimeHints(diag);
   }
 
-  processFrame(imageData: ImageData, frameTimestampMs?: number): void {
+  processFrame(
+    imageData: ImageData,
+    frameTimestampMs?: number,
+    visionMetrics?: {
+      fingerDetected: boolean;
+      roiCentroid: { x: number; y: number };
+      signalRgb: { r: number; g: number; b: number };
+      latentVector: number[];
+      inferenceTimeMs: number;
+    } | null,
+    signalMetrics?: {
+      co: number;
+      contractility: number;
+      vascularLoad: number;
+      latentVector: number[];
+      inferenceTimeMs: number;
+    } | null
+  ): void {
     if (!this.isProcessing || !this.onSignalReady) return;
 
     this.frameCount++;
@@ -340,8 +357,61 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.updateSampleRate(timestamp);
     this.maybeAdaptBackpressure(timestamp);
 
+    const cortexMetrics = visionMetrics ? {
+      fingerDetected: visionMetrics.fingerDetected,
+      roiCentroid: visionMetrics.roiCentroid,
+      signalRgb: visionMetrics.signalRgb,
+      latentVector: visionMetrics.latentVector,
+      hemoParams: signalMetrics ? {
+        co: signalMetrics.co,
+        contractility: signalMetrics.contractility,
+        vascularLoad: signalMetrics.vascularLoad,
+      } : undefined,
+      inferenceTimeMs: visionMetrics.inferenceTimeMs + (signalMetrics ? signalMetrics.inferenceTimeMs : 0),
+    } : undefined;
+
     const endRoi = ppgPerf.start('roi');
-    const roi = this.extractROI(imageData);
+    let roi: ROIMetrics;
+    if (visionMetrics) {
+      const { r, g, b } = visionMetrics.signalRgb;
+      const { x: cx, y: cy } = visionMetrics.roiCentroid;
+      const roiW = Math.floor(imageData.width * 0.15);
+      const roiH = Math.floor(imageData.height * 0.15);
+      roi = {
+        rawRed: r,
+        rawGreen: g,
+        rawBlue: b,
+        coverageRatio: visionMetrics.fingerDetected ? 1.0 : 0.0,
+        fingerScore: visionMetrics.fingerDetected ? 1.0 : 0.0,
+        fingerTileCount: visionMetrics.fingerDetected ? 25 : 0,
+        roiX: Math.floor(cx * imageData.width - roiW / 2),
+        roiY: Math.floor(cy * imageData.height - roiH / 2),
+        roiW,
+        roiH,
+        centroidMotion: 0.0,
+      };
+      
+      // Update the tracked centroid and smoothed values directly
+      this.trackedCentroid.x = cx;
+      this.trackedCentroid.y = cy;
+      if (this.smoothedRed === 0) {
+        this.smoothedRed = r;
+        this.smoothedGreen = g;
+        this.smoothedBlue = b;
+        this.smoothedCoverage = roi.coverageRatio;
+        this.smoothedFingerScore = roi.fingerScore;
+      } else {
+        const a = this.RGB_SMOOTH_ALPHA;
+        const ca = this.COVERAGE_SMOOTH_ALPHA;
+        this.smoothedRed = this.smoothedRed * (1 - a) + r * a;
+        this.smoothedGreen = this.smoothedGreen * (1 - a) + g * a;
+        this.smoothedBlue = this.smoothedBlue * (1 - a) + b * a;
+        this.smoothedCoverage = this.smoothedCoverage * (1 - ca) + roi.coverageRatio * ca;
+        this.smoothedFingerScore = this.smoothedFingerScore * (1 - ca) + roi.fingerScore * ca;
+      }
+    } else {
+      roi = this.extractROI(imageData);
+    }
     endRoi();
 
     this.roiRedPulseRing.push(roi.rawRed);
@@ -371,7 +441,16 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
     endGray();
 
-    this.updateContactState(roi);
+    if (visionMetrics) {
+      this.fingerDetected = visionMetrics.fingerDetected;
+      this.contactState = visionMetrics.fingerDetected ? 'STABLE_CONTACT' : 'NO_CONTACT';
+      this.lastInstantFinger = visionMetrics.fingerDetected;
+      if (!visionMetrics.fingerDetected) {
+        this.setNoContact(true);
+      }
+    } else {
+      this.updateContactState(roi);
+    }
 
     // Toleramos mayor movimiento físico (aceleración/giroscopio) si la calidad de
     // la señal óptica (SQI) sigue siendo buena, ya que el acoplamiento dedo-lente
@@ -390,20 +469,22 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.lastEnsembleScore,
     );
     this.lastEnsembleScore = fingerEnsemble.ensemble.ensembleScore;
-    const liveFinger = this.isLiveFingerFrame(roi, this.lastEnsembleScore);
+    const liveFinger = visionMetrics ? visionMetrics.fingerDetected : this.isLiveFingerFrame(roi, this.lastEnsembleScore);
 
-    if (this.contactState !== 'NO_CONTACT' && !liveFinger) {
-      this.liveFingerMissStreak++;
-      const grace = this.cameraHints.liveFingerMissGrace;
-      if (this.liveFingerMissStreak >= grace && !this.cameraHints.constrained) {
-        this.setNoContact(/* hardReset */ true);
+    if (!visionMetrics) {
+      if (this.contactState !== 'NO_CONTACT' && !liveFinger) {
+        this.liveFingerMissStreak++;
+        const grace = this.cameraHints.liveFingerMissGrace;
+        if (this.liveFingerMissStreak >= grace && !this.cameraHints.constrained) {
+          this.setNoContact(/* hardReset */ true);
+        } else {
+          this.contactState = 'UNSTABLE_CONTACT';
+          this.fingerDetected =
+            this.fingerConfidenceCount >= this.getFingerConfirmFrames() || this.fingerDetected;
+        }
       } else {
-        this.contactState = 'UNSTABLE_CONTACT';
-        this.fingerDetected =
-          this.fingerConfidenceCount >= this.getFingerConfirmFrames() || this.fingerDetected;
+        this.liveFingerMissStreak = 0;
       }
-    } else {
-      this.liveFingerMissStreak = 0;
     }
 
     if (this.contactState === 'NO_CONTACT') {
@@ -425,6 +506,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         rawRed: roi.rawRed,
         rawGreen: roi.rawGreen,
         rawBlue: roi.rawBlue,
+        cortexMetrics,
         diagnostics: this.buildFingerDiagnostics(roi, motionArtifact, "NO_FINGER"),
       });
       return;
@@ -461,6 +543,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         rawRed: roi.rawRed,
         rawGreen: roi.rawGreen,
         rawBlue: roi.rawBlue,
+        cortexMetrics,
         diagnostics: this.buildFingerDiagnostics(roi, motionArtifact, rejectionStatus, {
           message: `RECHAZADO: ${rejectionStatus}`,
         }),
@@ -567,23 +650,23 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const fLen = this.filteredBuffer.length;
       const fTail = this.filteredBuffer.tail(fLen);
       if (fTail.length >= 30) {
-        const n = fTail.length;
-        let s1 = 0, s2 = 0, s3 = 0, s4 = 0;
-        for (let i = 0; i < n; i++) {
-          const v = fTail[i];
-          s1 += v;
-          s2 += v * v;
-          s3 += v * v * v;
-          s4 += v * v * v * v;
-        }
-        const mean = s1 / n;
-        const var_ = s2 / n - mean * mean;
-        const std = Math.sqrt(var_);
-        if (std > 1e-8) {
-          this.cachedSkewness = (s3 / n - 3 * mean * (s2 / n) + 2 * mean * mean * mean) / (std * std * std);
-          this.cachedKurtosis = (s4 / n - 4 * mean * (s3 / n) + 6 * mean * mean * (s2 / n) - 3 * mean * mean * mean * mean) / (var_ * var_);
-          this.cachedRelativePower = this.cachedPeriodicity;
-        }
+         const n = fTail.length;
+         let s1 = 0, s2 = 0, s3 = 0, s4 = 0;
+         for (let i = 0; i < n; i++) {
+           const v = fTail[i];
+           s1 += v;
+           s2 += v * v;
+           s3 += v * v * v;
+           s4 += v * v * v * v;
+         }
+         const mean = s1 / n;
+         const var_ = s2 / n - mean * mean;
+         const std = Math.sqrt(var_);
+         if (std > 1e-8) {
+           this.cachedSkewness = (s3 / n - 3 * mean * (s2 / n) + 2 * mean * mean * mean) / (std * std * std);
+           this.cachedKurtosis = (s4 / n - 4 * mean * (s3 / n) + 6 * mean * mean * (s2 / n) - 3 * mean * mean * mean * mean) / (var_ * var_);
+           this.cachedRelativePower = this.cachedPeriodicity;
+         }
       }
     }
 
@@ -705,6 +788,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       rawGreen: roi.rawGreen,
       rawBlue: roi.rawBlue,
       accelRespiration: this.accelRespEstimate ?? undefined,
+      cortexMetrics,
       diagnostics: {
         ...this.buildFingerDiagnostics(roi, motionArtifact, displayStatus, {
           message:
@@ -1988,5 +2072,21 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   getBackpressureConfig(): BackpressureConfig {
     return { ...this.backpressureConfig };
+  }
+
+  public isFingerDetected(): boolean {
+    return this.fingerDetected;
+  }
+
+  public getFilteredBufferLength(): number {
+    return this.filteredBuffer.length;
+  }
+
+  public getFrameCount(): number {
+    return this.frameCount;
+  }
+
+  public getLastFilteredSamples(length: number): number[] {
+    return this.filteredBuffer.tail(length);
   }
 }

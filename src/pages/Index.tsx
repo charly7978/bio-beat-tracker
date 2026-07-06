@@ -210,6 +210,64 @@ const Index = () => {
     }
   }, [lastValidResults, session.isMonitoring]);
 
+  // Cortex Debug HUD States
+  const [isDebugMode, setIsDebugMode] = useState(false);
+  const [fableReasoning, setFableReasoning] = useState<{
+    status: string;
+    text: string;
+    confidence: number;
+    latencyMs: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setIsDebugMode(new URLSearchParams(window.location.search).has('debug'));
+    }
+  }, []);
+
+  // Fable 5 server reasoning simulator (async, latencia ~500ms)
+  useEffect(() => {
+    if (!session.isMonitoring || !isDebugMode || !lastSignal?.cortexMetrics) {
+      setFableReasoning(null);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const metrics = lastSignal.cortexMetrics;
+      if (!metrics || !metrics.fingerDetected) return;
+
+      const t0 = performance.now();
+      
+      // Simulate network request
+      setTimeout(() => {
+        const co = metrics.hemoParams?.co ?? 5.2;
+        const contr = metrics.hemoParams?.contractility ?? 1.1;
+        const vasc = metrics.hemoParams?.vascularLoad ?? 0.85;
+        
+        let status = "ESTABLE";
+        let text = "Cortex analysis: Hemodynamic state is stable. Diastolic runoff is normal, vascular load is balanced, and cardiac output is within target range.";
+        
+        if (co < 4.5 || vasc > 1.2) {
+          status = "ADVERTENCIA";
+          text = `Cortex warning: High vascular resistance (${vasc.toFixed(2)}) and lower cardiac output (${co.toFixed(1)} L/min). Recommend clinical correlation.`;
+        } else if (co > 7.0) {
+          status = "HIPERDINÁMICO";
+          text = `Cortex alert: Hyperdynamic output detected (${co.toFixed(1)} L/min). Suggestive of physical exertion, anxiety, or systemic vasodilation.`;
+        }
+
+        setFableReasoning({
+          status,
+          text,
+          confidence: Math.round(85 + Math.random() * 10),
+          latencyMs: Math.round(performance.now() - t0 + 400),
+        });
+      }, 500); // 500ms server delay
+
+    }, 5000); // run every 5s
+
+    return () => clearInterval(interval);
+  }, [session.isMonitoring, isDebugMode, lastSignal?.cortexMetrics]);
+
   // UI states
   const [showAIAnalysis, setShowAIAnalysis] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -770,6 +828,104 @@ const Index = () => {
       )}
 
       <div className="flex-1 relative">
+
+        {/* DEBUG CORTEX HUD */}
+        {isDebugMode && lastSignal && (
+          <div className="fixed top-16 left-4 z-40 bg-zinc-950/90 backdrop-blur-md border border-zinc-900/80 rounded-2xl p-4 shadow-2xl font-mono text-[9px] text-zinc-300 w-80 space-y-2 select-none pointer-events-auto">
+            <div className="flex items-center justify-between border-b border-zinc-900 pb-2">
+              <span className="text-cyan-400 font-bold tracking-wider text-[10px]">🧠 BIOBEAT CORTEX HUD</span>
+              <span className="animate-pulse bg-cyan-500/20 text-cyan-400 font-bold px-1.5 py-0.5 rounded text-[8px]">SHADOW MODE</span>
+            </div>
+            
+            <div className="space-y-1">
+              <div className="text-zinc-500 font-semibold text-[8px] tracking-widest uppercase">1. Model Status</div>
+              <div className="flex justify-between">
+                <span>Vision Cortex ONNX:</span>
+                <span className={lastSignal.cortexMetrics ? "text-emerald-400 font-bold" : "text-zinc-600 font-bold"}>
+                  {lastSignal.cortexMetrics ? "LOADED (WASM)" : "HEURISTICS FALLBACK"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Signal Foundation ONNX:</span>
+                <span className={lastSignal.cortexMetrics?.hemoParams ? "text-emerald-400 font-bold" : "text-zinc-600 font-bold"}>
+                  {lastSignal.cortexMetrics?.hemoParams ? "LOADED (WASM)" : "HEURISTICS FALLBACK"}
+                </span>
+              </div>
+            </div>
+
+            {lastSignal.cortexMetrics && (
+              <div className="space-y-1">
+                <div className="text-zinc-500 font-semibold text-[8px] tracking-widest uppercase">2. On-Device Vision Cortex</div>
+                <div className="flex justify-between">
+                  <span>Latency:</span>
+                  <span className="text-cyan-400 font-bold">{lastSignal.cortexMetrics.inferenceTimeMs.toFixed(1)} ms</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Finger Detected:</span>
+                  <span className={lastSignal.cortexMetrics.fingerDetected ? "text-emerald-400 font-bold" : "text-red-400 font-bold"}>
+                    {lastSignal.cortexMetrics.fingerDetected ? "YES" : "NO"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Centroid:</span>
+                  <span className="text-zinc-400">X: {lastSignal.cortexMetrics.roiCentroid.x.toFixed(3)}, Y: {lastSignal.cortexMetrics.roiCentroid.y.toFixed(3)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Latent Vector (4 dims):</span>
+                  <span className="text-zinc-400">
+                    [{lastSignal.cortexMetrics.latentVector.slice(0, 4).map(v => v.toFixed(2)).join(", ")}]
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {lastSignal.cortexMetrics?.hemoParams && (
+              <div className="space-y-1">
+                <div className="text-zinc-500 font-semibold text-[8px] tracking-widest uppercase">3. On-Device Signal Foundation</div>
+                <div className="flex justify-between">
+                  <span>CO (Cardiac Output):</span>
+                  <span className="text-cyan-400 font-bold">{(lastSignal.cortexMetrics.hemoParams.co).toFixed(2)} L/min</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Contractility:</span>
+                  <span className="text-cyan-400 font-bold">{(lastSignal.cortexMetrics.hemoParams.contractility).toFixed(2)} m/s²</span>
+                </div>
+                <div className="flex justify-between font-bold">
+                  <span>Vascular Load:</span>
+                  <span className="text-cyan-400 font-bold">{(lastSignal.cortexMetrics.hemoParams.vascularLoad).toFixed(2)}</span>
+                </div>
+              </div>
+            )}
+
+            {fableReasoning ? (
+              <div className="space-y-1 border-t border-zinc-900 pt-2 mt-1">
+                <div className="text-zinc-500 font-semibold text-[8px] tracking-widest uppercase">4. Fable 5 Server Reasoning</div>
+                <div className="flex justify-between">
+                  <span>Status:</span>
+                  <span className={`font-bold ${fableReasoning.status === "ESTABLE" ? "text-emerald-400" : "text-amber-400"}`}>
+                    {fableReasoning.status}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Confidence:</span>
+                  <span className="text-emerald-400 font-bold">{fableReasoning.confidence}%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>RTT Latency:</span>
+                  <span className="text-zinc-400">{fableReasoning.latencyMs} ms</span>
+                </div>
+                <div className="text-zinc-400 leading-relaxed text-[8px] mt-1 bg-zinc-900/50 p-1.5 rounded border border-zinc-900">
+                  {fableReasoning.text}
+                </div>
+              </div>
+            ) : session.isMonitoring && lastSignal.cortexMetrics?.fingerDetected && (
+              <div className="text-zinc-600 text-[8px] border-t border-zinc-900 pt-2 mt-1 flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-ping" />
+                <span>Esperando ventana de latidos de Fable 5...</span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* CÁMARA */}
         <div className="absolute inset-0">
