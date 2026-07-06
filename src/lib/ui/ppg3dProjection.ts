@@ -77,10 +77,18 @@ const Z_FAR = 5.2; // compresión de profundidad (mayor = horizonte más comprim
 // Grilla más GRANDE: horizonte subido (más piso visible) y margen inferior menor.
 const HORIZON_FRAC = 0.08; // horizonte más alto → piso (grilla) más grande
 const NEAR_MARGIN_PX = 30; // sitio para el tacograma + etiquetas de tiempo del eje
-const MAX_LIFT_FRAC = 0.62; // altura máx. de la onda como fracción del piso visible
+const MAX_LIFT_FRAC = 0.56; // altura máx. onda (reducida sutilmente: menos verticalidad)
 // Banda de profundidad que ocupa la cinta de onda (grosor 3D real del trazo).
 const WAVE_D_FRONT = 0.05;
 const WAVE_D_BACK = 0.17;
+// Ensanche sutil del piso más allá del ancho del gráfico. Se preserva el punto de
+// fuga (vpX/horizonY no cambian) → la perspectiva 3D queda intacta; sólo se ven
+// más "baldosas" laterales por el clip del canvas.
+const FLOOR_WIDEN = 1.18;
+// Período de una baldosa completa desplazándose hacia el observador (treadmill).
+// Un ciclo == avanzar una celda; al empatar exactamente con `dZ`, el patrón se
+// repite y NO hay costura visible al reciclar.
+const FLOOR_FLOW_PERIOD_MS = 3400;
 
 // Paleta local (evita import de valores desde el renderer → sin ciclo en runtime).
 const C = {
