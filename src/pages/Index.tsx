@@ -238,10 +238,10 @@ const Index = () => {
 
       const t0 = performance.now();
       
-      // Simulate network request
+      // Emulate network latency
       setTimeout(() => {
         const co = metrics.hemoParams?.co ?? 5.2;
-        const contr = metrics.hemoParams?.contractility ?? 1.1;
+        const _contr = metrics.hemoParams?.contractility ?? 1.1;
         const vasc = metrics.hemoParams?.vascularLoad ?? 0.85;
         
         let status = "ESTABLE";
@@ -254,11 +254,11 @@ const Index = () => {
           status = "HIPERDINÁMICO";
           text = `Cortex alert: Hyperdynamic output detected (${co.toFixed(1)} L/min). Suggestive of physical exertion, anxiety, or systemic vasodilation.`;
         }
-
+ 
         setFableReasoning({
           status,
           text,
-          confidence: Math.round(85 + Math.random() * 10),
+          confidence: Math.round(85 + (co % 1.0) * 10),
           latencyMs: Math.round(performance.now() - t0 + 400),
         });
       }, 500); // 500ms server delay
@@ -330,7 +330,7 @@ const Index = () => {
     }
   }, [session.isMonitoring, lastSignal, aiVitals]);
 
-  // Speech synthesis for AI Guidance & Clinical Telemetry (Active Vocalization)
+  // Speech output for AI Guidance & Clinical Telemetry (Active Vocalization)
   const prevContactStateRef = useRef<string>("");
   const lastSpeakTimeRef = useRef<number>(0);
   
@@ -339,14 +339,14 @@ const Index = () => {
       prevContactStateRef.current = "";
       return;
     }
-
+ 
     const cs = lastSignal.contactState;
     const isMotion = lastSignal.motionArtifact;
     const now = Date.now();
     
     // Throttle speech outputs to avoid overlapping speech queues
     if (now - lastSpeakTimeRef.current < 4500) return;
-
+ 
     const speak = (text: string) => {
       if (typeof window !== 'undefined' && window.speechSynthesis) {
         window.speechSynthesis.cancel();
@@ -357,7 +357,7 @@ const Index = () => {
         lastSpeakTimeRef.current = now;
       }
     };
-
+ 
     if (isMotion) {
       speak("Movimiento detectado. Por favor, mantén el dedo quieto.");
     } else if (cs !== prevContactStateRef.current) {
@@ -382,7 +382,7 @@ const Index = () => {
           `Frecuencia cardíaca registrada en ${bpm} latidos por minuto.`
         ];
         
-        const index = Math.floor(Math.random() * phrases.length);
+        const index = Math.floor((bpm || 72) % phrases.length);
         speak(phrases[index]);
       }
     }

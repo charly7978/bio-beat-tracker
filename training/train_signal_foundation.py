@@ -150,15 +150,23 @@ class SignalFoundationNet(nn.Module):
         latent = self.fc_latent(attn_mean)
         return hemo, latent
 
-def train_signal_foundation(epochs: int = 40, batch_size: int = 64, device: str = "cpu"):
+def train_signal_foundation(
+    epochs: int = 40,
+    batch_size: int = 64,
+    lr: float = 1e-3,
+    weight_decay: float = 1e-4,
+    size: int = 4000,
+    seed: int = 42,
+    device: str = "cpu"
+):
     device = torch.device(device)
-    train_ds = PPGHemodynamicDataset(size=4000, seed=42)
-    val_ds = PPGHemodynamicDataset(size=800, seed=99)
+    train_ds = PPGHemodynamicDataset(size=size, seed=seed)
+    val_ds = PPGHemodynamicDataset(size=int(size * 0.2), seed=seed + 57)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size)
     
     model = SignalFoundationNet().to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     
     mse = nn.MSELoss()
@@ -231,4 +239,24 @@ def export_to_onnx(model: SignalFoundationNet, device: torch.device):
     print(f"Signal Foundation Model exported to {out_path}")
 
 if __name__ == "__main__":
-    train_signal_foundation()
+    import argparse
+    parser = argparse.ArgumentParser(description="Train PPG Signal Foundation Model")
+    parser.add_argument("--epochs", type=int, default=40, help="Number of training epochs")
+    parser.add_argument("--batch-size", type=int, default=64, help="Batch size")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay")
+    parser.add_argument("--size", type=int, default=4000, help="Dataset size")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cpu/cuda)")
+    
+    args = parser.parse_args()
+    
+    train_signal_foundation(
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        size=args.size,
+        seed=args.seed,
+        device=args.device
+    )

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import * as ort from 'onnxruntime-web';
 
 /**
@@ -24,7 +25,7 @@ export class OnnxModelLoader {
           'ort-wasm-threaded.wasm': '/ort-wasm-threaded.wasm',
           'ort-wasm-simd.wasm': '/ort-wasm-simd.wasm',
           'ort-wasm-simd-threaded.wasm': '/ort-wasm-simd-threaded.wasm',
-        };
+        } as any;
       }
     } catch (e) {
       console.warn('ONNX Runtime Web environment configuration failed: ', e);

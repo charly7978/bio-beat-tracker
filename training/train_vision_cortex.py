@@ -253,6 +253,7 @@ def train_vision_cortex(epochs: int = 40, batch_size: int = 64, device: str = "c
                 pred_finger, pred_centroid, pred_signal, pred_latent = model(img)
                 
                 loss_finger = bce(pred_finger, finger)
+                
                 finger_mask = finger.squeeze(-1) > 0.5
                 if finger_mask.sum() > 0:
                     loss_centroid = mse(pred_centroid[finger_mask], centroid[finger_mask])
@@ -275,7 +276,7 @@ def train_vision_cortex(epochs: int = 40, batch_size: int = 64, device: str = "c
             best_loss = avg_val
             torch.save(model.state_dict(), os.path.join(os.path.dirname(__file__), "vision_cortex.pt"))
             
-    # Load best weights and export
+    # Load best and export
     model.load_state_dict(torch.load(os.path.join(os.path.dirname(__file__), "vision_cortex.pt")))
     export_to_onnx(model, device)
     print("Vision Cortex training complete.")
@@ -305,4 +306,24 @@ def export_to_onnx(model: VisionCortexNet, device: torch.device):
     print(f"Vision Cortex Model exported to {out_path}")
 
 if __name__ == "__main__":
-    train_vision_cortex()
+    import argparse
+    parser = argparse.ArgumentParser(description="Train Vision Cortex Model")
+    parser.add_argument("--epochs", type=int, default=30, help="Number of training epochs")
+    parser.add_argument("--batch-size", type=int, default=64, help="Batch size")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay")
+    parser.add_argument("--size", type=int, default=5000, help="Dataset size")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cpu/cuda)")
+    
+    args = parser.parse_args()
+    
+    train_vision_cortex(
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        size=args.size,
+        seed=args.seed,
+        device=args.device
+    )

@@ -13,6 +13,22 @@ export interface AnthropometricProfile {
   isMale: boolean;
 }
 
+export interface PwaMedianFeatures {
+  bDivA: number;
+  dDivA: number;
+  agi: number;
+  sutMs: number;
+  diastolicPhaseMs: number;
+  stiffnessIndex: number;
+  augmentationIndex: number;
+  dicroticDepth: number;
+  areaRatio: number;
+  pw50Ms: number;
+  kValue: number;
+  vMax: number;
+  harmonicDistortion: number;
+}
+
 export function isPhysiologicalBp(sbp: number, dbp: number): boolean {
   if (!Number.isFinite(sbp) || !Number.isFinite(dbp)) return false;
   return sbp >= 70 && sbp <= 220 && dbp >= 40 && dbp <= 130 && (sbp - dbp) >= 15;
@@ -26,7 +42,7 @@ export function estimatePhysiologicalBp(
 ): { systolic: number; diastolic: number } {
   const hr = context.hr;
   let sbpBase = 120;
-  let dbpBase = 80;
+  const dbpBase = 80;
 
   if (profile) {
     sbpBase += (profile.ageYears - 30) * 0.3;

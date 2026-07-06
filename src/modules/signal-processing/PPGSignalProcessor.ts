@@ -939,7 +939,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     };
   }
 
-  private isLiveFingerFrame(roi: ROIMetrics, ensembleScore = 0): boolean {
+  private isLiveFingerFrame(roi: ROIMetrics, _ensembleScore = 0): boolean {
     return this.detectFingerInstant(roi);
   }
 
