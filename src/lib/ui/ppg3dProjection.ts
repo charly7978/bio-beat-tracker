@@ -172,19 +172,34 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   // Menos columnas = celdas más grandes. Líneas mayores cada 5 (estilo papel ECG).
   const TARGET_COLS = 11;
   const cellPx = proj.plotW / TARGET_COLS;
-  const halfCols = Math.ceil(TARGET_COLS / 2);
+  // Ancho subrepticiamente extendido: FLOOR_WIDEN sólo agrega baldosas laterales
+  // (recortadas por el clip). vpX y horizonY no cambian → 3D intacto.
+  const halfCols = Math.ceil((TARGET_COLS * FLOOR_WIDEN) / 2);
   const halfX = halfCols * cellPx;
   const dZ = cellPx / proj.floorSpanY; // paso de profundidad = ancho de celda → cuadrada
 
-  // Filas (Z constante): cuadradas cerca, agrupándose al horizonte. Se cortan cuando
-  // dos filas quedan a < 2 px (evita el moiré en la lejanía).
-  let rowIdx = 0;
+  // Treadmill infinito: desplazamos TODAS las filas por una fracción de celda que
+  // avanza continuamente. Al empatar el período con `dZ`, la última fila que se
+  // recicla al horizonte y la nueva que emerge del zNear ocupan posiciones idénticas
+  // en el patrón → CERO costura, CERO parpadeo. `cycleCount` compensa la numeración
+  // de major/minor cuando phaseFrac se reinicia (0 → 1) para que las líneas fuertes
+  // (major) sigan la misma cadencia visual sin saltos discretos.
+  const rawPhase = state.now / FLOOR_FLOW_PERIOD_MS;
+  const cycleCount = Math.floor(rawPhase);
+  const phaseFrac = rawPhase - cycleCount;
+
+  // Filas (Z variable con phaseFrac): cuadradas cerca, condensadas al horizonte.
+  // Cortamos cuando dos filas quedan a < 2 px (evita moiré en la lejanía).
   let prevRowY = Number.POSITIVE_INFINITY;
-  for (let z = proj.zNear; z <= proj.zFar + 1e-6; z += dZ, rowIdx++) {
+  const kStart = Math.ceil(phaseFrac - 1e-6); // primera fila con z ≥ zNear
+  for (let k = kStart; k < 400; k++) {
+    const z = proj.zNear + (k - phaseFrac) * dZ;
+    if (z > proj.zFar + 1e-6) break;
     const a = proj.floorPoint(-halfX, z);
     if (prevRowY - a.y < 2) break;
     const b = proj.floorPoint(halfX, z);
-    const isMajor = rowIdx % 5 === 0;
+    const rowMajorIdx = k + cycleCount;
+    const isMajor = ((rowMajorIdx % 5) + 5) % 5 === 0;
     const fade = 0.3 + 0.7 * a.scale;
     const alpha = (isMajor ? 0.55 : 0.25) * fade;
     ctx.strokeStyle = `rgba(${C.gridMinor}, ${alpha.toFixed(3)})`;
@@ -196,7 +211,8 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     prevRowY = a.y;
   }
 
-  // Columnas (X constante): separadas cellPx en mundo → convergen al punto de fuga.
+  // Columnas (X constante, estáticas): dan la sensación de "vías" fijas por donde
+  // la cinta se desliza. Convergen al punto de fuga → refuerzan el 3D.
   for (let k = -halfCols; k <= halfCols; k++) {
     const xw = k * cellPx;
     const near = proj.floorPoint(xw, proj.zNear);
