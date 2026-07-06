@@ -491,34 +491,46 @@ export function drawWaveRibbon3D(
   }
 
   if (revealed) {
-    // 5b) Trazo con brillo base (último 35%)
-    ctx.shadowColor = `rgba(${C.signal}, 0.45)`;
-    ctx.shadowBlur = 8; // SHADOW_BLUR_BASE
+    // 5b) Trazo con brillo base (último 35%) — glow reforzado sutilmente.
+    ctx.shadowColor = `rgba(${C.signal}, 0.55)`;
+    ctx.shadowBlur = 12; // era 8 — luminosidad más potente sin perder finesse
     s = Math.max(recentCut, 0);
     while (s < n - 1) {
       const isArr = coords[s].isArr;
       let segEnd = s;
       while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
       drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
-      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.65)` : `rgba(${C.signal}, 0.68)`;
-      ctx.lineWidth = 1.6; // GLOW_STROKE_WIDTH
+      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.72)` : `rgba(${C.signal}, 0.78)`;
+      ctx.lineWidth = 1.7;
       ctx.stroke();
       s = segEnd;
     }
 
-    // 5c) Trazo líder de punta (último 10%)
-    ctx.shadowBlur = 15; // SHADOW_BLUR_LEADING
+    // 5c) Trazo líder de punta (último 10%) — halo amplio, cabeza más viva.
+    ctx.shadowBlur = 22; // era 15 — bloom más ancho, todavía elegante
     s = Math.max(leadingCut, 0);
     while (s < n - 1) {
       const isArr = coords[s].isArr;
       let segEnd = s;
       while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
       drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
-      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.85)` : '#4ade80';
-      ctx.lineWidth = 1.5; // LEADING_STROKE_WIDTH
-      ctx.shadowColor = isArr ? `rgba(${C.arr}, 0.45)` : `rgba(${C.signal}, 0.45)`;
+      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.92)` : '#7bf5a2';
+      ctx.lineWidth = 1.6;
+      ctx.shadowColor = isArr ? `rgba(${C.arr}, 0.55)` : `rgba(${C.signal}, 0.60)`;
       ctx.stroke();
       s = segEnd;
+    }
+
+    // 5d) Capa exterior de bloom ULTRA suave sobre la punta (blur muy grande,
+    //     alpha muy baja) → aureola de "monitor médico premium" sin repintar la señal.
+    ctx.shadowBlur = 34;
+    ctx.shadowColor = `rgba(${C.signal}, 0.35)`;
+    s = Math.max(leadingCut, 0);
+    if (s < n - 1) {
+      drawDirectCrestSegment(s, n);
+      ctx.strokeStyle = `rgba(${C.signalBright}, 0.18)`;
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
     }
     ctx.shadowBlur = 0;
   } else {
