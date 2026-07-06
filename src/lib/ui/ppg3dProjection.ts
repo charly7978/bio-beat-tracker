@@ -366,6 +366,53 @@ export function drawWaveRibbon3D(
     }
   }
 
+  // 1c) Rayos cian/verdes desde CADA PICO SISTÓLICO NORMAL hacia el punto de fuga.
+  // A diferencia de los rayos rojos (por muestra), aquí sólo disparamos UN rayo por
+  // latido — desde el máximo local — para no saturar la escena y mantener la clase.
+  // Los rayos usan gradiente cian→verde (misma paleta que el trazo) y decaen con la
+  // profundidad → sensación de "energía viajando al infinito" en cada latido.
+  if (revealed) {
+    for (let i = 2; i < n - 2; i++) {
+      if (coords[i].isArr) continue;
+      const v = coords[i].val;
+      // Mismo criterio de pico usado luego por los marcadores fiduciales SYS.
+      if (
+        v > coords[i - 1].val &&
+        v > coords[i + 1].val &&
+        v > coords[i - 2].val &&
+        v > coords[i + 2].val &&
+        v > geom.midValue
+      ) {
+        const p = Pfloor[i];
+        const dx = proj.vpX - p.x;
+        const dy = proj.horizonY - p.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 1) continue;
+        const nx = dx / dist, ny = dy / dist;
+        const fade = Math.min(1, (p.y - proj.horizonY) / (proj.nearY - proj.horizonY));
+        // Rayo largo (llega casi al horizonte) con degradado cian→verde tenue.
+        const rayLen = dist * 0.92;
+        const endX = p.x + nx * rayLen;
+        const endY = p.y + ny * rayLen;
+        const grad = ctx.createLinearGradient(p.x, p.y, endX, endY);
+        grad.addColorStop(0, `rgba(${C.cyan}, ${(0.16 + 0.20 * fade).toFixed(3)})`);
+        grad.addColorStop(0.55, `rgba(${C.signal}, ${(0.10 + 0.14 * fade).toFixed(3)})`);
+        grad.addColorStop(1, `rgba(${C.signal}, 0.0)`);
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 1.1 + 1.3 * fade;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+        // Núcleo brillante corto en la base del rayo → "chispa" al ras del piso.
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.8 + 1.4 * fade, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${C.cyan}, ${(0.35 + 0.35 * fade).toFixed(3)})`;
+        ctx.fill();
+      }
+    }
+  }
+
   // 2) Cara superior de la cinta (entre cresta frontal y trasera) → grosor 3D.
   if (revealed) {
     ctx.beginPath();
