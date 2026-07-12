@@ -14,6 +14,9 @@ const PULSE_EVIDENCE: RegimeEvidence = {
   bpm: 72,
   rrCv: 0.04,
   ectopyScore: 0,
+  fingerDetectionScore: 0.8,
+  liveFingerScore: 0.8,
+  ensemblePeakScore: 0.8,
 };
 
 const NO_PULSE_EVIDENCE: RegimeEvidence = {
@@ -28,6 +31,9 @@ const NO_PULSE_EVIDENCE: RegimeEvidence = {
   bpm: 0,
   rrCv: 0,
   ectopyScore: 0,
+  fingerDetectionScore: 0.1,
+  liveFingerScore: 0.1,
+  ensemblePeakScore: 0.1,
 };
 
 describe('computeEmissions', () => {

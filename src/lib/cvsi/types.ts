@@ -72,6 +72,12 @@ export interface CvsiInput {
     acGreen: number;
     dcGreen: number;
   };
+  /** Heurística de detección de dedo: color + forma (0–1). */
+  fingerDetectionScore?: number;
+  /** Score de ensemble de vitalidad (0–1). */
+  liveFingerScore?: number;
+  /** Score de peak detection ensemble (0–1). */
+  ensemblePeakScore?: number;
 }
 
 /** Diagnóstico del modelo generativo del pulso (predictive coding). */
@@ -141,4 +147,10 @@ export interface RegimeEvidence {
   rrCv: number;
   /** Evidencia de latidos prematuros (patrón corto-largo), 0–1. */
   ectopyScore: number;
+  /** Heurística de detección de dedo (color + forma). */
+  fingerDetectionScore: number;
+  /** Score de ensemble de vitalidad. */
+  liveFingerScore: number;
+  /** Score de peak detection ensemble. */
+  ensemblePeakScore: number;
 }

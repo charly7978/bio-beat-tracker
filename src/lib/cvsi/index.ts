@@ -89,6 +89,9 @@ export class CardiovascularStateInference {
       bpm: dominantBpm,
       rrCv,
       ectopyScore,
+      fingerDetectionScore: input.fingerDetectionScore ?? 0,
+      liveFingerScore: input.liveFingerScore ?? 0,
+      ensemblePeakScore: input.ensemblePeakScore ?? 0,
     };
     const regimeBelief = this.regimeEngine.update(evidence);
     const mostLikelyRegime = argmaxRegime(regimeBelief);

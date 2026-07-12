@@ -629,6 +629,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     const perfusionIndex = this.cachedPI;
 
+    // Evidencia heurística consolidada (disponible siempre para fallback):
+    // los 6 gates anteriores quedan como "soft evidence" que REFUERZA (no
+    // reemplaza) el razonamiento Bayesiano. Si la física (coherencia multi-λ)
+    // dice NO, estos scores no lo anulan.
+    const snapHb = this.rgbSnapshotFromSmoothed();
+    const hemoglobinScene =
+      hasFingerHemoglobinSignature(snapHb) && !isOpenFlashWithoutContact(snapHb);
+    const ensembleScene = this.lastEnsembleScore > VITAL_THRESHOLDS.FINGER.ENSEMBLE_FINGER_THRESHOLD;
+
     // === RAZONAMIENTO CVSI: ¿la señal es un pulso cardiovascular real? ===
     // El motor mantiene una creencia continua sobre el estado cardiovascular a
     // partir de la ventana filtrada + evidencias ópticas ya calculadas. Corre
@@ -639,6 +648,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       const win = this.filteredBuffer.tail(
         Math.min(this.filteredBuffer.length, DSP_CONSTANTS.BUFFER_SIZE),
       );
+
       this.lastCvsiState = this.cvsi.update({
         filtered: Array.from(win),
         fs: this.estimatedSampleRate,
@@ -650,29 +660,28 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         periodicity: this.cachedPeriodicity,
         motionScore: this.motionScore,
         spo2Channels: splitOut.spo2,
+        // Scores heurísticos: 0–1, refuerzan la detección pero no la garantizan.
+        fingerDetectionScore: hemoglobinScene ? 0.8 : 0.2,
+        liveFingerScore: liveFinger ? (0.6 + 0.4 * Math.min(this.lastEnsembleScore / (VITAL_THRESHOLDS.FINGER.ENSEMBLE_FINGER_THRESHOLD * 1.5), 1)) : 0.2,
+        ensemblePeakScore: Math.min(this.lastEnsembleScore / (VITAL_THRESHOLDS.FINGER.ENSEMBLE_FINGER_THRESHOLD * 1.5), 1),
       });
     }
-    // Veto de perfusión: el motor SOLO puede RECHAZAR (objeto sin pulso real),
-    // nunca fuerza detección — así no daña la adquisición de un dedo real. Solo
-    // actúa con buffer suficiente y una creencia confiada de NO_PERFUSION.
-    const cvsiReady = this.filteredBuffer.length >= 150 && this.frameCount > 90;
-    const cvsiNoPulseVeto =
-      cvsiReady && this.lastCvsiState !== null && this.lastCvsiState.perfusionProbability < 0.3;
 
-    const snapHb = this.rgbSnapshotFromSmoothed();
-    const hemoglobinScene =
-      hasFingerHemoglobinSignature(snapHb) && !isOpenFlashWithoutContact(snapHb);
-    const ensembleScene = this.lastEnsembleScore > VITAL_THRESHOLDS.FINGER.ENSEMBLE_FINGER_THRESHOLD;
+    // ÚNICA decisión de CVSI: si la física infiere perfusión, ese es el arbitro.
+    // (Antes: 6 puertas AND en serie; ahora: 1 decisión probabilística con inertia temporal.)
+    const cvsiReady = this.filteredBuffer.length >= 150 && this.frameCount > 90;
+    const cvsiDecidesPerfusion =
+      cvsiReady &&
+      this.lastCvsiState !== null &&
+      this.lastCvsiState.mostLikelyRegime !== 'NO_PERFUSION';
+
     const fingerUi =
-      this.fingerDetected &&
-      liveFinger &&
-      (hemoglobinScene || ensembleScene) &&
-      (this.lastInstantFinger || this.contactState === 'STABLE_CONTACT') &&
-      !cvsiNoPulseVeto;
-    // Estado de contacto emitido: si el motor infiere que no hay pulso real
+      cvsiDecidesPerfusion &&
+      (this.lastInstantFinger || this.contactState === 'STABLE_CONTACT');
+    // Estado de contacto emitido: si CVSI infiere que no hay pulso real
     // (objeto), se reporta NO_CONTACT y el router limpia SpO2/PA/ondas como en
     // cualquier pérdida de contacto (reutiliza el gating de seguridad existente).
-    const emittedContactState: ContactState = cvsiNoPulseVeto ? 'NO_CONTACT' : this.contactState;
+    const emittedContactState: ContactState = !cvsiDecidesPerfusion ? 'NO_CONTACT' : this.contactState;
 
     // Post-motion hold-off: despues de que el motion cesa, el BPF 4° orden aun
     // tiene ringing (~0.5s). Suprimimos la salida durante ese tiempo.
@@ -688,8 +697,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         (hemoglobinScene || ensembleScene) &&
         this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.85)) &&
       !motionArtifact &&
-      this.postMotionSuppression <= 0 &&
-      !cvsiNoPulseVeto;
+      this.postMotionSuppression <= 0;
     const displayQuality = signalPathActive
       ? fingerUi
         ? this.displaySqiEma

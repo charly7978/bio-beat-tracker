@@ -77,9 +77,23 @@ export function computeEmissions(ev: RegimeEvidence): RegimeBelief {
     0,
     1,
   );
-  // Piso pequeño (0.12) para tolerar un frame con canal verde momentáneamente
-  // débil sin colapsar; la inercia temporal de la creencia absorbe el resto.
-  const pulsePresence = clamp(corePulse * (0.12 + 0.88 * physicalLiveness), 0, 1);
+  // Heurísticas de detección (color + ensemble): refuerzan la evidencia de dedo real
+  // pero NO reemplazan el razonamiento físico. Si el pipeline ve un dedo (color +
+  // ensemble alto) pero la física no lo confirma (bvp=0), la creencia sigue siendo
+  // NO_PERFUSION. Son "soft hints", no vetos.
+  const heuristicFinger = softAnd(
+    smoothstep(0.3, 0.7, ev.fingerDetectionScore),
+    smoothstep(0.3, 0.7, ev.liveFingerScore),
+    smoothstep(0.4, 0.8, ev.ensemblePeakScore),
+  );
+  // Modulación: si las heurísticas VEN un dedo, refuerza un poco. Si NO lo ven,
+  // reduce el piso muy ligeramente (pero la física sigue siendo el arbitro).
+  const heuristicBonus = 0.02 * heuristicFinger; // +0 a +0.02 según heurísticas
+  const pulsePresence = clamp(
+    corePulse * (0.12 + heuristicBonus + (0.88 - heuristicBonus) * physicalLiveness),
+    0,
+    1,
+  );
 
   // --- Ritmo (dado que hay pulso). ---
   const regularity = smoothstepDown(0.08, 0.22, ev.rrCv);
