@@ -1,13 +1,13 @@
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import type { FingerRgbSnapshot } from './fingerContactSignature';
-import type { FingerRoiSpatial } from './fingerSceneClassifier';
 import type { FingerPlacementMode } from '@/types/signal';
-import {
-  isFingerOnLensScene,
-  passesFingerMaintain,
-  passesLiveFingerContact,
-} from './fingerSceneClassifier';
 
+/**
+ * Clasificación de colocación (yema vs. almohadilla) a partir de señales
+ * FISIOLÓGICAS — cobertura del ROI, pulsatilidad temporal del rojo (CV) e índice
+ * de perfusión — SIN firma de color. Solo ajusta pesos de morfología aguas abajo
+ * (HR usa más verde en yema; PA usa más morfología en almohadilla); nunca abre
+ * ni cierra la medición (eso lo decide el CardiacPresenceEngine).
+ */
 export interface PlacementMetrics {
   coverageRatio: number;
   roiRedCv: number;
@@ -39,54 +39,6 @@ export function smoothPlacementMode(
     return { mode: prev, streak: { mode: next, count } };
   }
   return { mode: prev, streak: { mode: next, count: 1 } };
-}
-
-/** Adquisición unificada: punta (pulso fuerte) o almohadilla (morfología PA) sin exigir solo un modo. */
-export function passesUnifiedFingerAcquire(
-  raw: FingerRgbSnapshot,
-  smoothed: FingerRgbSnapshot,
-  spatial: FingerRoiSpatial,
-  roiRedCv: number,
-  perfusionIndex: number,
-): boolean {
-  const F = VITAL_THRESHOLDS.FINGER;
-  const rb = raw.red / Math.max(1, raw.blue);
-  if (rb < F.ACQUIRE_RB_STRICT) return false;
-
-  const mode = classifyFingerPlacement({
-    coverageRatio: spatial.coverageRatio,
-    roiRedCv,
-    perfusionIndex,
-  });
-
-  if (mode === 'pad') {
-    return (
-      spatial.coverageRatio >= VITAL_THRESHOLDS.PLACEMENT.PAD_COVERAGE_MIN * 0.92 &&
-      passesFingerMaintain(raw, smoothed, spatial)
-    );
-  }
-
-  if (mode === 'tip') {
-    return (
-      spatial.coverageRatio >= F.MIN_COVERAGE * 0.88 &&
-      passesLiveFingerContact(raw, smoothed, spatial)
-    );
-  }
-
-  const r = smoothed.red;
-  const g = Math.max(1, smoothed.green);
-  const b = Math.max(1, smoothed.blue);
-  const total = r + g + b;
-  const strict =
-    rb >= F.ACQUIRE_RB_STRICT &&
-    total >= F.ACQUIRE_INTENSITY_MIN &&
-    total <= F.ACQUIRE_INTENSITY_MAX &&
-    spatial.coverageRatio >= F.MIN_COVERAGE * 0.95 &&
-    spatial.fingerScore >= F.ACQUIRE_SMOOTHED_FINGER_MIN;
-
-  return (
-    isFingerOnLensScene(smoothed, spatial.coverageRatio, spatial.fingerScore) || strict
-  );
 }
 
 export function placementHintText(mode: FingerPlacementMode, perfusionIndex?: number): string {

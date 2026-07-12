@@ -100,6 +100,78 @@ export const VITAL_THRESHOLDS = {
     },
   },
   
+  /**
+   * CARDIAC PRESENCE ENGINE — validez cardiorrespiratoria (gate maestro).
+   *
+   * Umbrales del clasificador de PRESENCIA DE PULSO HUMANO REAL que reemplaza al
+   * gate por firma de color. Cada sub-score se normaliza clamp01((v−LO)/(HI−LO))
+   * y se fusiona con WEIGHTS (suman 1.0). Valores derivados de literatura PPG por
+   * smartphone (Elgendi 2016 SQI; Orphanidou 2015 template-matching; SQA por
+   * frecuencia 2023-2025) y del comportamiento real de la cámara (concentración
+   * espectral ≈1 para pulso limpio, ≈0 para objeto inerte/ruido).
+   */
+  CARDIAC_PRESENCE: {
+    /** Banda cardíaca de búsqueda del fundamental (Hz) → 42..192 BPM. */
+    BAND_MIN_HZ: 0.7,
+    BAND_MAX_HZ: 3.2,
+    /** Ventana mínima de señal para evaluar (s). Un latido necesita ≥ ~3 s. */
+    MIN_WINDOW_SEC: 3.0,
+    /** Rango fisiológico de FC aceptado como pulso real (BPM). */
+    MIN_BPM: 42,
+    MAX_BPM: 190,
+    /** Dispersión máx (max−min) del BPM en la ventana para FC "estable" (BPM). */
+    BPM_SPREAD_MAX: 14,
+    /** Muestras de BPM del fundamental retenidas para estabilidad. */
+    BPM_HISTORY: 20,
+
+    // ── Normalización de sub-scores (LO = piso ruido, HI = pulso claro)
+    SPEC_CONC_LO: 0.12,
+    SPEC_CONC_HI: 0.5,
+    HARMONIC_LO: 0.05,
+    HARMONIC_HI: 0.45,
+    PERIODICITY_LO: 0.3,
+    PERIODICITY_HI: 0.72,
+    TEMPLATE_LO: 0.45,
+    TEMPLATE_HI: 0.85,
+    SKEW_LO: -0.2,
+    SKEW_HI: 0.45,
+    PI_LO: 0.0004,
+    PI_HI: 0.004,
+    /** Entropía: se puntúa (1 − entropía). LO/HI sobre esa concentración. */
+    ENTROPY_LO: 0.15,
+    ENTROPY_HI: 0.55,
+
+    /** Pesos de fusión (suman 1.0). Los discriminantes fuertes (concentración,
+     *  armónicos, template) pesan más; skewness/PI/entropía refuerzan. */
+    WEIGHTS: {
+      spectralConcentration: 0.22,
+      harmonic: 0.14,
+      periodicity: 0.16,
+      template: 0.20,
+      skewness: 0.06,
+      perfusion: 0.08,
+      entropy: 0.06,
+      bpmPlausibility: 0.08,
+    },
+
+    // ── Histéresis + dwell temporal del latch de presencia
+    /** Confianza para ENTRAR en "presente" (histéresis alta). */
+    CONF_ENTER: 0.52,
+    /** Confianza para SALIR de "presente" (histéresis baja). */
+    CONF_EXIT: 0.34,
+    /** EMA de subida (attack) y bajada (release) de la confianza. */
+    CONF_ATTACK: 0.12,
+    CONF_RELEASE: 0.06,
+    /** Frames sostenidos sobre ENTER antes de declarar presente (≈0.9 s @30 fps). */
+    ENTER_DWELL_FRAMES: 28,
+    /** Frames bajo EXIT antes de retirar presencia (≈0.4 s → cae rápido al soltar). */
+    EXIT_DWELL_FRAMES: 12,
+    /** Frames mínimos evaluados antes de poder declarar presente (warm-up). */
+    WARMUP_FRAMES: 30,
+    /** Tolerancia de movimiento antes de penalizar la confianza. */
+    MOTION_TOLERANCE: 0.6,
+  },
+
   // SIGNAL QUALITY (SQI)
   QUALITY: {
     /** SQI mínimo para publicar BPM en UI (la onda puede verse antes) */

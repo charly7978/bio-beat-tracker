@@ -68,6 +68,31 @@ describe('PPGSignalProcessor', () => {
     expect(states.has('UNSTABLE_CONTACT') || states.has('STABLE_CONTACT')).toBe(true);
   });
 
+  it('does NOT detect a bright STATIC red object (no cardiac pulse)', () => {
+    // Objeto rojo brillante e inmóvil: pasaría el viejo gate por color, pero NO
+    // tiene latido → el gate cardiorrespiratorio debe mantenerlo cerrado.
+    for (let i = 0; i < 200; i++) proc.processFrame(makeFrame(64, 64, 200, 80, 60));
+    const last = signals[signals.length - 1];
+    expect(last.fingerDetected).toBe(false);
+    expect(last.contactState).toBe('NO_CONTACT');
+    expect(last.quality).toBe(0);
+    expect(last.filteredValue).toBe(0);
+  });
+
+  it('does NOT detect a noisy red object without a periodic pulse', () => {
+    let seed = 4242;
+    const rnd = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    for (let i = 0; i < 200; i++) {
+      const r = Math.round(170 + 30 * rnd());
+      proc.processFrame(makeFrame(64, 64, r, 85, 65));
+    }
+    const last = signals[signals.length - 1];
+    expect(last.fingerDetected).toBe(false);
+  });
+
   it('stop() halts emission of new signals', () => {
     proc.processFrame(makeFrame(64, 64, 200, 80, 60));
     proc.stop();

@@ -19,25 +19,16 @@ import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { DSP_CONSTANTS } from '../../config/signalProcessing';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 import {
-  hasFingerHemoglobinSignature,
-  calibrateZlo,
-  getZlo,
-  resetZlo,
-} from '../../lib/finger/fingerContactSignature';
-import {
-  isExposureFlickerNotFingerPulse,
-  isOpenFlashWithoutContact,
-  passesFingerAcquire,
-  passesFingerMaintain,
-  passesLiveFingerContact,
-  passesPulsatileAcquire,
-  updateFingerDetection,
-} from '../../lib/finger/fingerSceneClassifier';
+  createCardiacPresence,
+  updateCardiacPresence,
+  resetCardiacPresence,
+  type CardiacPresenceState,
+} from '../../lib/cardiac/CardiacPresenceEngine';
 import {
   classifyFingerPlacement,
   placementHintText,
   smoothPlacementMode,
-} from '../../lib/finger/fingerPlacementProfile';
+} from '../../lib/signal/placementProfile';
 import type { FingerPlacementMode } from '../../types/signal';
 import {
   inferCameraRuntimeHints,
@@ -197,16 +188,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private stableContactCount = 0;
   private instantLostStreak = 0;
   private liveFingerMissStreak = 0;
-  private noContactHardStreak = 0;
   private cameraHints: CameraRuntimeHints = inferCameraRuntimeHints();
   private lastInstantFinger = false;
-  private readonly FINGER_CONFIRM_FRAMES = VITAL_THRESHOLDS.FINGER.FINGER_CONFIRM_FRAMES;
-
-  // Ensemble de detección universal: gray buffer + temporal variance + ZLO
-  private grayBuffer: Uint8ClampedArray | null = null;
   private lastEnsembleScore = 0;
-  private zloFrameCount = 0;
-  private readonly ZLO_CALIBRATION_FRAMES = 10;
 
   // Suavizado temporal — más lentos = más estable
   private smoothedRed = 0;
@@ -277,6 +261,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   // Estabilización de adquisición (fase inicial de colocación del dedo):
   // fusiona PI/periodicidad/SQI/cobertura/movimiento en una confianza firme.
   private readonly acquisitionState: AcquisitionState = createAcquisitionState();
+
+  // === GATE MAESTRO: PRESENCIA DE SEÑAL CARDIORRESPIRATORIA REAL ===
+  // Reemplaza la detección por firma de color. Decide si la señal óptica contiene
+  // un latido humano genuino; si no, NADA se mide (onda plana, sin BPM/SpO₂/PA).
+  private readonly cardiacPresence: CardiacPresenceState = createCardiacPresence();
+  /** Frames consecutivos sin frame óptico válido → reset de buffers DSP. */
+  private opticalInvalidStreak = 0;
 
   // === MULTI-SOURCE RANKING (CHROM eliminado — amplifica ruido sin dedo) ===
   private readonly sourceBuffers: { [key: string]: RingF32 } = {
@@ -352,62 +343,48 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         ? redSeriesCoefficientOfVariation(this.statScratch, nPulse)
         : 0;
 
-    // Calibrar ZLO en primeros frames (sin flash/flash apagado)
-    if (!getZlo().calibrated && this.zloFrameCount < this.ZLO_CALIBRATION_FRAMES) {
-      const sum = roi.rawRed + roi.rawGreen + roi.rawBlue;
-      if (sum < 30 && this.zloFrameCount === 0) {
-        calibrateZlo(roi.rawRed, roi.rawGreen, roi.rawBlue);
-      }
-      this.zloFrameCount++;
-    }
+    // Suavizado temporal de RGB (media móvil para métricas de exposición).
+    this.updateSmoothedRgb(roi);
 
-    // Gray buffer para histograma + varianza temporal (ensemble detection)
-    const endGray = ppgPerf.start('gray');
-    if (!this.grayBuffer || this.grayBuffer.length !== imageData.width * imageData.height) {
-      this.grayBuffer = new Uint8ClampedArray(imageData.width * imageData.height);
-    }
-    for (let i = 0; i < imageData.data.length; i += 4) {
-      this.grayBuffer[i / 4] = (imageData.data[i] * 77 + imageData.data[i + 1] * 150 + imageData.data[i + 2] * 29) >> 8;
-    }
-    endGray();
-
-    this.updateContactState(roi);
-
-    // Toleramos mayor movimiento físico (aceleración/giroscopio) si la calidad de
-    // la señal óptica (SQI) sigue siendo buena, ya que el acoplamiento dedo-lente
-    // puede permanecer estable a pesar de temblores o giros del celular.
+    // Movimiento efectivo (IMU + micro-movimiento de señal), tolerante si el SQI es bueno.
     const effectiveMotionThreshold = this.signalQuality >= 50
       ? 1.8
       : this.signalQuality >= 30
         ? 1.2
         : this.MOTION_THRESHOLD; // 0.6
     const motionArtifact = this.motionScore > effectiveMotionThreshold;
-    const fingerEnsemble = updateFingerDetection(
-      { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue, coverage: roi.coverageRatio, fingerScore: roi.fingerScore },
-      { red: this.smoothedRed, green: this.smoothedGreen, blue: this.smoothedBlue, coverage: this.smoothedCoverage, fingerScore: this.smoothedFingerScore },
-      { coverageRatio: roi.coverageRatio, fingerScore: roi.fingerScore, fingerTileCount: roi.fingerTileCount },
-      this.grayBuffer,
-      this.lastEnsembleScore,
-    );
-    this.lastEnsembleScore = fingerEnsemble.ensemble.ensembleScore;
-    const liveFinger = this.isLiveFingerFrame(roi, this.lastEnsembleScore);
 
-    if (this.contactState !== 'NO_CONTACT' && !liveFinger) {
-      this.liveFingerMissStreak++;
-      const grace = this.cameraHints.liveFingerMissGrace;
-      if (this.liveFingerMissStreak >= grace && !this.cameraHints.constrained) {
-        this.setNoContact(/* hardReset */ true);
-      } else {
-        this.contactState = 'UNSTABLE_CONTACT';
-        this.fingerDetected =
-          this.fingerConfidenceCount >= this.getFingerConfirmFrames() || this.fingerDetected;
+    // VALIDEZ ÓPTICA (física, NO color): un frame saturado (todo blanco) o negro
+    // (sin luz) no puede portar un pulso. Es el ÚNICO pre-filtro; quién decide si
+    // hay latido real es el CardiacPresenceEngine sobre la señal filtrada.
+    const totalRgb = roi.rawRed + roi.rawGreen + roi.rawBlue;
+    const saturated = roi.rawRed > 252 && roi.rawGreen > 251 && roi.rawBlue > 251;
+    const blackFloor = this.cameraHints.constrained ? 12 : 20;
+    const opticalValid = !saturated && totalRgb >= blackFloor;
+
+    const underInstant = this.smoothedRed < 12 && this.smoothedGreen < 10 ? 1 : 0;
+    this.underexposureEma = this.underexposureEma * 0.92 + underInstant * 0.08;
+
+    if (!opticalValid) {
+      // Sin frame óptico válido: el motor decae (present cae tras el dwell) y, si
+      // persiste, se vacían los buffers DSP para no arrastrar ringing.
+      this.opticalInvalidStreak++;
+      updateCardiacPresence(this.cardiacPresence, {
+        signal: [],
+        fs: this.estimatedSampleRate,
+        perfusionIndex: 0,
+        skewness: 0,
+        motion: this.motionScore,
+        opticalValid: false,
+        nowMs: timestamp,
+      });
+      const resetAfter = this.cameraHints.bufferResetAfterNoContact ?? 8;
+      if (this.opticalInvalidStreak >= resetAfter) {
+        this.resetSignalTrackingBuffers();
+        this.resetBaselines();
       }
-    } else {
-      this.liveFingerMissStreak = 0;
-    }
-
-    if (this.contactState === 'NO_CONTACT') {
-      this.consecutiveNoContactFrames++;
+      this.fingerDetected = false;
+      this.contactState = 'NO_CONTACT';
       this.signalQuality = 0;
       this.displaySqiEma = 0;
       Object.assign(this.diagStatusState, createDiagnosticStatusState());
@@ -429,56 +406,21 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       });
       return;
     }
+    this.opticalInvalidStreak = 0;
 
-    // GATES DE RECHAZO ESTRICTOS (Phase 3C)
+    // Rechazos físicos duros que impiden extraer señal fiable (independientes del
+    // gate cardíaco). No incluyen "sin dedo": eso lo decide la presencia cardíaca.
     let rejectionStatus: MeasurementStatus | null = null;
-    const r = this.smoothedRed;
-    const g = this.smoothedGreen;
-    const _b = this.smoothedBlue;
-
-    const underInstant = r < 12 && g < 10 ? 1 : 0;
-    this.underexposureEma = this.underexposureEma * 0.92 + underInstant * 0.08;
-    
-    if (r > 253 && g > 252) rejectionStatus = "SATURATED";
-    else if (
-      r < (this.cameraHints.constrained ? 8 : 15) &&
-      g < (this.cameraHints.constrained ? 6 : 10)
-    ) {
-      rejectionStatus = "UNDEREXPOSED";
-    }
-    else if (motionArtifact) rejectionStatus = "MOTION_ARTIFACT";
+    if (saturated) rejectionStatus = "SATURATED";
     else if (this.pixelStride > 6) rejectionStatus = "LOW_FPS";
     else if (this.frameCount < 28) rejectionStatus = "WARMUP";
 
-    if (rejectionStatus && rejectionStatus !== "WARMUP" && rejectionStatus !== "MOTION_ARTIFACT") {
-      this.onSignalReady({
-        timestamp,
-        rawValue: 0, filteredValue: 0, quality: 0,
-        fingerDetected: true, contactState: this.contactState,
-        motionArtifact,
-        roi: this.signalRoiFromMetrics(roi),
-        perfusionIndex: this.cachedPI,
-        rawRed: roi.rawRed,
-        rawGreen: roi.rawGreen,
-        rawBlue: roi.rawBlue,
-        diagnostics: this.buildFingerDiagnostics(roi, motionArtifact, rejectionStatus, {
-          message: `RECHAZADO: ${rejectionStatus}`,
-        }),
-      });
-      // No retornamos aquí para permitir que los buffers sigan llenándose, pero la UI sabrá que no es válido
-      return;
-    }
-
-    // Tenemos contacto (UNSTABLE o STABLE)
+    // Frame óptico válido → alimentamos el pipeline DSP (baselines + buffers).
     this.updateChannelBaselines(roi.rawRed, roi.rawGreen, roi.rawBlue, motionArtifact);
 
-    const zlo = getZlo();
-    const zloAdjR = zlo.calibrated ? Math.max(0, roi.rawRed - zlo.r) : roi.rawRed;
-    const zloAdjG = zlo.calibrated ? Math.max(0, roi.rawGreen - zlo.g) : roi.rawGreen;
-    const zloAdjB = zlo.calibrated ? Math.max(0, roi.rawBlue - zlo.b) : roi.rawBlue;
-    this.redBuffer.push(zloAdjR);
-    this.greenBuffer.push(zloAdjG);
-    this.blueBuffer.push(zloAdjB);
+    this.redBuffer.push(roi.rawRed);
+    this.greenBuffer.push(roi.rawGreen);
+    this.blueBuffer.push(roi.rawBlue);
 
     this.updateSignalMotion(roi.rawRed, roi.centroidMotion);
 
@@ -502,8 +444,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     );
     this.placementMode = smoothedPlacement.mode;
     this.placementStreak = smoothedPlacement.streak;
-
-    this.reconcileStableContact();
 
     // Multi-source extraction
     const pulseSource = this.extractBestPulseSignal(
@@ -607,11 +547,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.signalQuality = this.cachedSqi;
 
     const rejectionScale =
-      rejectionStatus === 'MOTION_ARTIFACT'
-        ? 0.78
-        : rejectionStatus && rejectionStatus !== 'WARMUP'
-          ? 0.45
-          : 1;
+      rejectionStatus && rejectionStatus !== 'WARMUP' ? 0.45 : 1;
     this.displaySqiEma = SignalQualityIndex.smoothDisplayedSqi(
       this.displaySqiEma,
       this.signalQuality,
@@ -621,15 +557,40 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     endSqi();
 
     const perfusionIndex = this.cachedPI;
-    const snapHb = this.rgbSnapshotFromSmoothed();
-    const hemoglobinScene =
-      hasFingerHemoglobinSignature(snapHb) && !isOpenFlashWithoutContact(snapHb);
-    const ensembleScene = this.lastEnsembleScore > VITAL_THRESHOLDS.FINGER.ENSEMBLE_FINGER_THRESHOLD;
-    const fingerUi =
-      this.fingerDetected &&
-      liveFinger &&
-      (hemoglobinScene || ensembleScene) &&
-      (this.lastInstantFinger || this.contactState === 'STABLE_CONTACT');
+
+    // ================= GATE MAESTRO CARDIORRESPIRATORIO =================
+    // Se alimenta al motor con la señal filtrada en banda cardíaca. Él decide si
+    // hay un LATIDO HUMANO REAL. Nada de firma de color: un objeto rojo/brillante
+    // sin pulso da confianza baja → present=false → NADA se mide.
+    const C = VITAL_THRESHOLDS.CARDIAC_PRESENCE;
+    const windowSamples = Math.min(
+      this.filteredBuffer.length,
+      Math.max(90, Math.round(this.estimatedSampleRate * 6)),
+    );
+    const cardiacSignal = windowSamples > 0 ? this.filteredBuffer.tail(windowSamples) : [];
+    updateCardiacPresence(this.cardiacPresence, {
+      signal: cardiacSignal,
+      fs: this.estimatedSampleRate,
+      perfusionIndex,
+      skewness: this.cachedSkewness,
+      motion: Math.max(this.motionScore, this.signalMotionScore),
+      opticalValid: true,
+      nowMs: timestamp,
+    });
+    const cardiacPresent = this.cardiacPresence.present;
+    if (this.cardiacPresence.bpm > 0) this.lastKnownBpm = this.cardiacPresence.bpm;
+
+    // fingerDetected/contactState conservan el nombre por compatibilidad del tipo,
+    // pero su SEMÁNTICA es ahora "presencia de señal cardíaca válida".
+    this.fingerDetected = cardiacPresent;
+    this.contactState = cardiacPresent
+      ? this.cardiacPresence.confidence >= C.CONF_ENTER && this.cardiacPresence.bpm > 0
+        ? 'STABLE_CONTACT'
+        : 'UNSTABLE_CONTACT'
+      : this.cardiacPresence.confidence >= C.CONF_EXIT
+        ? 'UNSTABLE_CONTACT'
+        : 'NO_CONTACT';
+    const fingerUi = cardiacPresent;
 
     // Post-motion hold-off: despues de que el motion cesa, el BPF 4° orden aun
     // tiene ringing (~0.5s). Suprimimos la salida durante ese tiempo.
@@ -640,17 +601,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     const signalPathActive =
-      (fingerUi ||
-      (this.lastInstantFinger &&
-        (hemoglobinScene || ensembleScene) &&
-        this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.85)) &&
-      !motionArtifact &&
-      this.postMotionSuppression <= 0;
-    const displayQuality = signalPathActive
-      ? fingerUi
-        ? this.displaySqiEma
-        : Math.round(this.displaySqiEma * 0.55)
-      : 0;
+      cardiacPresent && !motionArtifact && this.postMotionSuppression <= 0;
+    const displayQuality = signalPathActive ? this.displaySqiEma : 0;
     const rawSqiOut = signalPathActive ? this.signalQuality : 0;
 
     this.stepAcquisition(fingerUi);
@@ -739,8 +691,24 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     });
   }
 
-  private getFingerConfirmFrames(): number {
-    return this.cameraHints.fingerConfirmFrames;
+  /** Media móvil de RGB/cobertura para métricas de exposición (sin color-gate). */
+  private updateSmoothedRgb(roi: ROIMetrics): void {
+    const { rawRed, rawGreen, rawBlue, coverageRatio, fingerScore } = roi;
+    if (this.smoothedRed === 0) {
+      this.smoothedRed = rawRed;
+      this.smoothedGreen = rawGreen;
+      this.smoothedBlue = rawBlue;
+      this.smoothedCoverage = coverageRatio;
+      this.smoothedFingerScore = fingerScore;
+      return;
+    }
+    const a = this.RGB_SMOOTH_ALPHA;
+    const ca = this.COVERAGE_SMOOTH_ALPHA;
+    this.smoothedRed = this.smoothedRed * (1 - a) + rawRed * a;
+    this.smoothedGreen = this.smoothedGreen * (1 - a) + rawGreen * a;
+    this.smoothedBlue = this.smoothedBlue * (1 - a) + rawBlue * a;
+    this.smoothedCoverage = this.smoothedCoverage * (1 - ca) + coverageRatio * ca;
+    this.smoothedFingerScore = this.smoothedFingerScore * (1 - ca) + fingerScore * ca;
   }
 
   /**
@@ -757,255 +725,6 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       motionScore: this.motionScore,
       coverageRatio: this.smoothedCoverage,
     });
-  }
-
-  // === ESTADO DE CONTACTO UNIFICADO ===
-  private updateContactState(roi: ROIMetrics): void {
-    const previousState = this.contactState;
-    const hints = this.cameraHints;
-    const confirmFrames = this.getFingerConfirmFrames();
-    const instantDetected = this.detectFingerInstant(roi);
-    this.lastInstantFinger = instantDetected;
-
-    if (instantDetected) {
-      this.instantLostStreak = 0;
-      this.noContactHardStreak = 0;
-      this.fingerLostCount = 0;
-      this.fingerConfidenceCount = Math.min(this.fingerConfidenceCount + 1, 100);
-      this.stableContactCount++;
-
-      if (this.fingerConfidenceCount >= confirmFrames) {
-        this.fingerDetected = true;
-        this.contactState = 'UNSTABLE_CONTACT';
-      }
-    } else {
-      this.instantLostStreak++;
-      const decay = hints.constrained ? 1 : 3;
-      this.fingerConfidenceCount = Math.max(0, this.fingerConfidenceCount - decay);
-      this.fingerLostCount++;
-      this.stableContactCount = Math.max(0, this.stableContactCount - (hints.constrained ? 1 : 2));
-
-      const rawSnap = this.rawRgbSnapshotFromRoi(roi);
-      const smoothSnap = this.rgbSnapshotFromSmoothed();
-      const flashOpen =
-        !this.fingerDetected &&
-        (isOpenFlashWithoutContact(rawSnap) || isOpenFlashWithoutContact(smoothSnap));
-
-      if (flashOpen) {
-        this.setNoContact(true);
-      } else if (this.fingerDetected) {
-        if (this.instantLostStreak <= hints.instantLostToUnstable) {
-          this.contactState = 'UNSTABLE_CONTACT';
-        } else if (this.instantLostStreak <= hints.instantLostToNoContact) {
-          this.contactState = 'NO_CONTACT';
-          this.noContactHardStreak++;
-          if (this.noContactHardStreak >= hints.bufferResetAfterNoContact) {
-            this.setNoContact(true);
-          }
-        } else {
-          this.setNoContact(true);
-        }
-      } else if (this.instantLostStreak <= hints.instantLostToUnstable && this.isLiveFingerFrame(roi)) {
-        this.contactState = 'UNSTABLE_CONTACT';
-      } else if (this.instantLostStreak <= hints.instantLostToNoContact) {
-        this.contactState = 'NO_CONTACT';
-      } else {
-        this.setNoContact(true);
-      }
-    }
-
-    if (previousState === 'NO_CONTACT' && this.contactState !== 'NO_CONTACT') {
-      // Siempre resetear al salir de NO_CONTACT: si el gap fue corto (p. ej.
-      // dedo se pierde 1-2 frames y se recoloca), los filtros llevan estado
-      // sucio que produce ringing al heartbeat processor.
-      this.resetSignalTrackingBuffers();
-      this.resetBaselines();
-      this.consecutiveNoContactFrames = 0;
-      this.noContactHardStreak = 0;
-    } else if (this.contactState !== 'NO_CONTACT') {
-      this.consecutiveNoContactFrames = 0;
-      this.noContactHardStreak = 0;
-    }
-  }
-
-  /** STABLE solo con PI real ya calculado en este frame (no en updateContactState). */
-  private reconcileStableContact(): void {
-    if (!this.fingerDetected || !this.lastInstantFinger) {
-      if (this.contactState === 'STABLE_CONTACT') {
-        this.contactState = 'UNSTABLE_CONTACT';
-      }
-      return;
-    }
-    const minPi = VITAL_THRESHOLDS.QUALITY.MIN_PI;
-    const F = VITAL_THRESHOLDS.FINGER;
-    const snap = this.rgbSnapshotFromSmoothed();
-    const padLike = this.placementMode === 'pad';
-    const pulseOk =
-      hasFingerHemoglobinSignature(snap) &&
-      !isOpenFlashWithoutContact(snap) &&
-      this.smoothedCoverage >= F.MIN_COVERAGE * (padLike ? 0.82 : 0.92) &&
-      (padLike ||
-        this.lastRoiRedCv >= F.ROI_RED_CV_MIN * 0.88);
-    const piOk = this.cachedPI >= minPi * 0.75;
-    const stable =
-      this.stableContactCount >= VITAL_THRESHOLDS.QUALITY.STABLE_FRAMES_REQ &&
-      (piOk || pulseOk) &&
-      this.smoothedCoverage >= F.MIN_COVERAGE * (padLike ? 0.82 : 0.88);
-    this.contactState = stable ? 'STABLE_CONTACT' : 'UNSTABLE_CONTACT';
-  }
-
-  /** Pérdida de contacto; en modo tolerante evita reset de buffers hasta racha larga. */
-  private setNoContact(hardReset: boolean): void {
-    this.contactState = 'NO_CONTACT';
-    this.fingerDetected = false;
-    this.fingerConfidenceCount = 0;
-    this.stableContactCount = 0;
-    this.instantLostStreak = 0;
-    this.lastInstantFinger = false;
-    this.liveFingerMissStreak = 0;
-
-    if (hardReset) {
-      this.decaySmoothedRgbFast();
-      this.resetSignalTrackingBuffers();
-      this.resetBaselines();
-      this.roiRedPulseRing.reset();
-      this.lastRoiRedCv = 0;
-    }
-  }
-
-  private decaySmoothedRgbFast(): void {
-    const k = 0.55;
-    this.smoothedRed *= 1 - k;
-    this.smoothedGreen *= 1 - k;
-    this.smoothedBlue *= 1 - k;
-    this.smoothedCoverage *= 1 - k;
-    this.smoothedFingerScore *= 1 - k;
-    if (this.smoothedRed < 2) this.smoothedRed = 0;
-    if (this.smoothedCoverage < 0.02) this.smoothedCoverage = 0;
-  }
-
-  private rawRgbSnapshotFromRoi(roi: ROIMetrics) {
-    return {
-      red: roi.rawRed,
-      green: roi.rawGreen,
-      blue: roi.rawBlue,
-      coverage: roi.coverageRatio,
-      fingerScore: roi.fingerScore,
-    };
-  }
-
-
-
-  private fingerSpatial(roi: ROIMetrics) {
-    return {
-      coverageRatio: roi.coverageRatio,
-      fingerScore: roi.fingerScore,
-      fingerTileCount: roi.fingerTileCount,
-    };
-  }
-
-  private isLiveFingerFrame(roi: ROIMetrics, ensembleScore = 0): boolean {
-    const raw = this.rawRgbSnapshotFromRoi(roi);
-    const smoothed = this.rgbSnapshotFromSmoothed();
-    const spatial = this.fingerSpatial(roi);
-    const F = VITAL_THRESHOLDS.FINGER;
-
-    if (this.fingerDetected) {
-      if (ensembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.8) return true;
-      if (passesFingerMaintain(raw, smoothed, spatial, ensembleScore)) return true;
-      if (
-        this.cachedPI >= F.PULSE_HOLD_MIN_PI &&
-        raw.red >= F.PULSE_HOLD_MIN_RED &&
-        raw.red / Math.max(1, raw.green) >= F.PULSE_HOLD_RG &&
-        raw.red / Math.max(1, raw.blue) >= F.PULSE_HOLD_RB &&
-        spatial.coverageRatio >= F.PULSE_HOLD_COVERAGE &&
-        this.motionScore <= F.PULSE_HOLD_MAX_MOTION
-      ) {
-        return true;
-      }
-    }
-
-    return passesLiveFingerContact(raw, smoothed, spatial, ensembleScore);
-  }
-
-  private rgbSnapshotFromSmoothed() {
-    return {
-      red: this.smoothedRed,
-      green: this.smoothedGreen,
-      blue: this.smoothedBlue,
-      coverage: this.smoothedCoverage,
-      fingerScore: this.smoothedFingerScore,
-    };
-  }
-
-  private detectFingerInstant(roi: ROIMetrics): boolean {
-    const F = VITAL_THRESHOLDS.FINGER;
-    const { rawRed, rawGreen, rawBlue, coverageRatio, fingerScore } = roi;
-
-    if (this.smoothedRed === 0) {
-      this.smoothedRed = rawRed;
-      this.smoothedGreen = rawGreen;
-      this.smoothedBlue = rawBlue;
-      this.smoothedCoverage = coverageRatio;
-      this.smoothedFingerScore = fingerScore;
-    } else {
-      const a = this.RGB_SMOOTH_ALPHA;
-      const ca = this.COVERAGE_SMOOTH_ALPHA;
-      this.smoothedRed = this.smoothedRed * (1 - a) + rawRed * a;
-      this.smoothedGreen = this.smoothedGreen * (1 - a) + rawGreen * a;
-      this.smoothedBlue = this.smoothedBlue * (1 - a) + rawBlue * a;
-      this.smoothedCoverage = this.smoothedCoverage * (1 - ca) + coverageRatio * ca;
-      this.smoothedFingerScore = this.smoothedFingerScore * (1 - ca) + fingerScore * ca;
-    }
-
-    const raw = this.rawRgbSnapshotFromRoi(roi);
-    const smoothed = this.rgbSnapshotFromSmoothed();
-    const spatial = this.fingerSpatial(roi);
-
-    if (this.motionScore > F.ACQUIRE_MAX_MOTION_SOFT) return false;
-    if (raw.red > 254 && raw.green > 254 && raw.blue > 254) return false;
-
-    const placementInstant = classifyFingerPlacement({
-      coverageRatio: spatial.coverageRatio,
-      roiRedCv: this.lastRoiRedCv,
-      perfusionIndex: this.cachedPI,
-    });
-    // Vía UNIVERSAL por pulsatilidad: un pulso real del rojo confirma dedo aunque
-    // la firma de color estricta falle (cámara con otro balance de blancos/flash).
-    const pulsatileContact = passesPulsatileAcquire(
-      raw, smoothed, spatial, this.lastRoiRedCv, this.lastEnsembleScore,
-    );
-
-    if (
-      !this.fingerDetected &&
-      !this.cameraHints.constrained &&
-      placementInstant !== 'pad' &&
-      // El guard de flicker usa el umbral R/B LAXO de la vía pulsátil (no el estricto):
-      // así no descarta un dedo que pulsa pero con rojo moderado en otra cámara.
-      isExposureFlickerNotFingerPulse(this.lastRoiRedCv, smoothed, F.PULSATILE_ACQUIRE_RB) &&
-      !pulsatileContact &&
-      this.lastEnsembleScore < F.ENSEMBLE_FINGER_THRESHOLD * 0.7
-    ) {
-      return false;
-    }
-
-    // Contacto: vía COLOR (hemoglobina) o vía PULSATILIDAD (universal).
-    // La vía pulsátil es prioritaria: un pulso claro + brillo mínimo = dedo, incluso
-    // si la firma de color falla por balance de blancos/presión/colocación.
-    const fingerByPulse =
-      (pulsatileContact || this.lastEnsembleScore > F.ENSEMBLE_FINGER_THRESHOLD * 0.7) &&
-      spatial.coverageRatio >= F.MIN_COVERAGE * 0.5;
-    if (!passesLiveFingerContact(raw, smoothed, spatial, this.lastEnsembleScore)) {
-      return fingerByPulse;
-    }
-    if (this.fingerDetected) return true;
-    return (
-      passesFingerAcquire(raw, smoothed, spatial, {
-        roiRedCv: this.lastRoiRedCv,
-        perfusionIndex: this.cachedPI,
-        ensembleScore: this.lastEnsembleScore,
-      }) || fingerByPulse
-    );
   }
 
   private computeRoiRect(width: number, height: number) {
@@ -1648,23 +1367,10 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   /** PI proxy desde CV temporal del ROI (antes de que ACDC llene la ventana). */
+  /** PI proxy desde la pulsatilidad temporal del rojo en el ROI (CV), sin color. */
   private estimatePulsePiFromRoi(): number {
-    const snap = this.rgbSnapshotFromSmoothed();
-    if (isOpenFlashWithoutContact(snap)) return 0;
-    if (
-      isExposureFlickerNotFingerPulse(
-        this.lastRoiRedCv,
-        snap,
-        VITAL_THRESHOLDS.FINGER.ACQUIRE_RB_STRICT,
-      )
-    ) {
-      return 0;
-    }
     const cv = this.lastRoiRedCv;
     if (cv < VITAL_THRESHOLDS.FINGER.ROI_RED_CV_MIN * 0.75) return 0;
-    if (this.lastEnsembleScore < VITAL_THRESHOLDS.FINGER.ENSEMBLE_FINGER_THRESHOLD * 0.6) {
-      if (!hasFingerHemoglobinSignature(snap)) return 0;
-    }
     return clamp(cv * 0.016, 0.00012, 0.01);
   }
 
@@ -1735,8 +1441,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.liveFingerMissStreak = 0;
     this.lastEnsembleScore = 0;
     this.lastRoiRedCv = 0;
+    this.opticalInvalidStreak = 0;
+    resetCardiacPresence(this.cardiacPresence);
     Object.assign(this.diagStatusState, createDiagnosticStatusState());
-    resetZlo();
   }
 
   reset(): void {
