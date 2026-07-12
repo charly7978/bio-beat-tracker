@@ -61,6 +61,13 @@ export interface ProcessedSignal {
     acquisitionConfidence?: number;
     /** Progreso monótono de estabilización [0..1] para la UI. */
     acquisitionProgress?: number;
+    /**
+     * Estado inferido por el motor de razonamiento cardiovascular (CVSI):
+     * creencia de régimen, probabilidad de perfusión real, HR con incertidumbre
+     * y narrativa de razonamiento. Reemplaza el criterio "forma de dedo" por una
+     * inferencia sobre si existe un pulso cardiorrespiratorio real.
+     */
+    cardiovascularState?: import('../lib/cvsi/types').CvsiState;
   };
 }
 

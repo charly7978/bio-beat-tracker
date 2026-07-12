@@ -17,6 +17,8 @@ import {
 } from '../signal-quality/SignalQualityIndex';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 import { DSP_CONSTANTS } from '../../config/signalProcessing';
+import { CardiovascularStateInference } from '../../lib/cvsi';
+import type { CvsiState } from '../../lib/cvsi/types';
 import { redSeriesCoefficientOfVariation } from './fingerRoiPulsation';
 import {
   hasFingerHemoglobinSignature,
@@ -187,6 +189,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   private frameCount = 0;
   private lastLogTime = 0;
+
+  // === MOTOR DE RAZONAMIENTO CARDIOVASCULAR (CVSI) ===
+  private readonly cvsi = new CardiovascularStateInference();
+  private lastCvsiState: CvsiState | null = null;
+  private cvsiSkip = 0;
 
   // === ESTADO DE CONTACTO UNIFICADO ===
   private contactState: ContactState = 'NO_CONTACT';
@@ -621,6 +628,37 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     endSqi();
 
     const perfusionIndex = this.cachedPI;
+
+    // === RAZONAMIENTO CVSI: ¿la señal es un pulso cardiovascular real? ===
+    // El motor mantiene una creencia continua sobre el estado cardiovascular a
+    // partir de la ventana filtrada + evidencias ópticas ya calculadas. Corre
+    // throttled (cada 3 frames) para respetar el presupuesto por frame.
+    this.cvsiSkip++;
+    if (this.cvsiSkip >= 3 && this.filteredBuffer.length >= 96) {
+      this.cvsiSkip = 0;
+      const win = this.filteredBuffer.tail(
+        Math.min(this.filteredBuffer.length, DSP_CONSTANTS.BUFFER_SIZE),
+      );
+      this.lastCvsiState = this.cvsi.update({
+        filtered: Array.from(win),
+        fs: this.estimatedSampleRate,
+        timestampMs: timestamp,
+        rrIntervalsMs: [],
+        bpm: this.lastKnownBpm > 0 ? this.lastKnownBpm : 0,
+        perfusionIndex,
+        skewness: this.cachedSkewness,
+        periodicity: this.cachedPeriodicity,
+        motionScore: this.motionScore,
+        spo2Channels: splitOut.spo2,
+      });
+    }
+    // Veto de perfusión: el motor SOLO puede RECHAZAR (objeto sin pulso real),
+    // nunca fuerza detección — así no daña la adquisición de un dedo real. Solo
+    // actúa con buffer suficiente y una creencia confiada de NO_PERFUSION.
+    const cvsiReady = this.filteredBuffer.length >= 150 && this.frameCount > 90;
+    const cvsiNoPulseVeto =
+      cvsiReady && this.lastCvsiState !== null && this.lastCvsiState.perfusionProbability < 0.3;
+
     const snapHb = this.rgbSnapshotFromSmoothed();
     const hemoglobinScene =
       hasFingerHemoglobinSignature(snapHb) && !isOpenFlashWithoutContact(snapHb);
@@ -629,7 +667,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.fingerDetected &&
       liveFinger &&
       (hemoglobinScene || ensembleScene) &&
-      (this.lastInstantFinger || this.contactState === 'STABLE_CONTACT');
+      (this.lastInstantFinger || this.contactState === 'STABLE_CONTACT') &&
+      !cvsiNoPulseVeto;
+    // Estado de contacto emitido: si el motor infiere que no hay pulso real
+    // (objeto), se reporta NO_CONTACT y el router limpia SpO2/PA/ondas como en
+    // cualquier pérdida de contacto (reutiliza el gating de seguridad existente).
+    const emittedContactState: ContactState = cvsiNoPulseVeto ? 'NO_CONTACT' : this.contactState;
 
     // Post-motion hold-off: despues de que el motion cesa, el BPF 4° orden aun
     // tiene ringing (~0.5s). Suprimimos la salida durante ese tiempo.
@@ -645,7 +688,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         (hemoglobinScene || ensembleScene) &&
         this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.85)) &&
       !motionArtifact &&
-      this.postMotionSuppression <= 0;
+      this.postMotionSuppression <= 0 &&
+      !cvsiNoPulseVeto;
     const displayQuality = signalPathActive
       ? fingerUi
         ? this.displaySqiEma
@@ -677,7 +721,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         rawSqi: rawSqiOut,
         pi: perfusionIndex,
         fingerDetected: fingerUi,
-        contactState: this.contactState,
+        contactState: emittedContactState,
       },
     );
 
@@ -697,7 +741,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       placementMode: this.placementMode,
       quality: displayQuality,
       fingerDetected: fingerUi,
-      contactState: this.contactState,
+      contactState: emittedContactState,
       motionArtifact,
       roi: this.signalRoiFromMetrics(roi),
       perfusionIndex,
@@ -735,6 +779,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           frameDropRatio: ppgPerf.snapshot().droppedEstimate / Math.max(1, this.frameCount),
           timestampJitterMs: ppgPerf.snapshot().jitterMs,
         } as SignalQualityMetrics,
+        cardiovascularState: this.lastCvsiState ?? undefined,
       },
     });
   }
@@ -1675,6 +1720,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   }
 
   private resetSignalTrackingBuffers(): void {
+    this.cvsi.reset();
+    this.lastCvsiState = null;
     this.rawBuffer.reset();
     this.filteredBuffer.reset();
     this.redBuffer.reset();

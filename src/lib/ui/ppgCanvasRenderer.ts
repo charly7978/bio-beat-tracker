@@ -344,6 +344,14 @@ export interface PpgRenderProps {
       fusedPeakCount?: number;
       rejectedPeaks?: Array<{ index: number; reason: string; detector: string }>;
     };
+    /** Estado inferido por el motor de razonamiento cardiovascular (CVSI). */
+    cardiovascularState?: {
+      perfusionProbability: number;
+      mostLikelyRegime: string;
+      regimeEntropy: number;
+      narrative: string;
+      heartRate: { bpm: number; low: number; high: number; converged: boolean };
+    };
   };
 }
 
@@ -444,8 +452,24 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
   ctx.font = `10px ${FONT_MONO}`;
   ctx.textAlign = 'right';
-  ctx.fillStyle = detected ? COLORS.TEXT_PRIMARY : COLORS.TEXT_DIM;
-  ctx.fillText(detected ? '● DEDO OK' : '○ SIN DEDO', header.w - 110, header.y + 22);
+  // Confianza cardiovascular CONTINUA inferida por el motor (no un binario
+  // "forma de dedo"): P(señal cardiorrespiratoria real). Fallback al indicador
+  // clásico si el motor aún no reportó estado.
+  const cvsi = diagnostics?.cardiovascularState;
+  if (cvsi) {
+    const pct = Math.round(cvsi.perfusionProbability * 100);
+    const pColor =
+      cvsi.perfusionProbability >= 0.6
+        ? COLORS.TEXT_PRIMARY
+        : cvsi.perfusionProbability >= 0.35
+          ? COLORS.TEXT_WARN
+          : COLORS.TEXT_DIM;
+    ctx.fillStyle = pColor;
+    ctx.fillText(`♥ ${pct}%`, header.w - 110, header.y + 22);
+  } else {
+    ctx.fillStyle = detected ? COLORS.TEXT_PRIMARY : COLORS.TEXT_DIM;
+    ctx.fillText(detected ? '● DEDO OK' : '○ SIN DEDO', header.w - 110, header.y + 22);
+  }
 
   const diag = diagnostics;
   const hideLowFlicker =
