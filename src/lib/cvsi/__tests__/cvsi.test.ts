@@ -36,6 +36,37 @@ function objectInput(t: number): CvsiInput {
   };
 }
 
+/**
+ * Objeto rojo cuasi-periódico (caso adversario real): un temblor de mano a
+ * ~0.9 Hz + ruido produce una forma repetible que el modelo generativo
+ * "explica" (explVar alto), y el canal rojo muestra algo de AC — PERO el verde
+ * no pulsa en fase (sin firma BVP multi-λ). Un objeto NO puede falsear la
+ * coherencia rojo/verde del volumen sanguíneo. Debe inferirse NO_PERFUSION.
+ */
+function quasiPeriodicObjectInput(t: number, seed: number): CvsiInput {
+  let s = seed;
+  const rng = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+  const filtered: number[] = [];
+  for (let i = 0; i < N; i++) {
+    const tt = i / FS;
+    const tremor = 0.6 * Math.sin(2 * Math.PI * 0.9 * tt + 0.3 * Math.sin(0.7 * tt));
+    filtered.push(tremor + (rng() - 0.5) * 0.8);
+  }
+  return {
+    filtered,
+    fs: FS,
+    timestampMs: t,
+    rrIntervalsMs: [],
+    bpm: 0,
+    perfusionIndex: 0.02 / 200,
+    skewness: 0.1,
+    periodicity: 0.3,
+    motionScore: 0.2,
+    // Rojo con algo de AC (temblor), verde prácticamente sin AC → sin coherencia.
+    spo2Channels: { acRed: 0.02, dcRed: 200, acGreen: 0.002, dcGreen: 20 },
+  };
+}
+
 describe('CardiovascularStateInference (end-to-end)', () => {
   it('infiere pulso real: SINUS_NORMAL, alta perfusión, HR convergido cerca de la verdad', () => {
     const engine = new CardiovascularStateInference();
@@ -56,6 +87,16 @@ describe('CardiovascularStateInference (end-to-end)', () => {
     expect(state.mostLikelyRegime).toBe('NO_PERFUSION');
     expect(state.perfusionProbability).toBeLessThan(0.35);
     expect(state.narrative).toContain('no se detecta un latido real');
+  });
+
+  it('rechaza un objeto rojo CUASI-PERIÓDICO (temblor sin firma multi-λ)', () => {
+    const engine = new CardiovascularStateInference();
+    let state = engine.update(quasiPeriodicObjectInput(0, 1000));
+    for (let i = 1; i <= 30; i++) state = engine.update(quasiPeriodicObjectInput(i * 100, 1000 + i));
+    // Aunque el temblor produce forma repetible (explVar alto), sin coherencia
+    // BVP multi-λ el motor infiere NO_PERFUSION → el veto (<0.3) rechaza.
+    expect(state.mostLikelyRegime).toBe('NO_PERFUSION');
+    expect(state.perfusionProbability).toBeLessThan(0.3);
   });
 
   it('infiere taquicardia con pulso real a 140 bpm', () => {

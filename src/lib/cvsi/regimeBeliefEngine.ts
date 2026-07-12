@@ -53,15 +53,33 @@ function buildTransitionMatrix(): Map<CardiovascularRegime, RegimeBelief> {
  * régimen mediante funciones suaves (no umbrales). Pura y testeable.
  */
 export function computeEmissions(ev: RegimeEvidence): RegimeBelief {
-  // --- Presencia de pulso: núcleo siempre disponible + corroboración óptica. ---
+  // --- Presencia de pulso: forma repetible ∧ prueba física de tejido vivo. ---
+  //
+  // `corePulse` mide si existe una FORMA de onda repetible (varianza explicada +
+  // morfología + periodicidad). Pero eso NO alcanza: un temblor de mano o un
+  // parpadeo de luz a ~1 Hz también produce una forma cuasi-periódica que el
+  // modelo generativo "explica" (explVar alto). La diferencia infalsificable es
+  // FÍSICA: solo el volumen sanguíneo real absorbe rojo y verde en fase con una
+  // relación fisiológica (firma BVP multi-λ, de Haan). Un objeto rojo plano no
+  // tiene AC verde; un temblor mueve todo el campo pero no crea el ratio
+  // dependiente de longitud de onda. Por eso el liveness multi-λ es condición
+  // NECESARIA de perfusión, no una corroboración opcional.
   const corePulse = softAnd(
     smoothstep(0.2, 0.55, ev.explainedVariance),
     smoothstep(0.25, 0.6, ev.morphologyLikelihood),
     smoothstep(0.12, 0.4, ev.periodicity),
   );
-  const perfusionPresence = smoothstep(0.0006, 0.006, ev.perfusionIndex);
-  const corroboration = 0.5 + 0.5 * Math.max(ev.bvpCoherence, perfusionPresence);
-  const pulsePresence = clamp(corePulse * corroboration, 0, 1);
+  // Liveness físico: la coherencia BVP multi-λ es la evidencia dura de tejido
+  // perfundido. El índice de perfusión monocanal solo puede REFORZARLA (no
+  // sustituirla), porque un temblor lo falsea en un solo canal.
+  const physicalLiveness = clamp(
+    ev.bvpCoherence * (0.7 + 0.3 * smoothstep(0.0006, 0.006, ev.perfusionIndex)),
+    0,
+    1,
+  );
+  // Piso pequeño (0.12) para tolerar un frame con canal verde momentáneamente
+  // débil sin colapsar; la inercia temporal de la creencia absorbe el resto.
+  const pulsePresence = clamp(corePulse * (0.12 + 0.88 * physicalLiveness), 0, 1);
 
   // --- Ritmo (dado que hay pulso). ---
   const regularity = smoothstepDown(0.08, 0.22, ev.rrCv);
