@@ -277,7 +277,7 @@ export function drawWaveRibbon3D(
   const revealed = state.traceRevealed;
 
   // Amplitud normalizada honesta con soporte para valores negativos por debajo de la grilla (piso)
-  const hOf = (c: WaveCoord) => clamp(c.val / ((state.waveGain || 4.2) * 10.0), -0.5, 1.2) + 0.25;
+  const hOf = (c: WaveCoord) => clamp(c.val / ((state.waveGain || 4.2) * 10.0), -0.5, 1.2);
   const uOf = (c: WaveCoord) => clamp((c.x - plot.x) / plot.w, 0, 1);
 
   const Pf: ProjPoint[] = []; // cresta frontal (la onda honesta)
