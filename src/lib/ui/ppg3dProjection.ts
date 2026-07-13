@@ -28,6 +28,8 @@ export interface WaveCoord {
   y: number;
   isArr: boolean;
   val: number;
+  /** Altura normalizada [0..1] YA calculada por el auto-escalado honesto del 2D (mismo pct^exponente que define coords.y). */
+  heightPct: number;
 }
 
 /** Geometría 2D de la zona de onda, para recuperar amplitud normalizada y tiempo. */
@@ -276,8 +278,10 @@ export function drawWaveRibbon3D(
   const { plot } = state.layout;
   const revealed = state.traceRevealed;
 
-  // Amplitud normalizada honesta con soporte para valores negativos por debajo de la grilla (piso)
-  const hOf = (c: WaveCoord) => clamp(c.val / ((state.waveGain || 4.2) * 10.0), -0.5, 1.2) + 0.25;
+  // Amplitud honesta: reusa DIRECTAMENTE el heightPct ya normalizado por el auto-escalado 2D
+  // (mismo pct^WAVE_SHARPNESS_EXPONENT que define coords.y). Evita recalcular la altura desde
+  // waveGain absoluto, que fluctúa cada frame y desincroniza la cinta 3D del trazo 2D honesto.
+  const hOf = (c: WaveCoord) => clamp(c.heightPct, 0, 1);
   const uOf = (c: WaveCoord) => clamp((c.x - plot.x) / plot.w, 0, 1);
 
   const Pf: ProjPoint[] = []; // cresta frontal (la onda honesta)
@@ -388,8 +392,24 @@ export function drawWaveRibbon3D(
     ctx.stroke();
   }
 
-  const recentCut = Math.max(0, n - Math.floor(n * 0.35));
-  const leadingCut = Math.max(0, n - Math.floor(n * 0.12));
+  // Cortes de nivel de color anclados a POSICIÓN X FIJA en pantalla (no a fracción de índice).
+  // `coords[i].x` es una función lineal del tiempo transcurrido (edad de la muestra), así que
+  // usar una fracción de `n` para decidir el corte hace que el punto de cambio de color salte
+  // en pantalla cada vez que varía la densidad de muestras (jitter de tono / parpadeo visible).
+  // Buscando por X en vez de por índice, el borde queda siempre a la misma distancia del
+  // extremo derecho del gráfico, sin importar cuántos puntos caen en la ventana.
+  const recentCutX = plot.x + plot.w * 0.65;
+  const leadingCutX = plot.x + plot.w * 0.88;
+  const findCutByX = (cutoffX: number): number => {
+    let lo = 0, hi = n;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (coords[mid].x < cutoffX) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  };
+  const recentCut = Math.max(0, Math.min(n - 1, findCutByX(recentCutX)));
+  const leadingCut = Math.max(0, Math.min(n - 1, findCutByX(leadingCutX)));
 
   s = 0;
   while (s < n - 1) {

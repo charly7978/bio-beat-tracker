@@ -7,7 +7,6 @@ import {
   lerpDisplayValue,
 } from '@/lib/measurement/displaySmoothing';
 import {
-  TARGET_FPS,
   BUFFER_SIZE,
   TREND_WINDOW_MS,
   TREND_MAX_POINTS,
@@ -213,9 +212,9 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const q = quality ?? 0;
     const weakTarget =
       4.2 *
-      (pi < 0.0025 ? 1.85 : pi < 0.005 ? 1.50 : pi < 0.01 ? 1.22 : 1.04) *
-      (q < 20 ? 1.25 : q < 40 ? 1.1 : 0.98);
-    waveGainRef.current = waveGainRef.current * 0.75 + weakTarget * 0.25;
+      (pi < 0.0025 ? 2.1 : pi < 0.005 ? 1.65 : pi < 0.01 ? 1.35 : 1.08) *
+      (q < 20 ? 1.4 : q < 40 ? 1.2 : 1);
+    waveGainRef.current = waveGainRef.current * 0.40 + weakTarget * 0.60;
 
     if (bpm != null && bpm > 30 && bpm < 220 && nowMs - lastBpmSampleRef.current > 500) {
       lastBpmSampleRef.current = nowMs;
@@ -339,9 +338,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     if (isRunningRef.current) return;
     isRunningRef.current = true;
 
-    let frameCount = 0;
-    let lastFpsTime = 0;
-
     const render = () => {
       if (!isRunningRef.current) return;
       const canvas = canvasRef.current;
@@ -357,12 +353,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       }
 
       const now = Date.now();
-      frameCount++;
-      if (now - lastFpsTime >= 1000) {
-        lastFpsTime = now;
-        frameCount = 0;
-      }
-
       const p = propsRef.current;
       const fingerOn = p.isFingerDetected;
       const preserve = p.preserveResults;
