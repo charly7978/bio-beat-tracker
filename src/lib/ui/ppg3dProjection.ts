@@ -146,11 +146,9 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
-  // Fondo NEGRO sólido detrás de la grilla.
   ctx.fillStyle = '#000000';
   ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
 
-  // Línea de horizonte (tenue, marca el punto de fuga).
   ctx.strokeStyle = `rgba(${C.gridMinor}, 0.35)`;
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -218,6 +216,8 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   // Referencias numéricas de los ejes (amplitud + tiempo).
   drawGridReferences3D(ctx, proj, plot, state.amplitudeStats);
 
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1.0;
   ctx.restore();
 }
 
@@ -293,11 +293,11 @@ export function drawWaveRibbon3D(
   const n = Pf.length;
 
   ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
   ctx.beginPath();
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
 
   // 1) Sombra/huella en el piso segmentada por arritmia (normal=verde, arr=rojo).
   if (revealed) {
@@ -363,7 +363,6 @@ export function drawWaveRibbon3D(
   ctx.fillStyle = wallGrad;
   ctx.fill();
 
-  // 3b) Sobre-pintado rojo translúcido en segmentos de arritmia.
   let s = 0;
   while (s < n) {
     if (!coords[s].isArr) { s++; continue; }
@@ -374,7 +373,7 @@ export function drawWaveRibbon3D(
     for (let i = s; i < e; i++) ctx.lineTo(Pf[i].x, Pf[i].y);
     for (let i = e - 1; i >= s; i--) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
     ctx.closePath();
-    ctx.fillStyle = `rgba(${C.arr}, 0.50)`;
+    ctx.fillStyle = `rgba(${C.arr}, 0.48)`;
     ctx.fill();
     s = e;
   }
@@ -389,25 +388,19 @@ export function drawWaveRibbon3D(
     ctx.stroke();
   }
 
-  // 5) Cresta frontal: la onda honesta con efecto de iluminación animada (estilo 2D)
-  const drawDirectCrestSegment = (startIdx: number, endIdx: number) => {
-    ctx.beginPath();
-    ctx.moveTo(Pf[startIdx].x, Pf[startIdx].y);
-    for (let k = startIdx + 1; k < endIdx; k++) {
-      ctx.lineTo(Pf[k].x, Pf[k].y);
-    }
-  };
-
   const recentCut = Math.max(0, n - Math.floor(n * 0.35));
-  const leadingCut = Math.max(0, n - Math.floor(n * 0.10));
+  const leadingCut = Math.max(0, n - Math.floor(n * 0.12));
 
-  // 5a) Trazo base (toda la línea)
   s = 0;
   while (s < n - 1) {
     const isArr = coords[s].isArr;
     let segEnd = s;
     while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-    drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
+    ctx.beginPath();
+    ctx.moveTo(Pf[s].x, Pf[s].y);
+    for (let k = s + 1; k < segEnd + 1 && k < n; k++) {
+      ctx.lineTo(Pf[k].x, Pf[k].y);
+    }
     ctx.strokeStyle = revealed
       ? (isArr ? `rgba(${C.arr}, 0.4)` : `rgba(${C.signal}, 0.45)`)
       : 'rgba(148, 163, 184, 0.25)';
@@ -418,41 +411,50 @@ export function drawWaveRibbon3D(
   }
 
   if (revealed) {
-    // 5b) Trazo con brillo base (último 35%)
     ctx.shadowColor = `rgba(${C.signal}, 0.45)`;
-    ctx.shadowBlur = 8; // SHADOW_BLUR_BASE
+    ctx.shadowBlur = 8;
     s = Math.max(recentCut, 0);
     while (s < n - 1) {
       const isArr = coords[s].isArr;
       let segEnd = s;
       while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-      drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
+      ctx.beginPath();
+      ctx.moveTo(Pf[s].x, Pf[s].y);
+      for (let k = s + 1; k < segEnd + 1 && k < n; k++) {
+        ctx.lineTo(Pf[k].x, Pf[k].y);
+      }
       ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.65)` : `rgba(${C.signal}, 0.68)`;
-      ctx.lineWidth = 1.6; // GLOW_STROKE_WIDTH
+      ctx.lineWidth = 1.6;
       ctx.stroke();
       s = segEnd;
     }
 
-    // 5c) Trazo líder de punta (último 10%)
-    ctx.shadowBlur = 15; // SHADOW_BLUR_LEADING
+    ctx.shadowBlur = 15;
     s = Math.max(leadingCut, 0);
     while (s < n - 1) {
       const isArr = coords[s].isArr;
       let segEnd = s;
       while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-      drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
+      ctx.beginPath();
+      ctx.moveTo(Pf[s].x, Pf[s].y);
+      for (let k = s + 1; k < segEnd + 1 && k < n; k++) {
+        ctx.lineTo(Pf[k].x, Pf[k].y);
+      }
       ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.85)` : '#4ade80';
-      ctx.lineWidth = 1.5; // LEADING_STROKE_WIDTH
+      ctx.lineWidth = 1.5;
       ctx.shadowColor = isArr ? `rgba(${C.arr}, 0.45)` : `rgba(${C.signal}, 0.45)`;
       ctx.stroke();
       s = segEnd;
     }
     ctx.shadowBlur = 0;
   } else {
-    // Trazo de punta tenue sin brillo cuando se está estabilizando
     s = Math.max(leadingCut, 0);
     if (s < n - 1) {
-      drawDirectCrestSegment(s, n);
+      ctx.beginPath();
+      ctx.moveTo(Pf[s].x, Pf[s].y);
+      for (let k = s + 1; k < n; k++) {
+        ctx.lineTo(Pf[k].x, Pf[k].y);
+      }
       ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)';
       ctx.lineWidth = 2.0;
       ctx.shadowBlur = 0;
