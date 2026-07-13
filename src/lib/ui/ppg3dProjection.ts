@@ -312,10 +312,7 @@ export function drawWaveRibbon3D(
       for (let i = s; i < e; i++) ctx.lineTo(Pfloor[i].x, Pfloor[i].y);
       ctx.strokeStyle = `rgba(${col}, ${isArr ? 0.35 : 0.12})`;
       ctx.lineWidth = isArr ? 8 : 6;
-      ctx.shadowColor = `rgba(${col}, ${isArr ? 0.30 : 0.05})`;
-      ctx.shadowBlur = isArr ? 12 : 0;
       ctx.stroke();
-      ctx.shadowBlur = 0;
       s = e;
     }
   }
@@ -388,9 +385,18 @@ export function drawWaveRibbon3D(
     ctx.stroke();
   }
 
-  const recentCut = Math.max(0, n - Math.floor(n * 0.35));
-  const leadingCut = Math.max(0, n - Math.floor(n * 0.12));
-
+  // === TRAZO DE LA CRESTA: UNA sola pasada firme y sólida ======================
+  // ANTES: 3 pasadas superpuestas (cuerpo 0.45 + reciente 0.68 + cabeza verde
+  // brillante '#4ade80'), cada una segmentada y con shadowBlur distinto (8 y 15).
+  // Eso provocaba:
+  //   (a) un DEGRADADO DE BRILLO que se desplazaba con la onda → el color se veía
+  //       "no firme"/tembloroso a lo largo del trazo, y
+  //   (b) varias pasadas con blur por frame (cuyo costo escala con el bounding box
+  //       de la onda completa) → picos de costo → frame-drops = parpadeo en
+  //       pantallas de alta tasa de refresco.
+  // AHORA: un color 100% SÓLIDO y constante por segmento (verde señal / rojo
+  // arritmia), sin shadowBlur → color firme y uniforme, sin shimmer, y un costo de
+  // dibujo menor y más estable (menos varianza de tiempo por frame = más fluidez).
   s = 0;
   while (s < n - 1) {
     const isArr = coords[s].isArr;
@@ -402,64 +408,11 @@ export function drawWaveRibbon3D(
       ctx.lineTo(Pf[k].x, Pf[k].y);
     }
     ctx.strokeStyle = revealed
-      ? (isArr ? `rgba(${C.arr}, 0.4)` : `rgba(${C.signal}, 0.45)`)
-      : 'rgba(148, 163, 184, 0.25)';
-    ctx.lineWidth = 2.0;
-    ctx.shadowBlur = 0;
+      ? (isArr ? `rgb(${C.arr})` : `rgb(${C.signal})`)
+      : 'rgba(148, 163, 184, 0.5)';
+    ctx.lineWidth = 2.2;
     ctx.stroke();
     s = segEnd;
-  }
-
-  if (revealed) {
-    ctx.shadowColor = `rgba(${C.signal}, 0.45)`;
-    ctx.shadowBlur = 8;
-    s = Math.max(recentCut, 0);
-    while (s < n - 1) {
-      const isArr = coords[s].isArr;
-      let segEnd = s;
-      while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-      ctx.beginPath();
-      ctx.moveTo(Pf[s].x, Pf[s].y);
-      for (let k = s + 1; k < segEnd + 1 && k < n; k++) {
-        ctx.lineTo(Pf[k].x, Pf[k].y);
-      }
-      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.65)` : `rgba(${C.signal}, 0.68)`;
-      ctx.lineWidth = 1.6;
-      ctx.stroke();
-      s = segEnd;
-    }
-
-    ctx.shadowBlur = 15;
-    s = Math.max(leadingCut, 0);
-    while (s < n - 1) {
-      const isArr = coords[s].isArr;
-      let segEnd = s;
-      while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-      ctx.beginPath();
-      ctx.moveTo(Pf[s].x, Pf[s].y);
-      for (let k = s + 1; k < segEnd + 1 && k < n; k++) {
-        ctx.lineTo(Pf[k].x, Pf[k].y);
-      }
-      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.85)` : '#4ade80';
-      ctx.lineWidth = 1.5;
-      ctx.shadowColor = isArr ? `rgba(${C.arr}, 0.45)` : `rgba(${C.signal}, 0.45)`;
-      ctx.stroke();
-      s = segEnd;
-    }
-    ctx.shadowBlur = 0;
-  } else {
-    s = Math.max(leadingCut, 0);
-    if (s < n - 1) {
-      ctx.beginPath();
-      ctx.moveTo(Pf[s].x, Pf[s].y);
-      for (let k = s + 1; k < n; k++) {
-        ctx.lineTo(Pf[k].x, Pf[k].y);
-      }
-      ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)';
-      ctx.lineWidth = 2.0;
-      ctx.shadowBlur = 0;
-      ctx.stroke();
-    }
   }
 
   // 6) Marcadores fiduciales con VALORES en tiempo real: picos máximos (SYS),
@@ -482,10 +435,7 @@ export function drawWaveRibbon3D(
         ctx.beginPath();
         ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
         ctx.fillStyle = isArr ? `rgb(${C.arr})` : '#ffffff';
-        ctx.shadowColor = isArr ? `rgb(${C.arr})` : `rgb(${C.cyan})`;
-        ctx.shadowBlur = 8;
         ctx.fill();
-        ctx.shadowBlur = 0;
         ctx.font = `bold 9px ${FONT}`;
         ctx.fillStyle = isArr ? `rgb(${C.arr})` : `rgb(${C.cyan})`;
         ctx.fillText(v.toFixed(1), p.x, p.y - 11);

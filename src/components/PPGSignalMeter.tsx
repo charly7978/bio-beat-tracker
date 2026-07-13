@@ -215,7 +215,10 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       4.2 *
       (pi < 0.0025 ? 1.85 : pi < 0.005 ? 1.50 : pi < 0.01 ? 1.22 : 1.04) *
       (q < 20 ? 1.25 : q < 40 ? 1.1 : 0.98);
-    waveGainRef.current = waveGainRef.current * 0.75 + weakTarget * 0.25;
+    // Suavizado fuerte (0.92/0.08): la ganancia se desliza suavemente entre
+    // niveles al cruzar umbrales de PI/calidad en vez de saltar → la altura de la
+    // onda deja de "respirar" y el trazo se mantiene estable verticalmente.
+    waveGainRef.current = waveGainRef.current * 0.92 + weakTarget * 0.08;
 
     if (bpm != null && bpm > 30 && bpm < 220 && nowMs - lastBpmSampleRef.current > 500) {
       lastBpmSampleRef.current = nowMs;
@@ -339,8 +342,11 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     if (isRunningRef.current) return;
     isRunningRef.current = true;
 
-    let frameCount = 0;
-    let lastFpsTime = 0;
+    // Cadencia fija a TARGET_FPS: en pantallas de 90/120 Hz evita sobre-render y
+    // el reparto desigual de frames que se percibe como parpadeo. Un solo trazo
+    // por intervalo estable = movimiento fluido y uniforme.
+    const frameInterval = 1000 / TARGET_FPS;
+    let lastRenderTime = 0;
 
     const render = () => {
       if (!isRunningRef.current) return;
@@ -357,11 +363,12 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       }
 
       const now = Date.now();
-      frameCount++;
-      if (now - lastFpsTime >= 1000) {
-        lastFpsTime = now;
-        frameCount = 0;
+      // Gate de tiempo: salta el frame si aún no transcurrió el intervalo objetivo.
+      if (now - lastRenderTime < frameInterval) {
+        animationRef.current = requestAnimationFrame(render);
+        return;
       }
+      lastRenderTime = now;
 
       const p = propsRef.current;
       const fingerOn = p.isFingerDetected;
