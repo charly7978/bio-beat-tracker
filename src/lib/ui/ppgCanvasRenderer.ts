@@ -853,12 +853,6 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.restore();
   }
 
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(plot.x, plot.y, plot.w, plot.h);
-  ctx.clip();
-
-
   const tachoY = plot.y + plot.h - RR_TACHO_H + 4;
   ctx.fillStyle = 'rgba(8, 14, 26, 0.85)';
   ctx.fillRect(plot.x + 2, tachoY - 4, plot.w - 4, RR_TACHO_H);
