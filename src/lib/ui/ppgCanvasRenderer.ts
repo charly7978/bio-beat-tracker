@@ -805,7 +805,13 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     const targetMin = mn - range * 0.1;
     const targetMax = mx + range * 0.1;
     const expanding = targetMax - targetMin > stats.range;
+ claude/cardiac-wave-rendering-3ln0kv
     const blend = expanding ? AMP_ATTACK : AMP_RELEASE;
+
+    // Mezcla suave y estable: la escala vertical se adapta despacio para que las
+    // referencias del eje no vibren frame a frame (antes saltaba hasta ~50%/frame).
+    const blend = expanding ? AMP_ATTACK * 0.28 : AMP_RELEASE * 0.14;
+ main
     stats.min = stats.min * (1 - blend) + targetMin * blend;
     stats.max = stats.max * (1 - blend) + targetMax * blend;
     stats.range = stats.max - stats.min;
