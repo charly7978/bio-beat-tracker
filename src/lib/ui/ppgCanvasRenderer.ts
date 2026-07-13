@@ -74,18 +74,18 @@ export const CARDIAC_WAVE_CONFIG = {
   /**
    * Coeficiente de ataque (crecimiento) del escalado automático de amplitud.
    * - ¿Qué significa?: Qué tan rápido se expande la escala vertical cuando la señal de entrada aumenta de tamaño.
-   * - Si se sube: La onda se adapta instantáneamente a picos de gran amplitud (evita que se corte por arriba/abajo).
-   * - Si se baja: La onda cambia su tamaño vertical más despacio, suavizando transiciones bruscas.
+   * - OPTIMIZADO: Reducido a 0.35 para evitar parpadeos y "bouncing" visual.
+   * - Nota: Se multiplica por 0.8 en runtime para suavizar transiciones.
    */
-  AMP_ATTACK: 0.50,
+  AMP_ATTACK: 0.35,
 
   /**
    * Coeficiente de relajación (decrecimiento) del escalado automático de amplitud.
    * - ¿Qué significa?: Qué tan rápido se contrae la escala vertical cuando la amplitud de la señal decae.
-   * - Si se sube: La onda recupera tamaño visual de forma veloz cuando la señal de entrada se debilita.
-   * - Si se baja: Mantiene la escala amplia por más tiempo, evitando vibraciones molestas si la amplitud fluctúa.
+   * - OPTIMIZADO: Aumentado a 0.45 para mantener estabilidad temporal.
+   * - Nota: Se multiplica por 1.2 en runtime para evitar vibración.
    */
-  AMP_RELEASE: 0.30,
+  AMP_RELEASE: 0.45,
 
   // === Estética y Grosor de Línea (Canvas Rendering) ===
   /**
@@ -793,19 +793,19 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
   const points = buffer.getPoints();
   if (points.length > 30) {
-    const recentStart = Math.max(0, points.length - 150);
+    const recentStart = Math.max(0, points.length - 200);
     let mn = Infinity, mx = -Infinity;
     for (let i = recentStart; i < points.length; i++) {
       const v = points[i].value;
       if (v < mn) mn = v;
       if (v > mx) mx = v;
     }
-    const range = Math.max(24, mx - mn);
+    const range = Math.max(20, mx - mn);
     const stats = state.amplitudeStats;
-    const targetMin = mn - range * 0.1;
-    const targetMax = mx + range * 0.1;
+    const targetMin = mn - range * 0.08;
+    const targetMax = mx + range * 0.08;
     const expanding = targetMax - targetMin > stats.range;
-    const blend = expanding ? AMP_ATTACK : AMP_RELEASE;
+    const blend = expanding ? AMP_ATTACK * 0.75 : AMP_RELEASE * 1.15;
     stats.min = stats.min * (1 - blend) + targetMin * blend;
     stats.max = stats.max * (1 - blend) + targetMax * blend;
     stats.range = stats.max - stats.min;
@@ -821,9 +821,10 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
 
   const strength = state.traceRevealed
     ? (state.signalStrength < 0 ? 0 : state.signalStrength > 1 ? 1 : state.signalStrength)
-    : 0.5; // Default amplitude during warmup so we can see finger contact immediately
+    : 0.5;
   const midValue = (stats.max + stats.min) / 2;
   const coords: { x: number; y: number; isArr: boolean; val: number }[] = [];
+
   for (let i = 0; i < points.length; i++) {
     const pt = points[i];
     const age = state.now - pt.time - VISUAL_DELAY_MS;
@@ -831,12 +832,9 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
     if (x < plot.x || x > plot.x + plot.w) continue;
     const honestValue = midValue + (pt.value - midValue) * strength;
-    
-    // Mapeo normalizado [0..1] para aplicar la transformación de subida/bajada no lineal
     const pct = Math.max(0, Math.min(1, (honestValue - stats.min) / safeRange));
     const transformedPct = Math.pow(pct, CARDIAC_WAVE_CONFIG.WAVE_SHARPNESS_EXPONENT);
     const y = plot.y + wavePadTop + (1 - transformedPct) * waveH;
-    
     coords.push({ x, y, isArr: pt.isArrhythmia, val: pt.value });
   }
 
@@ -847,15 +845,20 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
-  // El halo de la punta se amortigua una vez por frame; ambos modos (2D/3D) lo leen.
   state.sweepPulse *= CARDIAC_WAVE_CONFIG.SWEEP_PULSE_DECAY;
 
-    // ── MODO 3D: onda como cinta extruida sobre el piso en perspectiva. ──
-  // Reusa las MISMAS coords honestas → forma, amplitud y tiempo idénticos al 2D.
-  drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
+  try {
+    drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
+  } finally {
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(plot.x, plot.y, plot.w, plot.h);
+  ctx.clip();
 
 
-  // Tachogram (panel clínico: 2D en ambos modos)
   const tachoY = plot.y + plot.h - RR_TACHO_H + 4;
   ctx.fillStyle = 'rgba(8, 14, 26, 0.85)';
   ctx.fillRect(plot.x + 2, tachoY - 4, plot.w - 4, RR_TACHO_H);
@@ -902,6 +905,8 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.fillStyle = '#94a3b8';
   ctx.fillText(contact, plot.x + plot.w - 12, plot.y + 66);
 
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1.0;
   ctx.restore();
 }
 
@@ -1077,8 +1082,8 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   ctx.lineTo(coords[coords.length - 1].x, innerY + innerH);
   ctx.closePath();
   const areaGrad = ctx.createLinearGradient(0, innerY, 0, innerY + innerH);
-  areaGrad.addColorStop(0, 'rgba(34, 197, 94, 0.22)');
-  areaGrad.addColorStop(1, 'rgba(34, 197, 94, 0.02)');
+  areaGrad.addColorStop(0, 'rgba(34, 197, 94, 0.20)');
+  areaGrad.addColorStop(1, 'rgba(34, 197, 94, 0.01)');
   ctx.fillStyle = areaGrad;
   ctx.fill();
 
@@ -1098,13 +1103,14 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     }
     ctx.lineTo(coords[end].x, coords[end].y);
     ctx.strokeStyle = isArr ? COLORS.SIGNAL_ARR : COLORS.SIGNAL;
-    ctx.lineWidth = isArr ? 2.4 : 2;
+    ctx.lineWidth = isArr ? 2.2 : 1.9;
     ctx.shadowColor = isArr ? COLORS.SIGNAL_ARR_GLOW : COLORS.SIGNAL_GLOW;
-    ctx.shadowBlur = isArr ? 8 : 5;
+    ctx.shadowBlur = isArr ? 7 : 4;
     ctx.stroke();
     seg = end + 1;
   }
   ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1.0;
 
   for (let i = 0; i < coords.length; i++) {
     const c = coords[i];
