@@ -162,6 +162,10 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const lastDiagPushRef = useRef(0);
   const beatMarkerTimerRef = useRef<number | null>(null);
   const lastPeakTimestampRef = useRef<number>(0);
+  /** Amplitud REAL de cámara capturada en el instante exacto del pico sistólico (dato honesto, no sintético). */
+  const beatPeakRealValueRef = useRef<number>(0);
+  /** Valle REAL de cámara: mínimo observado desde el pico hasta ahora (se refina con cada muestra real que llega). */
+  const beatTroughRealValueRef = useRef<number>(0);
 
   // Sanity checker
   const [sanityProfileId, setSanityProfileId] = useState<string>(() => getActiveProfileId());
@@ -254,6 +258,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastSignalPushRef.current = 0;
     lastDiagPushRef.current = 0;
     lastPeakTimestampRef.current = 0;
+    beatPeakRealValueRef.current = 0;
+    beatTroughRealValueRef.current = 0;
     ppgMeterRef?.current?.clearBuffer();
 
   }, [processHeartBeat, ppgMeterRef]);
@@ -279,6 +285,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastArrhythmiaData.current = null;
     arrhythmiaDetectedRef.current = false;
     lastPeakTimestampRef.current = 0;
+    beatPeakRealValueRef.current = 0;
+    beatTroughRealValueRef.current = 0;
     ppgMeterRef?.current?.clearBuffer();
 
   }, [ppgMeterRef]);
@@ -471,26 +479,40 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     if (hasUsableContact && heartBeatResult.isPeak) {
       lastPeakTimestampRef.current = nowT;
+      // Amplitud REAL de cámara en el instante exacto del pico sistólico (dato honesto,
+      // no inventado): fija la altura de ESTE latido específico, no una constante global.
+      beatPeakRealValueRef.current = signalValue;
+      // Reinicia el rastreo del valle: se refina hacia abajo con cada muestra real que
+      // llegue en la ventana post-pico (ver más abajo).
+      beatTroughRealValueRef.current = signalValue;
     }
 
     if (!hasUsableContact) {
       lastPeakTimestampRef.current = 0;
+      beatPeakRealValueRef.current = 0;
+      beatTroughRealValueRef.current = 0;
     }
 
     let eegValue = 0;
     if (hasUsableContact && lastPeakTimestampRef.current > 0) {
       const elapsed = nowT - lastPeakTimestampRef.current;
-      // EEG-style heartbeat spike:
-      // 0ms: reached maximum peak (+10.0) at the exact moment of peak detection (coinciding with vibration and beep)
-      // 0ms - 60ms: instant descent from +10.0 to negative peak -4.0 (below baseline)
-      // 60ms - 170ms: return from -4.0 to 0.0
-      // > 170ms: rest at 0.0
+      // Rastrea el valle REAL (mínimo real observado) durante la ventana de caída del
+      // latido — cada muestra que llega aquí es dato de cámara genuino, no sintético.
+      if (elapsed >= 0 && elapsed < 170 && signalValue < beatTroughRealValueRef.current) {
+        beatTroughRealValueRef.current = signalValue;
+      }
+      // Forma y tiempos: plantilla sintética pedida explícitamente (reposo en línea base,
+      // ascenso rápido al pico, caída abrupta bajo línea base, retorno a reposo).
+      // Amplitud (altura del pico y profundidad del valle): 100% real, tomada de la
+      // cámara en ESTE latido — nunca una constante fija, por eso cada latido difiere.
+      const realPeakAmp = beatPeakRealValueRef.current;
+      const realTroughAmp = beatTroughRealValueRef.current;
       if (elapsed >= 0 && elapsed < 60) {
         const t = elapsed / 60;
-        eegValue = 10.0 - t * 14.0;
+        eegValue = realPeakAmp - t * (realPeakAmp - realTroughAmp);
       } else if (elapsed >= 60 && elapsed < 170) {
         const t = (elapsed - 60) / 110;
-        eegValue = -4.0 + t * 4.0;
+        eegValue = realTroughAmp - t * realTroughAmp;
       } else {
         eegValue = 0.0;
       }
