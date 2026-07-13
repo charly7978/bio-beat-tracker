@@ -278,15 +278,10 @@ export function drawWaveRibbon3D(
   const { plot } = state.layout;
   const revealed = state.traceRevealed;
 
- claude/cardiac-wave-rendering-3ln0kv
   // Amplitud honesta: reusa DIRECTAMENTE el heightPct ya normalizado por el auto-escalado 2D
   // (mismo pct^WAVE_SHARPNESS_EXPONENT que define coords.y). Evita recalcular la altura desde
   // waveGain absoluto, que fluctúa cada frame y desincroniza la cinta 3D del trazo 2D honesto.
   const hOf = (c: WaveCoord) => clamp(c.heightPct, 0, 1);
-
-  // Amplitud normalizada honesta con soporte para valores negativos por debajo de la grilla (piso)
-  const hOf = (c: WaveCoord) => clamp(c.val / ((state.waveGain || 4.2) * 10.0), -0.5, 1.2);
- main
   const uOf = (c: WaveCoord) => clamp((c.x - plot.x) / plot.w, 0, 1);
 
   const Pf: ProjPoint[] = []; // cresta frontal (la onda honesta)
@@ -394,27 +389,6 @@ export function drawWaveRibbon3D(
     ctx.stroke();
   }
 
- claude/cardiac-wave-rendering-3ln0kv
-  // Cortes de nivel de color anclados a POSICIÓN X FIJA en pantalla (no a fracción de índice).
-  // `coords[i].x` es una función lineal del tiempo transcurrido (edad de la muestra), así que
-  // usar una fracción de `n` para decidir el corte hace que el punto de cambio de color salte
-  // en pantalla cada vez que varía la densidad de muestras (jitter de tono / parpadeo visible).
-  // Buscando por X en vez de por índice, el borde queda siempre a la misma distancia del
-  // extremo derecho del gráfico, sin importar cuántos puntos caen en la ventana.
-  const recentCutX = plot.x + plot.w * 0.65;
-  const leadingCutX = plot.x + plot.w * 0.88;
-  const findCutByX = (cutoffX: number): number => {
-    let lo = 0, hi = n;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (coords[mid].x < cutoffX) lo = mid + 1; else hi = mid;
-    }
-    return lo;
-  };
-  const recentCut = Math.max(0, Math.min(n - 1, findCutByX(recentCutX)));
-  const leadingCut = Math.max(0, Math.min(n - 1, findCutByX(leadingCutX)));
-
-
   // === TRAZO DE LA CRESTA: UNA sola pasada firme y sólida ======================
   // ANTES: 3 pasadas superpuestas (cuerpo 0.45 + reciente 0.68 + cabeza verde
   // brillante '#4ade80'), cada una segmentada y con shadowBlur distinto (8 y 15).
@@ -427,7 +401,6 @@ export function drawWaveRibbon3D(
   // AHORA: un color 100% SÓLIDO y constante por segmento (verde señal / rojo
   // arritmia), sin shadowBlur → color firme y uniforme, sin shimmer, y un costo de
   // dibujo menor y más estable (menos varianza de tiempo por frame = más fluidez).
- main
   s = 0;
   while (s < n - 1) {
     const isArr = coords[s].isArr;

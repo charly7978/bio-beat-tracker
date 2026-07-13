@@ -7,6 +7,7 @@ import {
   lerpDisplayValue,
 } from '@/lib/measurement/displaySmoothing';
 import {
+  TARGET_FPS,
   BUFFER_SIZE,
   TREND_WINDOW_MS,
   TREND_MAX_POINTS,
@@ -212,18 +213,12 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     const q = quality ?? 0;
     const weakTarget =
       4.2 *
- claude/cardiac-wave-rendering-3ln0kv
       (pi < 0.0025 ? 2.1 : pi < 0.005 ? 1.65 : pi < 0.01 ? 1.35 : 1.08) *
       (q < 20 ? 1.4 : q < 40 ? 1.2 : 1);
-    waveGainRef.current = waveGainRef.current * 0.40 + weakTarget * 0.60;
-
-      (pi < 0.0025 ? 1.85 : pi < 0.005 ? 1.50 : pi < 0.01 ? 1.22 : 1.04) *
-      (q < 20 ? 1.25 : q < 40 ? 1.1 : 0.98);
     // Suavizado fuerte (0.92/0.08): la ganancia se desliza suavemente entre
-    // niveles al cruzar umbrales de PI/calidad en vez de saltar → la altura de la
-    // onda deja de "respirar" y el trazo se mantiene estable verticalmente.
+    // niveles al cruzar umbrales de PI/calidad en vez de saltar, evitando que las
+    // etiquetas numéricas de picos (SYS/DIA) salten de valor bruscamente.
     waveGainRef.current = waveGainRef.current * 0.92 + weakTarget * 0.08;
- main
 
     if (bpm != null && bpm > 30 && bpm < 220 && nowMs - lastBpmSampleRef.current > 500) {
       lastBpmSampleRef.current = nowMs;
@@ -347,15 +342,12 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
     if (isRunningRef.current) return;
     isRunningRef.current = true;
 
- claude/cardiac-wave-rendering-3ln0kv
-
     // Cadencia fija a TARGET_FPS: en pantallas de 90/120 Hz evita sobre-render y
     // el reparto desigual de frames que se percibe como parpadeo. Un solo trazo
     // por intervalo estable = movimiento fluido y uniforme.
     const frameInterval = 1000 / TARGET_FPS;
     let lastRenderTime = 0;
 
- main
     const render = () => {
       if (!isRunningRef.current) return;
       const canvas = canvasRef.current;
@@ -371,7 +363,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       }
 
       const now = Date.now();
- claude/cardiac-wave-rendering-3ln0kv
 
       // Gate de tiempo: salta el frame si aún no transcurrió el intervalo objetivo.
       if (now - lastRenderTime < frameInterval) {
@@ -380,7 +371,6 @@ const PPGSignalMeter = React.forwardRef<PPGSignalMeterHandle, PPGSignalMeterProp
       }
       lastRenderTime = now;
 
- main
       const p = propsRef.current;
       const fingerOn = p.isFingerDetected;
       const preserve = p.preserveResults;
