@@ -61,6 +61,11 @@ export interface ProcessedSignal {
     acquisitionConfidence?: number;
     /** Progreso monótono de estabilización [0..1] para la UI. */
     acquisitionProgress?: number;
+    /**
+     * Estado causal continuo del núcleo de razonamiento fisiológico. Mantiene
+     * hipótesis rivales, incertidumbre y observabilidad independiente por signo.
+     */
+    physiologicalReasoning?: import('../lib/reasoning/PhysiologicalReasoningCore').PhysiologicalReasoningState;
   };
 }
 
