@@ -9,7 +9,6 @@ on:
 
 jobs:
   cleanup_non_main_branches:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
