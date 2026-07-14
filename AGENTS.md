@@ -126,7 +126,7 @@ En este orden:
 
 ## 8. Estado especial del PR #40
 
-El archivo originalmente llamado `PhysiologicalReasoningCore` es una fusión heurística probabilística. No constituye razonamiento fisiológico ni un agente. Puede reutilizarse como `HeuristicEvidenceEngine`, pero no debe fusionarse o documentarse bajo un nombre que sugiera comprensión avanzada.
+El PR #40 fue fusionado a `main`. El archivo `PhysiologicalReasoningCore` que incorporó es una fusión heurística probabilística; no constituye razonamiento fisiológico ni un agente. Debe tratarse como infraestructura transitoria de evidencia, renombrarse a `HeuristicEvidenceEngine` o sustituirse. Ninguna IA debe citar su presencia como prueba de que la arquitectura multiagente ya existe.
 
 ## 9. Requisitos para cada PR
 
