@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ProcessedSignal, ProcessingError } from '../types/signal';
 import {
@@ -7,8 +6,32 @@ import {
   type BackpressureConfig,
 } from '../lib/perf/backpressureConfig';
 import { createLogger } from '../utils/logger';
+import {
+  PhysiologicalReasoningCore,
+  isValidPhysiologyProfile,
+} from '../lib/reasoning/PhysiologicalReasoningCore';
 
 const log = createLogger('useSignalProcessor');
+const PHYSIOLOGICAL_REASONING_PROFILE_KEY = 'bio-beat:physiological-reasoning-profile:v1';
+
+function loadPhysiologicalReasoningProfile(): unknown | null {
+  try {
+    const raw = localStorage.getItem(PHYSIOLOGICAL_REASONING_PROFILE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return isValidPhysiologyProfile(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function savePhysiologicalReasoningProfile(profile: unknown): void {
+  try {
+    localStorage.setItem(PHYSIOLOGICAL_REASONING_PROFILE_KEY, JSON.stringify(profile));
+  } catch {
+    log.warn('No se pudo persistir el perfil de razonamiento fisiológico');
+  }
+}
 
 /**
  * Hook que adapta el procesamiento de PPG a través de un Web Worker en un hilo separado.
@@ -20,6 +43,16 @@ export const useSignalProcessor = () => {
   const isProcessingRef = useRef(false);
   const [lastSignal, setLastSignal] = useState<ProcessedSignal | null>(null);
   const [currentStride, setCurrentStride] = useState<number>(3);
+  const physiologicalReasoningRef = useRef<PhysiologicalReasoningCore | null>(null);
+  if (physiologicalReasoningRef.current === null) {
+    const core = new PhysiologicalReasoningCore();
+    const persisted = loadPhysiologicalReasoningProfile();
+    if (persisted) core.importProfile(persisted);
+    physiologicalReasoningRef.current = core;
+  }
+  const lastPersistedReasoningRevisionRef = useRef<number>(
+    physiologicalReasoningRef.current.exportProfile().revision,
+  );
 
   // Guardar estadísticas recibidas del Worker para resolver getters síncronos
   const rgbStatsRef = useRef({
@@ -74,7 +107,47 @@ export const useSignalProcessor = () => {
           initializationState.current = 'READY';
         } else if (type === 'signalReady') {
           if (initializationState.current !== 'READY') return;
-          const { signal, rgbStats, backpressureState } = data;
+          const { signal, rgbStats, backpressureState } = data as {
+            signal: ProcessedSignal;
+            rgbStats?: typeof rgbStatsRef.current;
+            backpressureState?: typeof backpressureStateRef.current;
+          };
+
+          // El razonador trabaja sobre CADA frame emitido por el Worker, antes del
+          // throttle de React y sin usar fingerDetected como verdad. Mantiene una
+          // interpretación causal paralela y auditable de la escena.
+          const sqm = signal.diagnostics?.sqm;
+          const physiologicalReasoning = physiologicalReasoningRef.current!.update({
+            timestampMs: signal.timestamp,
+            rawRed: signal.rawRed ?? 0,
+            rawGreen: signal.rawGreen ?? 0,
+            rawBlue: signal.rawBlue ?? 0,
+            coverageRatio: signal.diagnostics?.coverageRatio ?? 0,
+            perfusionIndex: signal.perfusionIndex ?? 0,
+            periodicity: sqm?.periodicity ?? 0,
+            sqi: sqm?.sqi ?? signal.quality,
+            pulseStrength: sqm?.snr ?? 0,
+            filteredValue: signal.filteredValue,
+            morphologyValue: signal.morphologyValue ?? signal.morphologyFiltered ?? 0,
+            motionScore: sqm?.motionScore ?? (signal.motionArtifact ? 1 : 0),
+            signalMotionScore: sqm?.motionScore ?? 0,
+            saturationRatio: sqm?.saturationRatio ?? 0,
+            underexposureRatio: sqm?.underexposureRatio ?? 0,
+            frameDropRatio: sqm?.frameDropRatio,
+            timestampJitterMs: sqm?.timestampJitterMs,
+            spo2Channels: signal.spo2Channels,
+          });
+          if (signal.diagnostics) {
+            signal.diagnostics.physiologicalReasoning = physiologicalReasoning;
+          }
+
+          if (physiologicalReasoning.learningAccepted) {
+            const profile = physiologicalReasoningRef.current!.exportProfile();
+            if (profile.revision > lastPersistedReasoningRevisionRef.current) {
+              lastPersistedReasoningRevisionRef.current = profile.revision;
+              savePhysiologicalReasoningProfile(profile);
+            }
+          }
 
           // Actualizar las caches de telemetría
           if (rgbStats) rgbStatsRef.current = rgbStats;
@@ -207,6 +280,7 @@ export const useSignalProcessor = () => {
     setLastSignal(null);
     lastUiPushRef.current = 0;
     lastUiContactRef.current = { finger: false, contact: 'NO_CONTACT' };
+    physiologicalReasoningRef.current?.resetSession(true);
   }, []);
 
   const processFrame = useCallback((imageData: ImageData, frameTimestampMs?: number) => {
