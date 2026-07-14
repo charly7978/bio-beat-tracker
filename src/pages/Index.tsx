@@ -1,3 +1,4 @@
+// Force rebuild on Vercel
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Heart, AlertTriangle, Activity, X, Shield, Clock, CheckCircle2, XCircle, Brain, Loader2, Sliders, Cpu, User, Check } from "lucide-react";
 import CameraView, { CameraViewHandle } from "@/components/CameraView";
