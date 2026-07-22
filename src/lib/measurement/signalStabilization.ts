@@ -36,6 +36,8 @@ export interface StabilizationState {
   stabilized: boolean;
   progress: number;
   contactStartMs?: number;
+  /** Frames consecutivos sin contacto (para la gracia ante blips transitorios). */
+  noContactStreak: number;
 }
 
 export interface StabilizationResult {
@@ -49,7 +51,14 @@ export interface StabilizationResult {
 }
 
 export function createStabilizationState(): StabilizationState {
-  return { bpmTimes: [], bpmVals: [], qualityStreak: 0, stabilized: false, progress: 0 };
+  return {
+    bpmTimes: [],
+    bpmVals: [],
+    qualityStreak: 0,
+    stabilized: false,
+    progress: 0,
+    noContactStreak: 0,
+  };
 }
 
 function clamp01(v: number): number {
@@ -64,14 +73,30 @@ export function updateStabilization(
   const HR = VITAL_THRESHOLDS.HR;
 
   if (!s.hasContact) {
+    state.noContactStreak += 1;
+    // Gracia: un blip transitorio (temblor, micro-deslizamiento) PAUSA el estado
+    // en vez de borrarlo — el reloj de relajación y los buffers de convergencia
+    // sobreviven. Solo la pérdida SOSTENIDA (streak ≥ umbral) reinicia de verdad.
+    // Sin contacto previo (contactStartMs nunca asentado) no hay nada que pausar.
+    if (state.contactStartMs !== undefined && state.noContactStreak < C.CONTACT_LOSS_GRACE_FRAMES) {
+      return {
+        stage: state.stabilized ? 'READY' : 'STABILIZING',
+        progress: state.progress,
+        stabilized: state.stabilized,
+        reason: 'CONTACT_GAP_GRACE',
+      };
+    }
     state.bpmTimes.length = 0;
     state.bpmVals.length = 0;
     state.qualityStreak = 0;
     state.stabilized = false;
     state.contactStartMs = undefined;
+    state.noContactStreak = 0;
     state.progress = Math.max(0, state.progress - C.PROGRESS_FALL * 2);
     return { stage: 'SEARCHING', progress: state.progress, stabilized: false, reason: 'NO_CONTACT' };
   }
+
+  state.noContactStreak = 0;
 
   if (state.contactStartMs === undefined) {
     state.contactStartMs = s.nowMs;
