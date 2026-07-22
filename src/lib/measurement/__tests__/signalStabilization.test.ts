@@ -71,10 +71,24 @@ describe('signalStabilization (convergencia, no timer)', () => {
     expect(r.stabilized).toBe(true);
   });
 
-  it('perder el contacto resetea la estabilización', () => {
+  it('un blip breve de contacto (bajo el umbral de gracia) NO resetea — solo pausa', () => {
     const st = createStabilizationState();
     feed(st, 140, () => ({ bpm: 72 }));
+    // Un único frame sin contacto tras estabilizar: debe seguir READY (gracia).
     const r = updateStabilization(st, base(300, { hasContact: false }));
+    expect(r.stabilized).toBe(true);
+    expect(r.stage).toBe('READY');
+    expect(r.progress).toBe(1);
+  });
+
+  it('perder el contacto de forma SOSTENIDA (≥ gracia) resetea la estabilización', () => {
+    const st = createStabilizationState();
+    let r = feed(st, 140, () => ({ bpm: 72 }));
+    expect(r.stabilized).toBe(true);
+    // Suficientes frames consecutivos sin contacto para agotar la gracia.
+    for (let i = 140; i < 150; i++) {
+      r = updateStabilization(st, base(i, { hasContact: false }));
+    }
     expect(r.stabilized).toBe(false);
     expect(r.stage).toBe('SEARCHING');
   });

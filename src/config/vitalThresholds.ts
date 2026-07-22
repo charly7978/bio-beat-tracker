@@ -149,6 +149,25 @@ export const VITAL_THRESHOLDS = {
     MOTION_DC_JUMP_SCALE: 0.02,
     MOTION_SIGNAL_EMA_ALPHA: 0.35,
     /**
+     * ZONA MUERTA DEL IMU: el temblor fisiológico normal de la mano (bajo
+     * amplitud, no intencional) produce un `accelRMS`/`gyroRMS` de fondo que,
+     * sin zona muerta, se acumula en el EMA de `motionScore` como si fuera
+     * movimiento real del teléfono. Se resta este piso ANTES del EMA para que
+     * solo el exceso sobre el temblor de reposo cuente — movimiento genuino
+     * (caída, sacudida, reposicionar el teléfono) sigue superándolo con margen.
+     */
+    MOTION_IMU_DEADZONE: 0.03,
+    /**
+     * FUSIÓN PONDERADA (no `max`) de movimiento IMU vs. micro-movimiento de
+     * señal (DC del rojo) para el score reportado aguas abajo (supresión de
+     * picos, convergencia). Con `max`, un escalón de DC por temblor del dedo
+     * contra el lente bastaba para tumbar los gates aunque el teléfono
+     * estuviera quieto. La ponderación conserva sensibilidad a movimiento
+     * real (ambas fuentes) sin que una sola métrica ruidosa domine.
+     */
+    MOTION_FUSION_IMU_WEIGHT: 0.6,
+    MOTION_FUSION_SIGNAL_WEIGHT: 0.4,
+    /**
      * SQI POR SKEWNESS (Elgendi 2016, "Optimal SQI for PPG"): el índice de calidad
      * más fuerte. PPG limpio = skewness POSITIVA (subida sistólica abrupta → cola a
      * la derecha); ruido simétrico / corrupción por movimiento = skewness ≈0 o
@@ -231,6 +250,15 @@ export const VITAL_THRESHOLDS = {
    * honesto: si la convergencia o la calidad no avanzan, el progreso se estanca.
    */
   STABILIZATION: {
+    /**
+     * GRACIA ANTE PÉRDIDA BREVE DE CONTACTO: un parpadeo de contacto (temblor
+     * natural del dedo, micro-deslizamiento momentáneo) no debe borrar segundos
+     * de convergencia ya acumulada. Mientras `noContactStreak` esté por debajo
+     * de este umbral, el estado se PAUSA (no se pierde el reloj de relajación
+     * ni los buffers) en vez de reiniciarse. Solo la pérdida SOSTENIDA (≥ este
+     * número de frames, ~0.25 s @30 fps) dispara el reset real a SEARCHING.
+     */
+    CONTACT_LOSS_GRACE_FRAMES: 8,
     /** Ventana deslizante de BPM para medir convergencia (ms). */
     WINDOW_MS: 4500,
     /** Span temporal MÍNIMO de BPM válido y convergido antes de READY (ms). El

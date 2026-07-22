@@ -719,8 +719,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           perfusionIndex: perfusionIndex,
           snr: pulseSource.strength,
           periodicity: this.cachedPeriodicity,
-          // Movimiento efectivo = max(IMU, micro-movimiento del dedo desde la señal).
-          motionScore: Math.max(this.motionScore, this.signalMotionScore),
+          motionScore: this.effectiveMotionScore(),
           saturationRatio: (roi.rawRed > 250 ? 1 : 0),
           underexposureRatio: this.underexposureEma,
           fpsEffective: this.estimatedSampleRate,
@@ -1778,6 +1777,22 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.signalMotionScore * (1 - Q.MOTION_SIGNAL_EMA_ALPHA) + combinedInst * Q.MOTION_SIGNAL_EMA_ALPHA;
   }
 
+  /**
+   * Movimiento efectivo reportado aguas abajo (supresión de picos, convergencia):
+   * combinación PONDERADA (no `max`) del IMU (movimiento real del teléfono) y el
+   * micro-movimiento de señal (escalón de DC del rojo). Con `max`, un temblor del
+   * dedo contra el lente bastaba para tumbar los gates aunque el teléfono
+   * estuviera quieto; la ponderación conserva sensibilidad real sin que una sola
+   * métrica ruidosa domine el score.
+   */
+  private effectiveMotionScore(): number {
+    const Q = VITAL_THRESHOLDS.QUALITY;
+    return (
+      this.motionScore * Q.MOTION_FUSION_IMU_WEIGHT +
+      this.signalMotionScore * Q.MOTION_FUSION_SIGNAL_WEIGHT
+    );
+  }
+
   private handleMotionEvent = (event: DeviceMotionEvent) => {
     const acc = event.accelerationIncludingGravity;
     if (!acc || acc.x === null || acc.y === null || acc.z === null) return;
@@ -1825,7 +1840,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     }
 
     const rawScore = accelRMS * 0.5 + gyroRMS * 0.3;
-    this.motionScore = this.motionScore * 0.85 + rawScore * 0.15;
+    // Zona muerta: el temblor fisiológico de reposo no debe acumularse en el EMA.
+    const excessScore = Math.max(0, rawScore - VITAL_THRESHOLDS.QUALITY.MOTION_IMU_DEADZONE);
+    this.motionScore = this.motionScore * 0.85 + excessScore * 0.15;
   };
 
   /**
