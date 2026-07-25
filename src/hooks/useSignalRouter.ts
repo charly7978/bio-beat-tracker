@@ -17,6 +17,12 @@ import {
   updateStabilization,
 } from '@/lib/measurement/signalStabilization';
 import {
+  createPulseVerifier,
+  pushPulseSample,
+  resetPulseVerifier,
+  verifyPulse,
+} from '@/lib/signal/pulseVerification';
+import {
   DISPLAY_SMOOTH_ALPHAS,
   smoothDisplayPair,
   smoothDisplayValue,
@@ -153,6 +159,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   // mantiene durante toda la sesión de contacto.
   const acqReadyLatchRef = useRef(false);
   const stabilizationRef = useRef(createStabilizationState());
+  const pulseVerifierRef = useRef(createPulseVerifier());
 
   // Throttle timers
   const lastHrPushRef = useRef(0);
@@ -236,6 +243,7 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     unstableFrameCounter.current = 0;
     acqReadyLatchRef.current = false;
     stabilizationRef.current = createStabilizationState();
+    resetPulseVerifier(pulseVerifierRef.current);
     setRRIntervals([]);
     setBeatMarker(0);
     if (beatMarkerTimerRef.current) {
@@ -369,6 +377,27 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       },
     );
 
+    // VERIFICACIÓN FISIOLÓGICA DEL PULSO — compuerta REAL de publicación.
+    // Se alimenta con la señal filtrada y los picos del ensemble, y responde si
+    // hay un latido cardíaco genuino (perfusión + morfología repetible + potencia
+    // en banda cardíaca + skewness). Es lo que sustituye a la detección de dedo
+    // por color: el color puede satisfacerse apuntando a una pared, un pulso no.
+    // La evidencia espectral y estadística viene YA CALCULADA en `sqm` (el
+    // procesador la computa una vez por ventana para el SQI): aquí no se
+    // recalcula nada, solo se añade la correlación de latidos contra plantilla.
+    pushPulseSample(
+      pulseVerifierRef.current,
+      lastSignal.filteredValue ?? 0,
+      nowT,
+      !!heartBeatResult.isPeak,
+    );
+    const pulseVerdict = verifyPulse(pulseVerifierRef.current, {
+      perfusionIndex: lastSignal.perfusionIndex ?? 0,
+      harmonicConcentration: typeof sqm.relativePower === 'number' ? sqm.relativePower : 0,
+      dominantHz: typeof sqm.dominantHz === 'number' ? sqm.dominantHz : 0,
+      skewness: typeof sqm.skewness === 'number' ? sqm.skewness : 0,
+    });
+
     const mergedDiag =
       diag && typeof diag === 'object'
         ? { ...diag, peakDetection: heartBeatResult.ensembleDiagnostics }
@@ -450,16 +479,11 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       setCurrentDiagnostics(mergedDiag);
     }
 
-    const piMin = Q.MIN_PI * Math.max(
-      VITAL_THRESHOLDS.ROUTER.PI_MIN_READINESS_FLOOR,
-      hints.minPiScale * VITAL_THRESHOLDS.ROUTER.PI_MIN_READINESS_SCALE,
-    );
     const readiness = evaluateMeasurementReadiness({
+      pulseVerified: pulseVerdict.confirmed,
       hasUsableContact,
       contactState,
       rawSqi,
-      perfusionIndex: lastSignal.perfusionIndex ?? 0,
-      piMin,
       bpm: bpmOut,
       peakRecent,
       ensembleConfidence: heartBeatResult.confidence,
@@ -675,7 +699,13 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     }
 
     if (!vitalsDspReady) {
+      // Sostener en pantalla los últimos valores solo mientras el PULSO siga
+      // verificado (su propia histéresis da la gracia de un dropout breve). Sin
+      // pulso real esto sería retención de valores: mostrar como actual algo que
+      // ninguna observación vigente sostiene — justo lo que AGENTS §6 prohíbe y
+      // lo que hacía que una escena sin dedo conservara una medición completa.
       if (
+        pulseVerdict.confirmed &&
         hasUsableContact &&
         (vitalSignsRef.current.spo2.value ?? 0) > 0 &&
         nowT - lastVitalsPushRef.current >= VITALS_PUSH_THROTTLE_MS

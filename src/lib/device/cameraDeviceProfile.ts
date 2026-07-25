@@ -3,7 +3,6 @@ export interface CameraRuntimeHints {
   tclLike: boolean;
   motorolaLike: boolean;
   torchReliable: boolean;
-  minPiScale: number;
   ensembleConfScale: number;
   liveFingerMissGrace: number;
   fingerConfirmFrames: number;
@@ -31,7 +30,6 @@ export function isMotorolaLikeUserAgent(ua = typeof navigator !== 'undefined' ? 
 }
 
 const TOLERANT_DEFAULT: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 'torchReliable' | 'constrained'> = {
-  minPiScale: 0.1,
   ensembleConfScale: 0.5,
   liveFingerMissGrace: 32,
   fingerConfirmFrames: 3,
@@ -45,7 +43,6 @@ const TOLERANT_DEFAULT: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 't
 };
 
 const STRICT_TCL: Omit<CameraRuntimeHints, 'tclLike' | 'motorolaLike' | 'torchReliable' | 'constrained'> = {
-  minPiScale: 0.28,
   ensembleConfScale: 1,
   liveFingerMissGrace: 6,
   fingerConfirmFrames: 6,

@@ -47,6 +47,8 @@ export interface SignalQualityMetrics {
   hjorthComplexity?: number;
   /** Potencia relativa en banda cardíaca 0.5-4Hz (0-1) */
   relativePower?: number;
+  /** Fundamental cardíaca detectada por el barrido espectral (Hz). */
+  dominantHz?: number;
 }
 
 export interface CalibrationInfo {
