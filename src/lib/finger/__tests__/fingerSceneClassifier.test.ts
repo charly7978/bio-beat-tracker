@@ -57,6 +57,18 @@ describe('fingerSceneClassifier', () => {
     expect(isFingerOnLensScene(fingerSmooth, 0.16, 0.22)).toBe(true);
   });
 
+  it('acepta dedo DESCENTRADO / de canto (cobertura y score justos)', () => {
+    // R/B 1.14, dominancia 11.5, cobertura 0.10 y score 0.13: antes fallaba por
+    // los tres mínimos a la vez; es exactamente la colocación imperfecta a tolerar.
+    const offCenter = { red: 90, green: 78, blue: 79, coverage: 0.1, fingerScore: 0.13 };
+    expect(isFingerOnLensScene(offCenter, 0.1, 0.13)).toBe(true);
+  });
+
+  it('NO acepta como dedo en lente una escena sin dominancia de rojo', () => {
+    const whitish = { red: 150, green: 146, blue: 148, coverage: 0.3, fingerScore: 0.4 };
+    expect(isFingerOnLensScene(whitish, 0.3, 0.4)).toBe(false);
+  });
+
   it('passesLiveFingerContact rechaza flash', () => {
     expect(passesLiveFingerContact(flashOpen, flashOpen, spatialFinger)).toBe(false);
   });

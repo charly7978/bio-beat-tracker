@@ -135,10 +135,19 @@ export function hasFingerHemoglobinSignature(s: FingerRgbSnapshot): boolean {
   if (rb < F.HEMOGLOBIN_MIN_RB) return false;
   if (redDominance < F.MIN_RED_DOMINANCE) return false;
 
-  if (rg < 1.14 && rb < 1.28) return false;
-  if (g > 95 && b > 80 && redDominance < 30) return false;
-  if (total > 200 && rb < 1.38) return false;
-  if (total > 120 && rb < 1.42 && rg < 1.2) return false;
+  // Combinaciones de rechazo — umbrales en config (fuente única, ver FINGER.SIGNATURE_*).
+  if (rg < F.SIGNATURE_WEAK_RG && rb < F.SIGNATURE_WEAK_RB) return false;
+  if (
+    g > F.SIGNATURE_AMBIENT_GREEN &&
+    b > F.SIGNATURE_AMBIENT_BLUE &&
+    redDominance < F.SIGNATURE_AMBIENT_MIN_DOMINANCE
+  ) {
+    return false;
+  }
+  if (total > F.SIGNATURE_BRIGHT_TOTAL && rb < F.SIGNATURE_BRIGHT_RB) return false;
+  if (total > F.SIGNATURE_MID_TOTAL && rb < F.SIGNATURE_MID_RB && rg < F.SIGNATURE_MID_RG) {
+    return false;
+  }
 
   return (
     s.coverage >= F.MIN_COVERAGE * 0.95 &&
