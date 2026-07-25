@@ -61,6 +61,9 @@ export interface ProcessedSignal {
     acquisitionConfidence?: number;
     /** Progreso monótono de estabilización [0..1] para la UI. */
     acquisitionProgress?: number;
+    /** Veredicto de verificación fisiológica del pulso (compuerta de publicación). */
+    pulseVerified?: boolean;
+    pulseReason?: string;
     /**
      * Estado causal continuo del núcleo de razonamiento fisiológico. Mantiene
      * hipótesis rivales, incertidumbre y observabilidad independiente por signo.

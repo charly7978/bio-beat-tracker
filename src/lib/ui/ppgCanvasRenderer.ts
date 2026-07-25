@@ -335,6 +335,9 @@ export interface PpgRenderProps {
     hasPulsatility?: boolean;
     acquisitionStage?: 'SEARCHING' | 'STABILIZING' | 'READY';
     acquisitionProgress?: number;
+    /** Veredicto de verificación fisiológica del pulso (compuerta de publicación). */
+    pulseVerified?: boolean;
+    pulseReason?: string;
     sqm?: { fpsEffective?: number; timestampJitterMs?: number; underexposureRatio?: number };
     peakDetection?: {
       confidence?: number;
@@ -442,10 +445,17 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ctx.fillText(elapStr, 160, header.y + 22);
   }
 
+  // Indicador de PULSO VERIFICADO: es la compuerta real de publicación, así que
+  // el usuario debe poder distinguirla del mero contacto por color («DEDO OK» se
+  // enciende con cualquier escena rojiza; «PULSO» solo con un latido comprobado).
   ctx.font = `10px ${FONT_MONO}`;
   ctx.textAlign = 'right';
   ctx.fillStyle = detected ? COLORS.TEXT_PRIMARY : COLORS.TEXT_DIM;
   ctx.fillText(detected ? '● DEDO OK' : '○ SIN DEDO', header.w - 110, header.y + 22);
+
+  const pulseOk = diagnostics?.pulseVerified === true;
+  ctx.fillStyle = pulseOk ? COLORS.SIGNAL : COLORS.TEXT_DIM;
+  ctx.fillText(pulseOk ? '♥ PULSO' : '· SIN PULSO', header.w - 180, header.y + 22);
 
   const diag = diagnostics;
   const hideLowFlicker =

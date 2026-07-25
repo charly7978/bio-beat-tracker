@@ -471,6 +471,12 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     // Sobreescribe el stage/progress del diag con el criterio REAL de convergencia
     // (la UI revela la onda con ESTO, no con el warm-up por tiempo del procesador).
     const md = mergedDiag as Record<string, unknown>;
+    // Veredicto del pulso EN EL DIAGNÓSTICO: sin esto, cuando la compuerta se
+    // comporta distinto en un teléfono real no hay forma de saber qué evidencia
+    // falló y sólo queda especular. Se publica el motivo y las cuatro métricas.
+    md.pulseVerified = pulseVerdict.confirmed;
+    md.pulseReason = pulseVerdict.reason;
+    md.pulseEvidence = pulseVerdict.evidence;
     md.acquisitionStage = hasUsableContact ? stab.stage : 'SEARCHING';
     md.acquisitionProgress = stab.progress;
     md.stabilizationReason = stab.reason;
@@ -493,34 +499,39 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     });
     const { vitalsDspReady, fullVitalsReady, hrDisplayReady: hrReady } = readiness;
 
-    if (hasUsableContact && heartBeatResult.isPeak) {
+    // El trazo y el marcador de latido exigen PULSO VERIFICADO, no solo contacto
+    // por color. Antes bastaba `hasUsableContact`: apuntando a una pared el
+    // detector encontraba picos en el ruido filtrado y la UI dibujaba una onda
+    // pulsante sin sangre detrás — lo más visible de la app corría con el
+    // criterio antiguo aunque los números ya estuvieran gateados.
+    const pulseLive = pulseVerdict.confirmed;
+
+    if (pulseLive && heartBeatResult.isPeak) {
       lastPeakTimestampRef.current = nowT;
     }
 
-    if (!hasUsableContact) {
+    if (!pulseLive) {
       lastPeakTimestampRef.current = 0;
     }
 
     let eegValue = 0;
-    if (hasUsableContact && lastPeakTimestampRef.current > 0) {
+    if (pulseLive && lastPeakTimestampRef.current > 0) {
+      // Marcador de latido estilizado (forma por plantilla, ver ROUTER.BEAT_SPIKE):
+      // pico en el instante de detección → valle → retorno a la base.
+      const S = VITAL_THRESHOLDS.ROUTER.BEAT_SPIKE;
       const elapsed = nowT - lastPeakTimestampRef.current;
-      // EEG-style heartbeat spike:
-      // 0ms: reached maximum peak (+10.0) at the exact moment of peak detection (coinciding with vibration and beep)
-      // 0ms - 60ms: instant descent from +10.0 to negative peak -4.0 (below baseline)
-      // 60ms - 170ms: return from -4.0 to 0.0
-      // > 170ms: rest at 0.0
-      if (elapsed >= 0 && elapsed < 60) {
-        const t = elapsed / 60;
-        eegValue = 10.0 - t * 14.0;
-      } else if (elapsed >= 60 && elapsed < 170) {
-        const t = (elapsed - 60) / 110;
-        eegValue = -4.0 + t * 4.0;
+      if (elapsed >= 0 && elapsed < S.FALL_MS) {
+        const t = elapsed / S.FALL_MS;
+        eegValue = S.PEAK_VALUE - t * (S.PEAK_VALUE - S.TROUGH_VALUE);
+      } else if (elapsed >= S.FALL_MS && elapsed < S.RECOVER_MS) {
+        const t = (elapsed - S.FALL_MS) / (S.RECOVER_MS - S.FALL_MS);
+        eegValue = S.TROUGH_VALUE - t * S.TROUGH_VALUE;
       } else {
         eegValue = 0.0;
       }
     }
 
-    const showWaveform = hasUsableContact;
+    const showWaveform = pulseLive;
 
     if (ppgMeterRef?.current) {
       ppgMeterRef.current.pushSignal(showWaveform ? eegValue : 0, Date.now());
@@ -529,16 +540,20 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     if (hasUsableContact && nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {
       lastHrPushRef.current = nowT;
       const sqRounded = Math.round(rawSqi);
+      // Sin pulso verificado NO se publica número: `hrReady` solo cambiaba la
+      // ETIQUETA (VALID→WARMUP) mientras el valor seguía apareciendo en pantalla,
+      // que para el usuario es indistinguible de una medición buena.
+      const hrValue = pulseVerdict.confirmed ? bpmDisplay : 0;
       const hrStatus: import('@/types/measurements').MeasurementStatus =
         acqStabilized && contactState === 'STABLE_CONTACT' && bpmLive > 0 && hrReady
           ? 'VALID'
-          : bpmDisplay > 0
+          : hrValue > 0
             ? 'WARMUP'
             : 'NO_VALID_SIGNAL';
       setVitalSigns(prev => {
         const next = {
           ...prev,
-          heartRate: { ...prev.heartRate, value: bpmDisplay, status: hrStatus },
+          heartRate: { ...prev.heartRate, value: hrValue, status: hrStatus },
           signalQuality: sqRounded,
         };
         vitalSignsRef.current = next;
@@ -668,7 +683,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       lastRrSnapshotRef.current = null;
     }
 
-    const emittedPeak = hasUsableContact && heartBeatResult.isPeak;
+    // Latido contabilizado/marcado: exige pulso verificado, no solo color.
+    const emittedPeak = pulseVerdict.confirmed && heartBeatResult.isPeak;
 
     if (emittedPeak) {
       setBeatMarker(1);

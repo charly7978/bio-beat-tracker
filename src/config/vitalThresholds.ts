@@ -697,6 +697,21 @@ export const VITAL_THRESHOLDS = {
     DUAL_STREAM_PUSH_THROTTLE_MS: 250,
     /** Duración del marcador de latido en UI (ms) */
     BEAT_MARKER_MS: 300,
+    /**
+     * FORMA DEL PICO ESTILIZADO del medidor. Es un MARCADOR VISUAL de latido, no
+     * el pletismograma: se genera por plantilla a partir del instante del pico.
+     * Solo se dibuja con PULSO VERIFICADO — así marca latidos reales aunque su
+     * forma sea estilizada. Antes se generaba con estos valores hardcodeados en
+     * `useSignalRouter` y se dibujaba solo con contacto por color, de modo que
+     * apuntar a una pared producía una onda pulsante sin sangre detrás.
+     */
+    BEAT_SPIKE: {
+      PEAK_VALUE: 10.0,
+      TROUGH_VALUE: -4.0,
+      /** Caída pico→valle (ms) y retorno valle→base (ms desde el pico). */
+      FALL_MS: 60,
+      RECOVER_MS: 170,
+    },
     /** Cooldown entre toasts de señal sospechosa (ms) */
     SANITY_TOAST_COOLDOWN_MS: 5000,
     /** Ratio de frames saturados/subexpuestos para contabilizar artefacto */
