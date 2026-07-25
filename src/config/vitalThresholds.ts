@@ -45,6 +45,13 @@ export const VITAL_THRESHOLDS = {
     BP_CYCLE_QUALITY_TIP: 0.24,
     BP_CYCLE_QUALITY_PAD: 0.28,
     BP_CYCLE_QUALITY_HYBRID: 0.26,
+    /**
+     * Frames consecutivos con el mismo modo antes de conmutar (debounce, antes
+     * hardcodeado como `count >= 4` en smoothPlacementMode). Con temblor el modo
+     * oscila punta↔almohadilla; 3 frames (~0,1 s) basta para filtrar el parpadeo
+     * sin retrasar el bloqueo del modo correcto.
+     */
+    MODE_DEBOUNCE_FRAMES: 3,
   },
 
   // BLOOD PRESSURE — rangos fisiológicos (AHA / supervivencia) + normalización morfológica PPG
@@ -167,6 +174,25 @@ export const VITAL_THRESHOLDS = {
      */
     MOTION_FUSION_IMU_WEIGHT: 0.6,
     MOTION_FUSION_SIGNAL_WEIGHT: 0.4,
+    /**
+     * ARTEFACTO DE MOVIMIENTO: TRANSITORIO vs SOSTENIDO. Antes bastaba UN frame
+     * por encima de `MAX_MOTION` para declarar `MOTION_ARTIFACT`, anular la señal
+     * y suprimir ~0,67 s FIJOS — un temblor de 30 ms tiraba la ventana entera.
+     * Ahora el veto exige `MOTION_ARTIFACT_ENTER_FRAMES` consecutivos por encima
+     * del umbral (entrar cuesta) y se libera tras `MOTION_ARTIFACT_EXIT_FRAMES`
+     * por debajo de `MOTION_ARTIFACT_EXIT_SCORE` (salir es más barato →
+     * histéresis asimétrica, el patrón ya usado en AcquisitionStabilizer).
+     * La supresión post-movimiento (ringing del bandpass de 4º orden) pasa a ser
+     * PROPORCIONAL a la duración real del movimiento, acotada entre MIN y MAX:
+     * un blip corto suprime ~0,17 s en vez de 0,67 s; una sacudida real sigue
+     * suprimiendo el máximo. El movimiento degrada/pausa, no destruye (AGENTS §5).
+     */
+    MOTION_ARTIFACT_ENTER_FRAMES: 3,
+    MOTION_ARTIFACT_EXIT_FRAMES: 2,
+    MOTION_ARTIFACT_EXIT_SCORE: 0.55,
+    MOTION_SUPPRESSION_PER_FRAME: 1.6,
+    MOTION_SUPPRESSION_MIN_FRAMES: 5,
+    MOTION_SUPPRESSION_MAX_FRAMES: 20,
     /**
      * SQI POR SKEWNESS (Elgendi 2016, "Optimal SQI for PPG"): el índice de calidad
      * más fuerte. PPG limpio = skewness POSITIVA (subida sistólica abrupta → cola a
@@ -498,6 +524,63 @@ export const VITAL_THRESHOLDS = {
     SOFT_HOLD_DOMINANCE_DELTA: 6,
     SOFT_HOLD_FINGER_SCORE: 0.14,
     SOFT_HOLD_RG: 1.04,
+    /**
+     * FIRMA DE HEMOGLOBINA — combinaciones de rechazo (antes hardcodeadas dentro
+     * de `hasFingerHemoglobinSignature`, imposibles de auditar o ajustar).
+     *
+     * `SIGNATURE_WEAK_*` rechaza cuando NI el ratio R/G NI el R/B llegan al mínimo:
+     * castigaba a dedos pálidos, de lado o con presión ligera, que dan ratios más
+     * planos aunque haya hemoglobina real. Se relajan de forma acotada (1.14→1.10 y
+     * 1.28→1.22) porque el falso positivo verdadero (pared, tela, objeto rojo) no lo
+     * frena este gate estático sino la PULSATILIDAD aguas abajo: sin pulso real la
+     * convergencia nunca se alcanza y no se publica nada.
+     *
+     * `SIGNATURE_AMBIENT_*` (escena clara con poca dominancia de rojo = luz ambiente
+     * sobre superficie, no dedo) NO se relaja: es un discriminante real de falso
+     * positivo y su coste en un dedo real es nulo.
+     */
+    SIGNATURE_WEAK_RG: 1.10,
+    SIGNATURE_WEAK_RB: 1.22,
+    SIGNATURE_AMBIENT_GREEN: 95,
+    SIGNATURE_AMBIENT_BLUE: 80,
+    SIGNATURE_AMBIENT_MIN_DOMINANCE: 30,
+    SIGNATURE_BRIGHT_TOTAL: 200,
+    SIGNATURE_BRIGHT_RB: 1.32,
+    SIGNATURE_MID_TOTAL: 120,
+    SIGNATURE_MID_RB: 1.34,
+    SIGNATURE_MID_RG: 1.20,
+    /**
+     * ESCENA «DEDO SOBRE LA LENTE» (`isFingerOnLensScene`) — antes inline. Es la
+     * vía indulgente de adquisición: reconoce el dedo apoyado aunque los ratios no
+     * lleguen a los mínimos estrictos. Relajada levemente (R/B 1.14→1.12, dominancia
+     * 10→9, cobertura 0.11→0.10, score 0.14→0.12) para admitir dedo descentrado o
+     * apoyado de canto, que es el caso de uso real que el plan busca cubrir.
+     */
+    ON_LENS_TOTAL_MIN: 48,
+    ON_LENS_TOTAL_MAX: 520,
+    ON_LENS_RB: 1.12,
+    ON_LENS_RG: 1.04,
+    ON_LENS_MIN_DOMINANCE: 9,
+    ON_LENS_MIN_COVERAGE: 0.10,
+    ON_LENS_MIN_FINGER_SCORE: 0.12,
+    ON_LENS_MIN_SNAP_COVERAGE: 0.1,
+    /**
+     * FLASH ABIERTO SIN CONTACTO (`isOpenFlashWithoutContact`) — antes inline.
+     * Es el guardián anti-falso-positivo principal (linterna apuntando al aire o a
+     * una superficie clara). Se centraliza SIN relajar ningún valor: aflojarlo sería
+     * exactamente el fallo que AGENTS prohíbe (publicar vitales sin dedo).
+     */
+    FLASH_OPEN_MIN_TOTAL: 45,
+    FLASH_OPEN_MAX_DOMINANCE: 20,
+    FLASH_OPEN_G_RATIO: 0.8,
+    FLASH_OPEN_B_RATIO: 0.7,
+    FLASH_OPEN_TOTAL_BRIGHT: 200,
+    FLASH_OPEN_G_RATIO_SOFT: 0.75,
+    FLASH_OPEN_B_RATIO_SOFT: 0.65,
+    FLASH_OPEN_TOTAL_SOFT: 150,
+    FLASH_OPEN_DOMINANCE_SOFT: 10,
+    /** CV mínimo bajo el cual el parpadeo de AE no se confunde con pulso. */
+    EXPOSURE_FLICKER_CV_MIN: 0.028,
   },
 
   /**

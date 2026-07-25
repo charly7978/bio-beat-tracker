@@ -35,7 +35,9 @@ export function smoothPlacementMode(
 ): { mode: FingerPlacementMode; streak: { mode: FingerPlacementMode; count: number } } {
   if (next === streak.mode) {
     const count = streak.count + 1;
-    if (count >= 4) return { mode: next, streak: { mode: next, count } };
+    if (count >= VITAL_THRESHOLDS.PLACEMENT.MODE_DEBOUNCE_FRAMES) {
+      return { mode: next, streak: { mode: next, count } };
+    }
     return { mode: prev, streak: { mode: next, count } };
   }
   return { mode: prev, streak: { mode: next, count: 1 } };
@@ -89,16 +91,32 @@ export function passesUnifiedFingerAcquire(
   );
 }
 
-export function placementHintText(mode: FingerPlacementMode, perfusionIndex?: number): string {
+/**
+ * Coach de colocación. El tono importa: el usuario abandona cuando el mensaje
+ * suena a reproche o le exige una inmovilidad imposible. Los textos orientan
+ * ("apoye la mano") y normalizan explícitamente el temblor fisiológico, que el
+ * pipeline ya tolera (zona muerta del IMU + gracia de contacto + veto sostenido).
+ *
+ * @param motionScore Movimiento del frame (0..~2). Si supera el umbral de aviso
+ *   se prioriza la sugerencia de apoyo, que es la acción con más impacto real.
+ */
+export function placementHintText(
+  mode: FingerPlacementMode,
+  perfusionIndex?: number,
+  motionScore?: number,
+): string {
+  if (motionScore !== undefined && motionScore > VITAL_THRESHOLDS.ACQUISITION.MOTION_TOLERANCE) {
+    return 'Apoye la mano en una superficie — un temblor leve es normal';
+  }
   if (perfusionIndex !== undefined && perfusionIndex > 0 && perfusionIndex < 0.00025) {
-    return 'Presione más suave (flujo sanguíneo limitado)';
+    return 'Afloje un poco la presión: está cortando el flujo';
   }
   switch (mode) {
     case 'tip':
-      return 'Cubra la yema con presión media (no solo la punta)';
+      return 'Cubra la lente con toda la yema, no solo con la punta';
     case 'pad':
-      return 'Buen apoyo; mantenga presión media sin aplastar del todo';
+      return 'Buen apoyo — manténgalo así, sin apretar más';
     default:
-      return 'Apoye la yema cubriendo la lente, presión media y constante';
+      return 'Apoye la yema sobre la lente con presión suave y constante';
   }
 }

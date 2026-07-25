@@ -15,15 +15,29 @@ export function getLastEnsemble(): FingerEnsembleMetrics | null {
 }
 
 export function isOpenFlashWithoutContact(s: FingerRgbSnapshot): boolean {
+  const F = VITAL_THRESHOLDS.FINGER;
   const r = s.red;
   const g = Math.max(1, s.green);
   const b = Math.max(1, s.blue);
   const total = r + g + b;
-  if (total < 45) return false;
+  if (total < F.FLASH_OPEN_MIN_TOTAL) return false;
   const dom = r - (g + b) / 2;
-  if (dom > 20) return false;
-  if (g > 0.8 * r && b > 0.7 * r && total > 200) return true;
-  if (g > 0.75 * r && b > 0.65 * r && total > 150 && dom < 10) return true;
+  if (dom > F.FLASH_OPEN_MAX_DOMINANCE) return false;
+  if (
+    g > F.FLASH_OPEN_G_RATIO * r &&
+    b > F.FLASH_OPEN_B_RATIO * r &&
+    total > F.FLASH_OPEN_TOTAL_BRIGHT
+  ) {
+    return true;
+  }
+  if (
+    g > F.FLASH_OPEN_G_RATIO_SOFT * r &&
+    b > F.FLASH_OPEN_B_RATIO_SOFT * r &&
+    total > F.FLASH_OPEN_TOTAL_SOFT &&
+    dom < F.FLASH_OPEN_DOMINANCE_SOFT
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -153,7 +167,7 @@ export function isExposureFlickerNotFingerPulse(
   snap: FingerRgbSnapshot,
   minRbForPulse: number,
 ): boolean {
-  if (roiRedCv < 0.028) return false;
+  if (roiRedCv < VITAL_THRESHOLDS.FINGER.EXPOSURE_FLICKER_CV_MIN) return false;
   const b = Math.max(1, snap.blue);
   const rb = snap.red / b;
   return rb < minRbForPulse;
@@ -164,6 +178,7 @@ export function isFingerOnLensScene(
   coverage: number,
   fingerScore: number,
 ): boolean {
+  const F = VITAL_THRESHOLDS.FINGER;
   const r = snap.red;
   const g = Math.max(1, snap.green);
   const b = Math.max(1, snap.blue);
@@ -172,14 +187,14 @@ export function isFingerOnLensScene(
   const rg = r / g;
   const dom = r - (g + b) / 2;
   return (
-    total >= 48 &&
-    total <= 520 &&
-    rb >= 1.14 &&
-    rg >= 1.05 &&
-    dom >= 10 &&
-    coverage >= 0.11 &&
-    fingerScore >= 0.14 &&
-    snap.coverage >= 0.1
+    total >= F.ON_LENS_TOTAL_MIN &&
+    total <= F.ON_LENS_TOTAL_MAX &&
+    rb >= F.ON_LENS_RB &&
+    rg >= F.ON_LENS_RG &&
+    dom >= F.ON_LENS_MIN_DOMINANCE &&
+    coverage >= F.ON_LENS_MIN_COVERAGE &&
+    fingerScore >= F.ON_LENS_MIN_FINGER_SCORE &&
+    snap.coverage >= F.ON_LENS_MIN_SNAP_COVERAGE
   );
 }
 

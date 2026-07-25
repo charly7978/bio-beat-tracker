@@ -485,10 +485,52 @@ export function drawHeader(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     diag.status !== 'WARMUP' &&
     !hideLowFlicker
   ) {
+    // Aviso accionable + progreso real: durante un bloqueo transitorio el usuario
+    // ve que la adquisición sigue en pie y qué corregir, en vez de un código crudo
+    // que se lee como fallo de la app y le hace levantar el dedo.
     ctx.fillStyle = COLORS.TEXT_DANGER;
-    ctx.font = `bold 10px ${FONT_MONO}`;
     ctx.textAlign = 'center';
-    ctx.fillText(`⚠ ${diag.status}`, header.w / 2, header.y + 12);
+    if (detected && stage === 'STABILIZING') {
+      const pct = Math.round((diag.acquisitionProgress ?? 0) * 100);
+      ctx.font = `bold 9px ${FONT_MONO}`;
+      ctx.fillText(`⚠ ${describeSignalBlocker(diag.status)}`, header.w / 2, header.y + 8);
+      ctx.fillStyle = COLORS.TEXT_INFO;
+      ctx.font = `9px ${FONT_MONO}`;
+      ctx.fillText(`ESTABILIZANDO · ${pct}%`, header.w / 2, header.y + 18);
+    } else {
+      ctx.font = `bold 10px ${FONT_MONO}`;
+      ctx.fillText(`⚠ ${describeSignalBlocker(diag.status)}`, header.w / 2, header.y + 12);
+    }
+  }
+}
+
+/**
+ * Traduce el código de diagnóstico interno a una instrucción accionable.
+ *
+ * Mostrar `MOTION_ARTIFACT` en crudo no le dice al usuario qué hacer y se lee como
+ * un fallo de la aplicación, no como algo corregible desde su mano. El texto NO
+ * suaviza el hecho de que la señal no es válida —sigue siendo un aviso en rojo—,
+ * solo indica la corrección concreta. Un código desconocido se muestra tal cual
+ * antes que inventarle un mensaje.
+ */
+export function describeSignalBlocker(status: string): string {
+  switch (status) {
+    case 'MOTION_ARTIFACT':
+      return 'MOVIMIENTO — APOYE LA MANO';
+    case 'SATURATED':
+      return 'EXCESO DE LUZ — AFLOJE LA PRESIÓN';
+    case 'UNDEREXPOSED':
+      return 'MUY OSCURO — CUBRA LA LENTE';
+    case 'LOW_FPS':
+      return 'CÁMARA LENTA — CIERRE OTRAS APPS';
+    case 'TORCH_UNAVAILABLE':
+      return 'SIN LINTERNA — BUSQUE LUZ DIRECTA';
+    case 'LOW_SIGNAL_QUALITY':
+      return 'SEÑAL DÉBIL — REACOMODE EL DEDO';
+    case 'NO_FINGER':
+      return 'APOYE EL DEDO SOBRE LA LENTE';
+    default:
+      return status;
   }
 }
 

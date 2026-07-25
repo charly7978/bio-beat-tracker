@@ -4,7 +4,10 @@ import {
   classifyFingerPlacement,
   placementHintText,
   passesUnifiedFingerAcquire,
+  smoothPlacementMode,
 } from '../fingerPlacementProfile';
+import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
+import type { FingerPlacementMode } from '@/types/signal';
 
 const padSpatial = { coverageRatio: 0.22, fingerScore: 0.2, fingerTileCount: 5 };
 const tipSpatial = { coverageRatio: 0.13, fingerScore: 0.2, fingerTileCount: 5 };
@@ -53,5 +56,31 @@ describe('fingerPlacementProfile', () => {
   it('genera texto de guía por modo', () => {
     expect(placementHintText('hybrid')).toMatch(/yema/i);
     expect(placementHintText('tip')).toMatch(/punta/i);
+  });
+
+  it('con movimiento alto prioriza apoyar la mano y NORMALIZA el temblor leve', () => {
+    const hint = placementHintText('pad', 0.002, 1.2);
+    expect(hint).toMatch(/apoye la mano/i);
+    expect(hint).toMatch(/temblor leve es normal/i);
+  });
+
+  it('sin movimiento relevante NO muestra el aviso de temblor', () => {
+    expect(placementHintText('pad', 0.002, 0.05)).not.toMatch(/temblor/i);
+  });
+
+  it('el debounce de modo filtra el parpadeo pero conmuta al sostenerse', () => {
+    const D = VITAL_THRESHOLDS.PLACEMENT.MODE_DEBOUNCE_FRAMES;
+    let mode: FingerPlacementMode = 'pad';
+    let streak = { mode: 'pad' as FingerPlacementMode, count: 1 };
+
+    // Un único frame en 'tip' no debe conmutar el modo.
+    ({ mode, streak } = smoothPlacementMode(mode, 'tip', streak));
+    expect(mode).toBe('pad');
+
+    // Sostenido hasta el debounce → conmuta.
+    for (let i = 1; i < D; i++) {
+      ({ mode, streak } = smoothPlacementMode(mode, 'tip', streak));
+    }
+    expect(mode).toBe('tip');
   });
 });

@@ -56,6 +56,11 @@ import {
 } from '../../lib/acquisition/AcquisitionStabilizer';
 import { tilePulsatility, pulsatilityBoost } from '../../lib/signal/tileFusion';
 import {
+  createMotionGateState,
+  resetMotionGate,
+  updateMotionGate,
+} from '../../lib/signal/motionGate';
+import {
   createActiveStabilizer,
   stabilizeSample,
   resetActiveStabilizer,
@@ -232,8 +237,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private motionListenerActive = false;
   private lastAcceleration = { x: 0, y: 0, z: 0 };
   private readonly MOTION_THRESHOLD = VITAL_THRESHOLDS.QUALITY.MAX_MOTION;
-  /** Cuenta regresiva de supresión post-motion para que el ringing del BPF decaiga */
-  private postMotionSuppression = 0;
+  /**
+   * Veto de movimiento con histéresis + supresión post-motion proporcional.
+   * Distingue el temblor transitorio (no veta) del movimiento sostenido (veta).
+   */
+  private readonly motionGate = createMotionGateState();
 
   // IMU → RESPIRACIÓN (modalidad ACC, no-óptica). La respiración mece levemente
   // la mano/teléfono → el acelerómetro oscila en banda respiratoria. Se sigue la
@@ -373,7 +381,12 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     this.updateContactState(roi);
 
-    const motionArtifact = this.motionScore > this.MOTION_THRESHOLD;
+    // Veto SOSTENIDO (no al primer frame): un temblor breve ya no anula la ventana.
+    const motionArtifact = updateMotionGate(
+      this.motionGate,
+      this.motionScore,
+      this.MOTION_THRESHOLD,
+    ).artifact;
     const fingerEnsemble = updateFingerDetection(
       { red: roi.rawRed, green: roi.rawGreen, blue: roi.rawBlue, coverage: roi.coverageRatio, fingerScore: roi.fingerScore },
       { red: this.smoothedRed, green: this.smoothedGreen, blue: this.smoothedBlue, coverage: this.smoothedCoverage, fingerScore: this.smoothedFingerScore },
@@ -623,21 +636,16 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       (hemoglobinScene || ensembleScene) &&
       (this.lastInstantFinger || this.contactState === 'STABLE_CONTACT');
 
-    // Post-motion hold-off: despues de que el motion cesa, el BPF 4° orden aun
-    // tiene ringing (~0.5s). Suprimimos la salida durante ese tiempo.
-    if (motionArtifact) {
-      this.postMotionSuppression = 20; // ~670ms a 30fps
-    } else if (this.postMotionSuppression > 0) {
-      this.postMotionSuppression--;
-    }
-
+    // Post-motion hold-off: tras cesar el movimiento, el BPF de 4º orden aún tiene
+    // ringing. La cuenta la lleva `motionGate` y es PROPORCIONAL a lo que duró el
+    // movimiento (un blip suprime pocos frames; una sacudida, el máximo).
     const signalPathActive =
       (fingerUi ||
       (this.lastInstantFinger &&
         (hemoglobinScene || ensembleScene) &&
         this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.85)) &&
       !motionArtifact &&
-      this.postMotionSuppression <= 0;
+      this.motionGate.suppression <= 0;
     const displayQuality = signalPathActive
       ? fingerUi
         ? this.displaySqiEma
@@ -704,7 +712,11 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
             `PI:${perfusionIndex.toFixed(2)} SQI:${Math.round(this.diagStatusState.smoothedSqi)} ` +
             `C:${(roi.coverageRatio * 100).toFixed(0)}% ${this.placementMode} ${this.contactState}${motionArtifact ? ' MOV' : ''}`,
           placementMode: this.placementMode,
-          placementHint: placementHintText(this.placementMode, perfusionIndex),
+          placementHint: placementHintText(
+            this.placementMode,
+            perfusionIndex,
+            this.effectiveMotionScore(),
+          ),
           hasPulsatility:
             fingerUi &&
             (SignalQualityIndex.isClinicallyValid(rawSqiOut, perfusionIndex) ||
@@ -1711,7 +1723,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.displaySqiEma = 0;
     this.signalQuality = 0;
     this.motionScore = 0;
-    this.postMotionSuppression = 0;
+    resetMotionGate(this.motionGate);
     this.lastFrameTimestamp = 0;
     this.lastLogTime = 0;
     this.underexposureEma = 0;
