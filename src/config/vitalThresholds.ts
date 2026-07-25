@@ -307,6 +307,77 @@ export const VITAL_THRESHOLDS = {
   },
 
   /**
+   * VERIFICACIÓN FISIOLÓGICA DEL PULSO — criterio ÚNICO para publicar vitales.
+   *
+   * Sustituye a la detección de dedo por color como compuerta. Los gates que
+   * antes protegían la publicación estaban a nivel de RUIDO: `piMin` efectivo
+   * = MIN_PI(0.0009) × max(0.04, 0.1×0.18) = 0.000036 → 0,0036 % de AC/DC,
+   * cuando un dedo real da 0,5–2 %. Eran ~139× más bajos que lo fisiológico, y
+   * junto a `rawSqi >= 3` (sobre 100) dejaban pasar cualquier escena. Por eso la
+   * app producía una medición completa apuntando a cualquier lado.
+   *
+   * Los umbrales de aquí SÍ son fisiológicos y salen de literatura:
+   *  - PI de dedo sano 0,5–2 % (≈1 % típico). La cámara atenúa frente a un
+   *    oxímetro transmisivo, así que el piso se sitúa por debajo del rango
+   *    clínico pero dos órdenes de magnitud por encima del ruido de sensor.
+   *  - Correlación contra plantilla de latido r ≥ 0,86 = «limpio» (template
+   *    matching / Orphanidou). Se exige 0,80 porque la cámara es más ruidosa que
+   *    un sensor de contacto dedicado; sigue siendo inalcanzable para ruido.
+   *  - Potencia concentrada en f0+2f0+3f0: el PPG no es sinusoidal (subida
+   *    sistólica + muesca dícrota), el artefacto dispersa la potencia.
+   *  - Skewness positiva (Elgendi 2016, mejor SQI individual).
+   */
+  PULSE_VERIFICATION: {
+    /** AC/DC mínimo real (0,15 %). Muy por debajo del rango clínico, muy por encima del ruido. */
+    MIN_PERFUSION_INDEX: 0.0015,
+    /** Correlación media latido↔plantilla. Literatura: ≥0,86 limpio; 0,80 por ruido de cámara. */
+    MIN_TEMPLATE_CORRELATION: 0.80,
+    /** Latidos necesarios para que la plantilla sea significativa. */
+    MIN_BEATS_FOR_TEMPLATE: 4,
+    /** Muestras por latido tras remuestrear (permite promediar con RR variable). */
+    BEAT_LENGTH: 32,
+    /** Latidos rastreados como máximo (memoria acotada). */
+    MAX_TRACKED_BEATS: 12,
+    /** Fracción mínima de potencia en la fundamental cardíaca y sus armónicos. */
+    MIN_HARMONIC_CONCENTRATION: 0.45,
+    /** Nº de armónicos evaluados (f0, 2·f0, 3·f0): los que la literatura acota. */
+    HARMONICS: 3,
+    /** Ventana de latidos retenidos para la plantilla (ms). */
+    PEAK_HISTORY_MS: 12_000,
+    /** Skewness mínima admitida (Elgendi): el ruido simétrico queda fuera. */
+    MIN_SKEWNESS: -0.10,
+    /** Banda cardíaca de búsqueda: 0,7–3,5 Hz = 42–210 bpm. */
+    MIN_HZ: 0.7,
+    MAX_HZ: 3.5,
+    /** Ventana de análisis (~6 s @30 fps) y mínimo para evaluar (~3 s). */
+    WINDOW_SAMPLES: 180,
+    MIN_SAMPLES: 90,
+    /** Coste: se reevalúa cada N frames, no en cada uno. */
+    THROTTLE_FRAMES: 6,
+    /** Histéresis del veredicto (en evaluaciones, no en frames). */
+    CONFIRM_EVALUATIONS: 2,
+    RELEASE_EVALUATIONS: 4,
+    /**
+     * Confianza combinada: pesos por evidencia (suman 1.0) y referencia de
+     * normalización de cada una. La correlación de plantilla pesa más porque es
+     * el discriminante más fuerte frente a ruido (ver cabecera del módulo).
+     */
+    W_PERFUSION: 0.25,
+    W_TEMPLATE: 0.40,
+    W_HARMONIC: 0.25,
+    W_SKEWNESS: 0.10,
+    /** Perfusión de referencia para saturar su aporte = MIN × este factor. */
+    CONF_PERFUSION_REF_MULT: 3,
+    CONF_TEMPLATE_REF: 0.95,
+    CONF_HARMONIC_REF: 0.80,
+    /** Mapeo de skewness [−OFFSET .. −OFFSET+SPAN] → [0..1]. */
+    CONF_SKEW_OFFSET: 0.3,
+    CONF_SKEW_SPAN: 0.8,
+    /** Techo de confianza mientras el pulso NO está confirmado (no engañar a la UI). */
+    UNCONFIRMED_CONFIDENCE_CAP: 0.5,
+  },
+
+  /**
    * ACONDICIONADOR ACTIVO DE SEÑAL (DSP en vivo): estabiliza la línea base y hace
    * denoise que PRESERVA los picos (edge-preserving). Trabaja la señal frame a frame.
    * Unidades en la escala de `pulseSource` (~±95). Ver activeStabilizer.ts.
@@ -631,9 +702,6 @@ export const VITAL_THRESHOLDS = {
     /** Ratio de frames saturados/subexpuestos para contabilizar artefacto */
     SATURATION_FRAME_RATIO: 0.75,
     UNDEREXPOSURE_FRAME_RATIO: 0.82,
-    /** Escala y piso del PI mínimo aplicados en evaluateMeasurementReadiness */
-    PI_MIN_READINESS_SCALE: 0.18,
-    PI_MIN_READINESS_FLOOR: 0.04,
     /** Confianza mínima de fusión dual-stream para usar su BPM de consenso (0–100) */
     FUSION_CONSENSUS_MIN_CONF: 60,
     /** Confianza mínima del ensemble para alimentar arritmia desde el router */

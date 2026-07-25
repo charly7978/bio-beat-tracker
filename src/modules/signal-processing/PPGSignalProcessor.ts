@@ -60,6 +60,7 @@ import {
   resetMotionGate,
   updateMotionGate,
 } from '../../lib/signal/motionGate';
+import { harmonicConcentration } from '../../lib/signal/pulseVerification';
 import {
   createActiveStabilizer,
   stabilizeSample,
@@ -230,6 +231,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private cachedSkewness = 0;
   private cachedKurtosis = 0;
   private cachedRelativePower = 0;
+  private cachedDominantHz = 0;
   private sqiMetricsCounter = 0;
 
   // IMU / Motion
@@ -587,8 +589,22 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         if (std > 1e-8) {
           this.cachedSkewness = (s3 / n - 3 * mean * (s2 / n) + 2 * mean * mean * mean) / (std * std * std);
           this.cachedKurtosis = (s4 / n - 4 * mean * (s3 / n) + 6 * mean * mean * (s2 / n) - 3 * mean * mean * mean * mean) / (var_ * var_);
-          this.cachedRelativePower = this.cachedPeriodicity;
         }
+        // POTENCIA RELATIVA REAL en banda cardíaca (f0 + armónicos). Antes esto
+        // era `this.cachedRelativePower = this.cachedPeriodicity`: un alias que
+        // hacía que SQI puntuase DOS VECES la misma magnitud (18 pts como
+        // periodicidad + 10 pts como «potencia en banda cardíaca») y que la
+        // métrica espectral que decía usar no se calculara nunca. Se computa aquí,
+        // una sola vez por ventana, y la consumen tanto SQI como el verificador
+        // de pulso del router — sin recálculo aguas abajo.
+        const PV = VITAL_THRESHOLDS.PULSE_VERIFICATION;
+        const dom = bandLimitedDominantFreq(fTail, this.estimatedSampleRate, PV.MIN_HZ, PV.MAX_HZ);
+        this.cachedDominantHz = dom.freqHz;
+        this.cachedRelativePower = harmonicConcentration(
+          fTail,
+          this.estimatedSampleRate,
+          dom.freqHz,
+        );
       }
     }
 
@@ -731,6 +747,9 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
           perfusionIndex: perfusionIndex,
           snr: pulseSource.strength,
           periodicity: this.cachedPeriodicity,
+          skewness: this.cachedSkewness,
+          relativePower: this.cachedRelativePower,
+          dominantHz: this.cachedDominantHz,
           motionScore: this.effectiveMotionScore(),
           saturationRatio: (roi.rawRed > 250 ? 1 : 0),
           underexposureRatio: this.underexposureEma,
@@ -1719,6 +1738,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.cachedSqi = 0;
     this.cachedPI = 0;
     this.cachedPeriodicity = 0;
+    this.cachedRelativePower = 0;
+    this.cachedDominantHz = 0;
     this.periodicityEma = 0;
     this.displaySqiEma = 0;
     this.signalQuality = 0;
@@ -1796,6 +1817,16 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
    * dedo contra el lente bastaba para tumbar los gates aunque el teléfono
    * estuviera quieto; la ponderación conserva sensibilidad real sin que una sola
    * métrica ruidosa domine el score.
+   */
+  /**
+   * Movimiento FUSIONADO (IMU + micro-movimiento de señal) que se publica aguas
+   * abajo (SQI, convergencia, supresión de picos).
+   *
+   * Los gates INTERNOS de adquisición de dedo (`motionGate`, `stepAcquisition`,
+   * `PULSE_HOLD_MAX_MOTION`, `ACQUIRE_MAX_MOTION_SOFT`) usan a propósito solo
+   * `motionScore` (IMU). No es una inconsistencia olvidada: `signalMotionScore`
+   * se deriva de los escalones del DC del rojo, que carecen de sentido cuando aún
+   * no hay contacto — usarlo para decidir si hay dedo sería circular.
    */
   private effectiveMotionScore(): number {
     const Q = VITAL_THRESHOLDS.QUALITY;

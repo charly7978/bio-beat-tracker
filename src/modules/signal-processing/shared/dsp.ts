@@ -222,6 +222,36 @@ export function bpmFromAutocorr(signal: number[], fs: number): { bpm: number; sc
  * la frecuencia del pico y su concentración espectral normalizada (0–1; ≈1 para
  * una onda pura, ≈0 para ruido sin periodicidad).
  */
+/**
+ * Potencia espectral normalizada en UNA frecuencia concreta (evaluación de un
+ * solo bin por recurrencia seno/coseno, estilo Goertzel).
+ *
+ * `bandLimitedDominantFreq` conserva a propósito su propio bucle fusionado en vez
+ * de llamar aquí por cada paso: barre hasta 2048 frecuencias por ventana dentro
+ * del hot path a 30 fps, y una llamada de función por paso sería una regresión de
+ * coste medible. Esta función es para evaluar POCAS frecuencias conocidas
+ * (p. ej. una fundamental y sus armónicos).
+ */
+export function powerAtFrequency(signal: number[], fsHz: number, freqHz: number): number {
+  const n = signal.length;
+  if (n < 8 || fsHz <= 0 || freqHz <= 0 || freqHz >= fsHz / 2) return 0;
+  const w = (TWO_PI_DSP * freqHz) / fsHz;
+  const cosW = Math.cos(w);
+  const sinW = Math.sin(w);
+  let cw = 1;
+  let sw = 0;
+  let re = 0;
+  let im = 0;
+  for (let i = 0; i < n; i++) {
+    re += signal[i] * cw;
+    im += signal[i] * sw;
+    const nextCw = cw * cosW - sw * sinW;
+    sw = sw * cosW + cw * sinW;
+    cw = nextCw;
+  }
+  return (re * re + im * im) / (n * n);
+}
+
 export function bandLimitedDominantFreq(
   series: number[],
   fsHz: number,
