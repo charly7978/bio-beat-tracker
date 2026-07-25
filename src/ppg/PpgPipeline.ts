@@ -110,6 +110,8 @@ const EMPTY: PipelineResult = {
 export class PpgPipeline {
   private readonly config: PipelineConfig;
   private samples: RoiSample[] = [];
+  /** Índice de la primera muestra viva (evita shift() por cuadro). */
+  private head = 0;
   private sinceAnalysis = 0;
   private lastResult: PipelineResult = EMPTY;
   private cachedFilter: { fsHz: number; filter: FilterSections } | null = null;
@@ -120,41 +122,79 @@ export class PpgPipeline {
 
   reset(): void {
     this.samples = [];
+    this.head = 0;
     this.sinceAnalysis = 0;
     this.lastResult = EMPTY;
     this.cachedFilter = null;
   }
 
-  /** Alimenta una muestra del ROI. Devuelve el resultado vigente. */
-  push(sample: RoiSample): PipelineResult {
+  /**
+   * HOT PATH — se llama una vez por cuadro de cámara. Solo acumula: O(1).
+   *
+   * Deliberadamente NO analiza. El análisis (remuestreo + filtfilt + Elgendi)
+   * cuesta ~0,7 ms medidos, un 2 % del presupuesto de cuadro a 30 fps en
+   * escritorio y varias veces más en un teléfono de gama baja. Ejecutarlo aquí
+   * metería un pico periódico en el camino que alimenta la cámara, que es justo
+   * lo que la guía del repositorio prohíbe («La cámara y el hot path no deben
+   * quedar bloqueados», docs/PR_AI_CLASSIFICATION_CHECKLIST.md).
+   *
+   * Quien integra decide CUÁNDO y DÓNDE analizar —worker, idle callback, tarea
+   * de fondo— consultando `isAnalysisDue()` y llamando a `analyze()`. Separar la
+   * política de programación del cálculo también hace el pipeline determinista
+   * en tests, sin depender de temporizadores.
+   */
+  push(sample: RoiSample): void {
     this.samples.push(sample);
+    this.sinceAnalysis++;
 
     // Recorte por TIEMPO, no por número de muestras: si la cámara pierde
     // cuadros, un recorte por conteo dejaría una ventana temporalmente más
     // larga de lo previsto y sesgaría las ventanas de Elgendi.
+    //
+    // Se avanza un ÍNDICE de cabeza en vez de usar `shift()`, que reindexa el
+    // array entero en cada cuadro. La compactación diferida mantiene el coste
+    // amortizado en O(1) sin dejar crecer la memoria.
     const cutoff = sample.timestampMs - this.config.windowSeconds * 1000;
-    while (this.samples.length > 0 && this.samples[0]!.timestampMs < cutoff) {
-      this.samples.shift();
+    while (this.head < this.samples.length && this.samples[this.head]!.timestampMs < cutoff) {
+      this.head++;
     }
+    if (this.head > 0 && this.head * 2 >= this.samples.length) {
+      this.samples = this.samples.slice(this.head);
+      this.head = 0;
+    }
+  }
 
-    this.sinceAnalysis++;
-    if (this.sinceAnalysis >= this.config.analyzeEverySamples) {
-      this.sinceAnalysis = 0;
-      this.lastResult = this.analyze();
-    }
+  /** ¿Hay muestras nuevas suficientes para que valga la pena reanalizar? */
+  isAnalysisDue(): boolean {
+    return this.sinceAnalysis >= this.config.analyzeEverySamples;
+  }
+
+  /** Último resultado calculado. No dispara cálculo. */
+  get result(): PipelineResult {
     return this.lastResult;
   }
 
-  private analyze(): PipelineResult {
-    const n = this.samples.length;
+  /**
+   * CAMINO DE VENTANA — coste real, a ejecutar fuera del hot path.
+   * Es público a propósito: la capa de integración controla su cadencia.
+   */
+  analyze(): PipelineResult {
+    this.sinceAnalysis = 0;
+    this.lastResult = this.computeWindow();
+    return this.lastResult;
+  }
+
+  private computeWindow(): PipelineResult {
+    const window = this.head > 0 ? this.samples.slice(this.head) : this.samples;
+    const n = window.length;
     if (n < 32) return { ...EMPTY, reason: 'WAITING_SAMPLES' };
 
-    const timestamps = this.samples.map((s) => s.timestampMs);
+    const timestamps = window.map((s) => s.timestampMs);
     const fsHz = effectiveSampleRate(timestamps);
     if (fsHz < 10) return { ...EMPTY, reason: 'FRAME_RATE_TOO_LOW', fsHz };
 
     // ROJO como fuente: es el canal con señal utilizable en contacto con flash.
-    const red = this.samples.map((s) => s.red);
+    const red = window.map((s) => s.red);
 
     // PERFUSIÓN sobre la señal CRUDA (AC/DC): magnitud física real. Debe
     // calcularse antes del filtrado, porque el pasa-altos elimina justamente el

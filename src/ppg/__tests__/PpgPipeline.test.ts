@@ -21,6 +21,20 @@ function makeRng(seed: number) {
 }
 
 /**
+ * Alimenta el pipeline como lo haría la cámara y analiza cuando toca.
+ *
+ * `push()` es el hot path y NO analiza; el análisis se dispara explícitamente,
+ * igual que hará la capa de integración fuera del camino de cuadro.
+ */
+function drive(p: PpgPipeline, samples: RoiSample[]) {
+  for (const s of samples) {
+    p.push(s);
+    if (p.isAnalysisDue()) p.analyze();
+  }
+  return p.result;
+}
+
+/**
  * Simula el ROI de un dedo real: DC alto (linterna a través del tejido) con una
  * componente pulsátil pequeña — perfusión ~1 %, el valor típico de piel humana.
  */
@@ -28,14 +42,13 @@ function feedFinger(p: PpgPipeline, seconds: number, bpm: number, piPercent = 1.
   const hz = bpm / 60;
   const dc = 140;
   const ac = (dc * piPercent) / 100;
-  let last = { measuring: false } as ReturnType<PpgPipeline['push']>;
   const n = Math.round(seconds * FS);
+  const out: RoiSample[] = [];
   for (let i = 0; i < n; i++) {
     const t = i / FS;
-    const v = dc + ac * ppgWave(t * hz);
-    last = p.push(sample(v, t));
+    out.push(sample(dc + ac * ppgWave(t * hz), t));
   }
-  return last;
+  return drive(p, out);
 }
 
 function sample(red: number, tSec: number): RoiSample {
@@ -65,10 +78,9 @@ describe('PpgPipeline — cámara → señal → latidos', () => {
     it('PARED bajo linterna (DC alto, sin pulsatilidad) NO mide', () => {
       const p = new PpgPipeline();
       const rnd = makeRng(7);
-      let last = p.push(sample(200, 0));
-      for (let i = 1; i < 12 * FS; i++) {
-        last = p.push(sample(200 + rnd() * 0.2, i / FS));
-      }
+      const xs = [sample(200, 0)];
+      for (let i = 1; i < 12 * FS; i++) xs.push(sample(200 + rnd() * 0.2, i / FS));
+      const last = drive(p, xs);
       expect(last.measuring).toBe(false);
       expect(last.reason).toBe('NO_PERFUSION');
     });
@@ -76,28 +88,29 @@ describe('PpgPipeline — cámara → señal → latidos', () => {
     it('RUIDO fuerte (perfusión alta pero ritmo inconsistente) NO mide', () => {
       const p = new PpgPipeline();
       const rnd = makeRng(4242);
-      let last = p.push(sample(140, 0));
-      for (let i = 1; i < 14 * FS; i++) {
-        last = p.push(sample(140 + (rnd() - 0.5) * 30, i / FS));
-      }
+      const xs = [sample(140, 0)];
+      for (let i = 1; i < 14 * FS; i++) xs.push(sample(140 + (rnd() - 0.5) * 30, i / FS));
+      const last = drive(p, xs);
       expect(last.measuring).toBe(false);
       expect(['RHYTHM_NOT_CONSISTENT', 'NO_RHYTHM', 'WAITING_BEATS']).toContain(last.reason);
     });
 
     it('OSCILACIÓN NO CARDÍACA (0,25 Hz = 15 bpm) NO mide', () => {
       const p = new PpgPipeline();
-      let last = p.push(sample(140, 0));
+      const xs = [sample(140, 0)];
       for (let i = 1; i < 14 * FS; i++) {
         const t = i / FS;
-        last = p.push(sample(140 + 3 * Math.sin(2 * Math.PI * 0.25 * t), t));
+        xs.push(sample(140 + 3 * Math.sin(2 * Math.PI * 0.25 * t), t));
       }
+      const last = drive(p, xs);
       expect(last.measuring).toBe(false);
     });
 
     it('ESCENA OSCURA (sin señal) NO mide', () => {
       const p = new PpgPipeline();
-      let last = p.push(sample(0, 0));
-      for (let i = 1; i < 12 * FS; i++) last = p.push(sample(0, i / FS));
+      const xs = [sample(0, 0)];
+      for (let i = 1; i < 12 * FS; i++) xs.push(sample(0, i / FS));
+      const last = drive(p, xs);
       expect(last.measuring).toBe(false);
     });
   });
@@ -108,10 +121,9 @@ describe('PpgPipeline — cámara → señal → latidos', () => {
     expect(measuring.measuring).toBe(true);
 
     // Se retira el dedo: DC plano, sin pulso. La ventana se vacía por tiempo.
-    let last = measuring;
-    for (let i = 0; i < 12 * FS; i++) {
-      last = p.push(sample(210, 12 + i / FS));
-    }
+    const xs: RoiSample[] = [];
+    for (let i = 0; i < 12 * FS; i++) xs.push(sample(210, 12 + i / FS));
+    const last = drive(p, xs);
     expect(last.measuring).toBe(false);
     expect(last.bpm).toBe(0);
   });
@@ -123,12 +135,13 @@ describe('PpgPipeline — cámara → señal → latidos', () => {
     const dc = 140;
     const ac = dc * 0.01;
     let t = 0;
-    let last = p.push(sample(dc, 0));
+    const xs = [sample(dc, 0)];
     while (t < 14) {
       // Intervalo irregular 25–40 ms, con caídas ocasionales de cuadro.
       t += (rnd() < 0.06 ? 70 : 25 + rnd() * 15) / 1000;
-      last = p.push(sample(dc + ac * ppgWave(t * hz), t));
+      xs.push(sample(dc + ac * ppgWave(t * hz), t));
     }
+    const last = drive(p, xs);
     expect(last.measuring).toBe(true);
     expect(Math.abs(last.bpm - 72)).toBeLessThan(8);
   });
@@ -137,9 +150,9 @@ describe('PpgPipeline — cámara → señal → latidos', () => {
     const p = new PpgPipeline();
     feedFinger(p, 12, 72);
     p.reset();
-    const r = p.push(sample(140, 0));
-    expect(r.measuring).toBe(false);
-    expect(r.bpm).toBe(0);
+    p.push(sample(140, 0));
+    expect(p.result.measuring).toBe(false);
+    expect(p.result.bpm).toBe(0);
   });
 });
 
