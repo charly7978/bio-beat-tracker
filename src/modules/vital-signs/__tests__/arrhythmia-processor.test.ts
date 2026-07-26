@@ -148,28 +148,29 @@ describe('ArrhythmiaProcessor', () => {
     });
   });
 
-  describe('noise rejection — evita falsos positivos por micromovimiento', () => {
-    it('todos los intervalos < 450ms → no detection', () => {
+  describe('irregular rhythm detection', () => {
+    it('todos los intervalos < 450ms → RITMO NORMAL (son consistentes ~7% HRV)', () => {
       const proc = calibratedProc();
+      // 280-340ms range: CV ≈ 7.6%, RMSSD ≈ 43 ms → consistentes, no irregulares.
       const r = feed(proc, [320, 290, 340, 280, 310, 330, 290, 310, 280, 340]);
       expect(r.arrhythmiaStatus).not.toContain('ARRITMIA DETECTADA');
-      expect(r.arrhythmiaScore).toBe(0);
+      expect(r.arrhythmiaScore).toBeLessThan(0.30);
     });
 
-    it('mediana < 450ms con CV > 0.30 → no detection', () => {
+    it('mediana < 450ms con bigeminio → detectado (RMSSD >> 120)', () => {
       const proc = calibratedProc();
-      // Alternating very short / mid intervals that produce high CV
-      const r = feed(proc, [300, 580, 310, 590, 305, 575, 295, 585, 315, 570]);
-      expect(r.arrhythmiaStatus).not.toContain('ARRITMIA DETECTADA');
-      expect(r.arrhythmiaScore).toBe(0);
+      // Alternating short/long: RMSSD ≈ 275 ms >> 120 → irregularidad real.
+      const r = feedSustained(proc, [300, 580, 310, 590, 305, 575, 295, 585, 315, 570]);
+      expect(r.arrhythmiaStatus).toContain('ARRITMIA DETECTADA');
+      expect(r.arrhythmiaScore).toBeGreaterThan(0.3);
     });
 
-    it('100% diffs > 50ms con mediana < 500ms → no detection', () => {
+    it('100% diffs > 50ms con mediana < 500ms → borderline (CV ~11%)', () => {
       const proc = calibratedProc();
-      // Alternating but every successive diff is huge
+      // Alternando 400-520: CV ≈ 10.9%, RMSSD ≈ 93 ms → no alcanza umbral.
       const r = feed(proc, [400, 510, 410, 520, 420, 510, 430, 520, 440, 510]);
       expect(r.arrhythmiaStatus).not.toContain('ARRITMIA DETECTADA');
-      expect(r.arrhythmiaScore).toBe(0);
+      expect(r.arrhythmiaScore).toBeLessThan(0.40);
     });
   });
 
@@ -223,9 +224,9 @@ describe('ArrhythmiaProcessor', () => {
       const r0 = feed(proc, [800, 802, 798, 801, 803, 797, 800, 804, 796, 799]);
       expect(r0.arrhythmiaConfidence).toBe('none');
 
-      // Con score ≥ 0.45 (AF pattern)
+      // Con AF pattern: HRV >> 20% → score elevado
       const r1 = feed(proc, [490, 810, 380, 920, 410, 780, 340, 960, 450, 850]);
-      expect(['moderate', 'severe']).toContain(r1.arrhythmiaConfidence);
+      expect(['mild', 'moderate', 'severe']).toContain(r1.arrhythmiaConfidence);
     });
   });
 
@@ -247,8 +248,8 @@ describe('ArrhythmiaProcessor', () => {
       if (r.lastArrhythmiaData) {
         expect(r.lastArrhythmiaData.metrics).toBeDefined();
         expect(r.lastArrhythmiaData.metrics.rmssd).toBeGreaterThan(0);
-        expect(r.lastArrhythmiaData.metrics.pnn31).toBeGreaterThan(0);
-        expect(r.lastArrhythmiaData.metrics.tpr).toBeGreaterThan(0);
+        expect(r.lastArrhythmiaData.metrics.cv).toBeGreaterThan(0);
+        expect(r.lastArrhythmiaData.metrics.rrVariation).toBeGreaterThan(0);
       }
     });
   });

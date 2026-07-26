@@ -1,6 +1,6 @@
 import { clamp } from '../../utils/math';
 import { createLogger } from '../../utils/logger';
-import { getMonotonicNow, computeRrHrv } from '../../utils/physio';
+import { getMonotonicNow } from '../../utils/physio';
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
 
 const log = createLogger('ArrhythmiaProcessor');
@@ -23,7 +23,6 @@ export interface ArrhythmiaMetrics {
   rrVariation: number;
   outlierCount: number;
   abruptDiffCount: number;
-  /** Latidos prematuros (PVC/PAC) en la ventana — pausa compensatoria. */
   prematureBeatCount: number;
 }
 
@@ -42,21 +41,6 @@ export interface ArrhythmiaResult {
   } | null;
 }
 
-/**
- * ArrhythmiaProcessor — RR irregularity analysis for PPG-based AF detection.
- *
- * Implements a weighted-scoring system over a multi-feature set informed by
- * state-of-the-art research (Buś 2022/2023, FibriCheck 2025, PMC reviews).
- *
- * Features:
- *   RMSSD, CV, pNN50, pNN31 (best absolute threshold), pNN3.25% (best relative),
- *   Turning Points Ratio (TPR), Shannon Entropy, Sample Entropy,
- *   abrupt-diff count, outlier fraction, irregular-sequence heuristics.
- *
- * Decision: weighted score → confidence level (none/mild/moderate/severe).
- * Callback fires on binary change (detected / not detected) using a
- * confidence ≥ moderate as the trigger threshold.
- */
 export class ArrhythmiaProcessor {
   private readonly A = VITAL_THRESHOLDS.ARRHYTHMIA;
   private readonly RR_WINDOW_SIZE = this.A.RR_WINDOW_SIZE;
@@ -66,7 +50,6 @@ export class ArrhythmiaProcessor {
   private readonly MIN_VALID_RR_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MIN_MS;
   private readonly MAX_VALID_RR_MS = VITAL_THRESHOLDS.HR.PHYSIOLOGICAL_RR_MAX_MS;
 
-  // State
   private rrIntervals: number[] = [];
   private lastPeakTime: number | null = null;
   private isLearningPhase = true;
@@ -74,18 +57,9 @@ export class ArrhythmiaProcessor {
   private arrhythmiaCount = 0;
   private lastArrhythmiaTime = 0;
   private measurementStartTime = getMonotonicNow();
-  /** Warm-up (8–18 s): spreads |RR−mediana| del usuario para aprender el deadband. */
-  private warmupSpread: number[] = [];
-  /** Deadband anti-jitter personalizado (ms), fijado al terminar el warm-up. */
-  private learnedDeadbandMs = this.A.RR_JITTER_FLOOR_MS;
-  private baselineLearned = false;
-
-  // Current metrics & cached score (updated atomically after each detection)
   private metrics: ArrhythmiaMetrics = this.emptyMetrics();
   private lastScore = 0;
-  /** Tipo dominante de la última detección, para enriquecer el estado de UI. */
   private lastDetectionKind: '' | 'RITMO IRREGULAR' | 'LATIDOS PREMATUROS' = '';
-  /** Confirmación temporal (integrador con fugas) — evidencia sostenida de arritmia. */
   private confirmAccumMs = 0;
   private lastEvalTime = 0;
 
@@ -95,19 +69,14 @@ export class ArrhythmiaProcessor {
     this.onArrhythmiaDetection = callback;
   }
 
-  /**
-   * Process new RR-interval data and return current arrhythmia assessment.
-   */
   public processRRData(rrData?: RRData): ArrhythmiaResult {
     const now = typeof rrData?.timestampNow === 'number' && Number.isFinite(rrData.timestampNow)
       ? rrData.timestampNow
       : getMonotonicNow();
 
-    // ── FASES DE ARRANQUE ──
-    // elapsed desde el inicio de la medición → fase QUIET / WARMUP / DETECT.
     const sinceStart = now - this.measurementStartTime;
-    const inQuiet = sinceStart < this.QUIET_PERIOD_MS;            // 0–8 s: nada
-    const inWarmup = !inQuiet && sinceStart < this.LEARNING_PERIOD_MS; // 8–18 s: aprende
+    const inQuiet = sinceStart < this.QUIET_PERIOD_MS;
+    const inWarmup = !inQuiet && sinceStart < this.LEARNING_PERIOD_MS;
     this.isLearningPhase = sinceStart < this.LEARNING_PERIOD_MS;
 
     if (rrData?.intervals && rrData.intervals.length > 0) {
@@ -120,20 +89,8 @@ export class ArrhythmiaProcessor {
       const hasFreshRhythm = elapsed <= 2500;
 
       if (inQuiet) {
-        // Fase QUIET (0–8 s): NO se hace nada con las arritmias (arranque inestable).
-      } else if (inWarmup) {
-        // Fase WARM-UP (8–18 s): el sistema ya está estable → se aprende el patrón
-        // rítmico normal del usuario (spread de RR) SIN detectar.
-        if (hasFreshRhythm) this.collectWarmupSpread();
-      } else {
-        // Fase DETECT (≥18 s): al entrar, se fija el deadband personalizado.
-        if (!this.baselineLearned) this.learnRhythmBaseline();
-        if (hasFreshRhythm && this.rrIntervals.length >= this.RR_WINDOW_SIZE) {
-          this.detectArrhythmia(now);
-        } else if (!hasFreshRhythm) {
-          this.arrhythmiaDetected = false;
-          this.confirmAccumMs = 0;
-        }
+      } else if (!inWarmup && hasFreshRhythm && this.rrIntervals.length >= this.RR_WINDOW_SIZE) {
+        this.detectArrhythmia(now);
       }
     } else {
       this.lastPeakTime = null;
@@ -158,139 +115,77 @@ export class ArrhythmiaProcessor {
     };
   }
 
-  // ──────────────────────────────────────────────
-  // Feature computation
-  // ──────────────────────────────────────────────
-
-  /**
-   * Core detection: compute all features, run weighted scoring, update state.
-   */
   private detectArrhythmia(now: number): void {
-    if (this.rrIntervals.length < this.RR_WINDOW_SIZE) {
+    const valid = this.rrIntervals.slice(-this.RR_WINDOW_SIZE)
+      .filter(r => r >= this.MIN_VALID_RR_MS && r <= this.MAX_VALID_RR_MS);
+
+    if (valid.length < this.A.MIN_INTERVALS) {
       this.arrhythmiaDetected = false;
       return;
     }
 
-    const recent = this.rrIntervals.slice(-this.RR_WINDOW_SIZE);
-    const validRaw = recent.filter(r => r >= this.MIN_VALID_RR_MS && r <= this.MAX_VALID_RR_MS);
-    if (validRaw.length < this.A.MIN_INTERVALS) {
-      this.arrhythmiaDetected = false;
-      return;
-    }
-
-    const sorted = [...validRaw].sort((a, b) => a - b);
+    const sorted = [...valid].sort((a, b) => a - b);
     const n2 = sorted.length;
     const median = n2 % 2 === 0
       ? (sorted[n2 / 2 - 1] + sorted[n2 / 2]) / 2
       : sorted[Math.floor(n2 / 2)] ?? 0;
+
     if (median <= 0) {
       this.arrhythmiaDetected = false;
       return;
     }
 
-    // --- Reject noise / micro-movement patterns before computing features ---
-    // Noise produces intervals too short and too erratic for real cardiac activity.
-    if (this.rejectNoisePattern(validRaw, median)) {
-      this.arrhythmiaDetected = false;
-      return;
-    }
-
-    // --- DEADBAND anti-jitter personalizado (aprendido en el warm-up) ---
-    // Colapsa a la mediana todo RR cuya desviación sea menor que el piso → el
-    // jitter normal de cámara (que satura pNN31/pNN325 → causa raíz de FP)
-    // desaparece; las desviaciones grandes (arritmia real >100 ms) sobreviven.
-    // Las features se computan sobre esta señal "limpia".
-    const valid = this.applyDeadband(validRaw, median);
-
     const n = valid.length;
+    const mean = valid.reduce((a, b) => a + b, 0) / n;
+    let sqSum = 0;
+    for (const r of valid) sqSum += (r - mean) ** 2;
+    const std = Math.sqrt(sqSum / (n - 1));
+    const cv = std / mean;
 
-    // --- 1. HRV núcleo (RMSSD, CV, pNN50, SDNN) — compartido con display ---
-    const hrv = computeRrHrv(valid);
-    const rmssd = hrv.rmssd;
-    const std = hrv.sdnn;
-    const cv = hrv.cv;
-    const pnn50 = hrv.pnn50;
-
-    // --- 2. pNN31 (mejor umbral absoluto) y pNN3.25% (mejor relativo) ---
-    let c31 = 0, c325 = 0;
-    for (let i = 1; i < n; i++) {
-      const absd = Math.abs(valid[i] - valid[i - 1]);
-      if (absd > 31) c31++;
-      if (absd > valid[i - 1] * 0.0325) c325++;
-    }
-    const denom = n - 1;
-    const pnn31 = denom > 0 ? c31 / denom : 0;
-    const pnn325 = denom > 0 ? c325 / denom : 0;
-
-    // --- 3. Turning Points Ratio (TPR) ---
-    // Counts peaks & troughs; random series → ~2/3
-    let turningPoints = 0;
-    for (let i = 1; i < n - 1; i++) {
-      if ((valid[i] > valid[i - 1] && valid[i] > valid[i + 1]) ||
-          (valid[i] < valid[i - 1] && valid[i] < valid[i + 1])) {
-        turningPoints++;
+    let rmssd = 0;
+    let pnn50 = 0;
+    if (n > 1) {
+      let sqDiffSum = 0;
+      let c50 = 0;
+      for (let i = 1; i < n; i++) {
+        const d = valid[i] - valid[i - 1];
+        sqDiffSum += d * d;
+        if (Math.abs(d) > 50) c50++;
       }
-    }
-    const tpr = n > 2 ? turningPoints / (n - 2) : 0;
-
-    // --- 4. Shannon Entropy (histogram 25 ms bins) ---
-    const bins: Record<number, number> = {};
-    for (const r of valid) {
-      const k = Math.floor(r / 25);
-      bins[k] = (bins[k] ?? 0) + 1;
-    }
-    let shannon = 0;
-    for (const c of Object.values(bins)) {
-      const p = c / n;
-      shannon -= p * Math.log2(p);
+      rmssd = Math.sqrt(sqDiffSum / (n - 1));
+      pnn50 = c50 / (n - 1);
     }
 
-    // --- 5. Sample Entropy (m=2, r=0.2*σ) ---
-    const sampleEntropy = n >= 6 ? this.computeSampleEntropy(valid, 2, std * 0.2) : 0;
-
-    // --- 6. Outlier count ---
-    const outlierCount = valid.filter(r => Math.abs(r - median) / Math.max(1, median) > this.A.OUTLIER_RATIO).length;
-
-    // --- 7. Abrupt diff count ---
-    let abruptDiffCount = 0;
-    for (let i = 1; i < n; i++) {
-      const d = Math.abs(valid[i] - valid[i - 1]);
-      if (d > Math.max(100, median * this.A.ABRUPT_RR_FRAC)) {
-        abruptDiffCount++;
-      }
-    }
-
-    // --- 8. RR variation (last vs median) ---
     const rrVariation = Math.abs(valid[n - 1] - median) / Math.max(1, median);
 
-    // --- 9. Latidos prematuros (PVC/PAC): acoplamiento corto + pausa compensatoria ---
-    const prematureBeatCount = this.countPrematureBeats(valid, median);
+    let prematureBeatCount = 0;
+    for (let i = 0; i < n - 1; i++) {
+      const coupling = valid[i];
+      const pause = valid[i + 1];
+      if (coupling < median * 0.8 && pause > median * 1.2) {
+        const pairSum = coupling + pause;
+        if (Math.abs(pairSum - 2 * median) / (2 * median) <= 0.25) {
+          prematureBeatCount++;
+          i++;
+        }
+      }
+    }
 
     this.metrics = {
-      rmssd, cv, pnn50, pnn31, pnn325, tpr,
-      shannonEntropy: shannon,
-      sampleEntropy,
-      rrVariation,
-      outlierCount,
-      abruptDiffCount,
+      rmssd, cv, pnn50,
+      pnn31: 0, pnn325: 0, tpr: 0,
+      shannonEntropy: 0, sampleEntropy: 0,
+      rrVariation, outlierCount: 0, abruptDiffCount: 0,
       prematureBeatCount,
     };
 
-    // ── Evidencia cruda por ventana: irregularidad global (FA) por score
-    // ponderado O ectopia frecuente (latidos prematuros). ──
-    this.lastScore = this.computeScore();
-    const irregularByScore = this.lastScore >= this.A.DETECTION_THRESHOLD;
-    const ectopyFrequent = prematureBeatCount >= this.A.ECTOPY_MIN_FLAG;
-    const rawDetected = irregularByScore || ectopyFrequent;
+    const hrvPercent = cv * 100;
+    const isIrregular = hrvPercent > 20 || rmssd > 120;
+    const rawDetected = isIrregular || prematureBeatCount >= 2;
 
-    // ── Confirmación temporal (integrador con fugas) ──
-    // La arritmia real es SOSTENIDA; el jitter/ruido transitorio no. Se acumula
-    // tiempo mientras hay evidencia y se drena al doble cuando no la hay; sólo se
-    // confirma tras ARRHYTHMIA_CONFIRM_MS de evidencia neta. Esto elimina los
-    // falsos positivos por un latido mal detectado o variación pasajera.
-    // dt acotado a [0, 1000] ms: robusto ante timestamps fuera de orden o saltos de reloj.
     const dt = this.lastEvalTime > 0 ? Math.min(Math.max(0, now - this.lastEvalTime), 1000) : 0;
     this.lastEvalTime = now;
+
     if (rawDetected) {
       this.confirmAccumMs = Math.min(this.confirmAccumMs + dt, this.A.ARRHYTHMIA_CONFIRM_MS * 1.5);
     } else {
@@ -299,278 +194,35 @@ export class ArrhythmiaProcessor {
     const confirmed = this.confirmAccumMs >= this.A.ARRHYTHMIA_CONFIRM_MS;
 
     this.lastDetectionKind = confirmed
-      ? irregularByScore
-        ? 'RITMO IRREGULAR'
-        : 'LATIDOS PREMATUROS'
+      ? prematureBeatCount >= 2 ? 'LATIDOS PREMATUROS' : 'RITMO IRREGULAR'
       : '';
+
+    this.lastScore = clamp(isIrregular ? 0.5 + hrvPercent / 100 : prematureBeatCount * 0.3, 0, 1);
 
     if (confirmed !== this.arrhythmiaDetected) {
       if (this.onArrhythmiaDetection) {
         this.onArrhythmiaDetection(confirmed);
-        log.info(`Estado → ${confirmed ? 'ARRITMIA' : 'NORMAL'} score=${this.lastScore.toFixed(3)} confirmMs=${this.confirmAccumMs.toFixed(0)}`);
+        log.info(`Estado → ${confirmed ? 'ARRITMIA' : 'NORMAL'} score=${this.lastScore.toFixed(3)}`);
       }
     }
 
     if (confirmed && now - this.lastArrhythmiaTime >= this.MIN_EVENT_INTERVAL_MS) {
       this.arrhythmiaCount++;
       this.lastArrhythmiaTime = now;
-      log.warn(
-        `#${this.arrhythmiaCount} score=${this.lastScore.toFixed(3)} ` +
-        `rmssd=${rmssd.toFixed(1)} cv=${cv.toFixed(3)} ` +
-        `pnn50=${pnn50.toFixed(2)} pnn31=${pnn31.toFixed(2)} pnn325=${pnn325.toFixed(2)} ` +
-        `tpr=${tpr.toFixed(3)} shannon=${shannon.toFixed(2)} sampEn=${sampleEntropy.toFixed(3)} ` +
-        `outlier=${outlierCount} abrupt=${abruptDiffCount} rrv=${rrVariation.toFixed(3)} ` +
-        `premature=${prematureBeatCount} [${this.lastDetectionKind}]`
-      );
+      log.warn(`#${this.arrhythmiaCount} hrv=${hrvPercent.toFixed(1)}% rmssd=${rmssd.toFixed(0)} premature=${prematureBeatCount} [${this.lastDetectionKind}]`);
     }
 
     this.arrhythmiaDetected = confirmed;
   }
 
-  /**
-   * Weighted arrhythmia score in [0, 1].
-   * Each feature contributes a sub-score 0-1 multiplied by its weight.
-   */
-  private computeScore(): number {
-    const A = this.A;
-    const m = this.metrics;
-
-    // Sub-scores are clamped to [0, 1] via piecewise linear functions:
-    //   score = clamp((value - lo) / (hi - lo), 0, 1)
-    // where lo = "normal" cutoff and hi = "strong AF" cutoff.
-
-    const safeRange = (val: number, lo: number, hi: number): number =>
-      clamp((val - lo) / (hi > lo ? hi - lo : 1), 0, 1);
-
-    const sRHRMSSD = safeRange(m.rmssd, A.RMSSD_LO, A.RMSSD_HI);
-    const sCV      = safeRange(m.cv, A.CV_LO, A.CV_HI);
-    const spNN31   = safeRange(m.pnn31, A.PNN31_LO, A.PNN31_HI);
-    const spNN325  = safeRange(m.pnn325, A.PNN325_LO, A.PNN325_HI);
-    const spNN50   = safeRange(m.pnn50, A.PNN50_LO, A.PNN50_HI);
-    const sTPR     = 1 - Math.abs(m.tpr - A.TPR_TARGET) / A.TPR_TARGET;
-    const sShannon = safeRange(m.shannonEntropy, A.SHANNON_LO, A.SHANNON_HI);
-    const sSampEn  = safeRange(m.sampleEntropy, A.SAMPEN_LO, A.SAMPEN_HI);
-    const sOutlier = safeRange(m.outlierCount, A.OUTLIER_LO, A.OUTLIER_HI);
-    const sAbrupt  = safeRange(m.abruptDiffCount, A.ABRUPT_LO, A.ABRUPT_HI);
-    const sRRVar   = safeRange(m.rrVariation, A.RRVAR_LO, A.RRVAR_HI);
-    const sEctopy  = safeRange(m.prematureBeatCount, 0, A.ECTOPY_HI);
-
-    const totalWeight = A.W_RMSSD + A.W_CV + A.W_PNN31 + A.W_PNN325 + A.W_PNN50 +
-                        A.W_TPR + A.W_SHANNON + A.W_SAMPEN + A.W_OUTLIER + A.W_ABRUPT +
-                        A.W_RRVAR + A.W_ECTOPY;
-
-    const weightedSum =
-      sRHRMSSD * A.W_RMSSD +
-      sCV      * A.W_CV +
-      spNN31   * A.W_PNN31 +
-      spNN325  * A.W_PNN325 +
-      spNN50   * A.W_PNN50 +
-      sTPR     * A.W_TPR +
-      sShannon * A.W_SHANNON +
-      sSampEn  * A.W_SAMPEN +
-      sOutlier * A.W_OUTLIER +
-      sAbrupt  * A.W_ABRUPT +
-      sRRVar   * A.W_RRVAR +
-      sEctopy  * A.W_ECTOPY;
-
-    return totalWeight > 0 ? weightedSum / totalWeight : 0;
-  }
-
-  /**
-   * Convert score to a 4-level confidence string.
-   */
   private computeConfidence(): ArrhythmiaConfidence {
     const s = this.lastScore;
     if (this.isLearningPhase) return 'none';
-    if (s >= this.A.SEVERE_THRESHOLD) return 'severe';
-    if (s >= this.A.MODERATE_THRESHOLD) return 'moderate';
-    if (s >= this.A.MILD_THRESHOLD) return 'mild';
+    if (s >= 0.7) return 'severe';
+    if (s >= 0.4) return 'moderate';
+    if (s >= 0.2) return 'mild';
     return 'none';
   }
-
-  // ──────────────────────────────────────────────
-  // Sample Entropy (m=2, r = 0.2×SD)
-  // ──────────────────────────────────────────────
-
-  /**
-   * Proper Sample Entropy via template matching (Richman & Moorman 2000).
-   * Counts模板 matches of length m and m+1 within tolerance r.
-   */
-  private computeSampleEntropy(data: number[], m: number, r: number): number {
-    const N = data.length;
-    if (N < m + 2) return 0;
-
-    function countMatches(template: number[], offset: number): number {
-      let count = 0;
-      for (let i = offset; i <= N - template.length; i++) {
-        let match = true;
-        for (let j = 0; j < template.length; j++) {
-          if (Math.abs(data[i + j] - template[j]) > r) {
-            match = false;
-            break;
-          }
-        }
-        if (match) count++;
-      }
-      return count;
-    }
-
-    let A = 0; // matches of length m+1
-    let B = 0; // matches of length m
-
-    for (let i = 0; i < N - m; i++) {
-      const templateM = data.slice(i, i + m);
-      B += countMatches(templateM, i + 1);
-      const templateM1 = data.slice(i, i + m + 1);
-      A += countMatches(templateM1, i + 1);
-    }
-
-    if (B === 0) return 0;
-    return -Math.log(A / B);
-  }
-
-  // ──────────────────────────────────────────────
-  // Latidos prematuros (PVC / PAC)
-  // ──────────────────────────────────────────────
-
-  /**
-   * Cuenta latidos prematuros (extrasístoles) por su firma fisiológica:
-   * un acoplamiento CORTO (RR ≤ PREMATURE_SHORT_FRAC × basal, ≥20 % adelantado)
-   * seguido de una PAUSA compensatoria (RR siguiente ≥ PREMATURE_COMP_MIN × basal),
-   * cuya suma se aproxima a 2× el RR basal (PVC: pausa completa → suma ≈ 2× basal;
-   * PAC: incompleta → suma algo menor, aún dentro de PREMATURE_PAIR_TOL).
-   *
-   * La restricción de la suma ≈ 2× basal lo hace ROBUSTO al ruido: dos RR cortos
-   * aleatorios rara vez forman una pareja corto+pausa que sume ~2× el basal.
-   */
-  private countPrematureBeats(intervals: number[], baseline: number): number {
-    if (baseline <= 0 || intervals.length < 3) return 0;
-    const A = this.A;
-    const shortMax = baseline * A.PREMATURE_SHORT_FRAC;
-    const compMin = baseline * A.PREMATURE_COMP_MIN;
-    const pairTarget = 2 * baseline;
-    let count = 0;
-    for (let i = 0; i < intervals.length - 1; i++) {
-      const coupling = intervals[i];
-      const pause = intervals[i + 1];
-      if (coupling >= shortMax) continue;          // no adelantado
-      if (pause <= compMin) continue;              // sin pausa compensatoria
-      const pairSum = coupling + pause;
-      if (Math.abs(pairSum - pairTarget) / pairTarget <= A.PREMATURE_PAIR_TOL) {
-        count++;
-        i++; // la pausa pertenece a esta extrasístole; no la reutilices como acoplamiento
-      }
-    }
-    return count;
-  }
-
-  // ──────────────────────────────────────────────
-  // Warm-up: aprendizaje del patrón rítmico + deadband personalizado
-  // ──────────────────────────────────────────────
-
-  /**
-   * Durante el warm-up (8–18 s) acumula el spread |RR−mediana| de la ventana
-   * actual para aprender la variabilidad NORMAL del usuario (jitter de cámara +
-   * arritmia sinusal respiratoria fisiológica). Acotado para no crecer sin límite.
-   */
-  private collectWarmupSpread(): void {
-    const valid = this.rrIntervals.filter(
-      r => r >= this.MIN_VALID_RR_MS && r <= this.MAX_VALID_RR_MS,
-    );
-    if (valid.length < 4) return;
-    const sorted = [...valid].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
-    if (median <= 0) return;
-    for (const r of valid) this.warmupSpread.push(Math.abs(r - median));
-    if (this.warmupSpread.length > 400) {
-      this.warmupSpread = this.warmupSpread.slice(-400);
-    }
-  }
-
-  /**
-   * Al terminar el warm-up fija el piso del deadband PERSONALIZADO: p90 del spread
-   * aprendido × factor, acotado a [RR_JITTER_FLOOR_MS, LEARNED_FLOOR_MAX_MS]. Si no
-   * se juntó suficiente evidencia, usa el piso fijo. Resuelve el caso en que el
-   * jitter normal del usuario supera el piso fijo de 70 ms.
-   */
-  private learnRhythmBaseline(): void {
-    this.baselineLearned = true;
-    const A = this.A;
-    if (this.warmupSpread.length >= 12) {
-      const sorted = [...this.warmupSpread].sort((a, b) => a - b);
-      const p90 = sorted[Math.floor(sorted.length * 0.9)] ?? A.RR_JITTER_FLOOR_MS;
-      this.learnedDeadbandMs = clamp(
-        Math.max(A.RR_JITTER_FLOOR_MS, p90 * A.LEARNED_FLOOR_FACTOR),
-        A.RR_JITTER_FLOOR_MS,
-        A.LEARNED_FLOOR_MAX_MS,
-      );
-    } else {
-      this.learnedDeadbandMs = A.RR_JITTER_FLOOR_MS;
-    }
-    log.info(`Deadband aprendido = ${this.learnedDeadbandMs.toFixed(0)} ms (spread n=${this.warmupSpread.length})`);
-  }
-
-  /**
-   * Colapsa a la mediana todo RR cuya desviación sea menor que el deadband
-   * aprendido (jitter normal → 0); las desviaciones grandes (arritmia real)
-   * pasan intactas. Devuelve un array nuevo (no muta el original).
-   */
-  private applyDeadband(intervals: number[], median: number): number[] {
-    const db = this.learnedDeadbandMs;
-    if (db <= 0 || median <= 0) return intervals;
-    return intervals.map(r => (Math.abs(r - median) < db ? median : r));
-  }
-
-  // ──────────────────────────────────────────────
-  // Noise / motion-artifact rejection
-  // ──────────────────────────────────────────────
-
-  /**
-   * Returns true when the interval pattern is more consistent with
-   * noise / micro-movements than real cardiac activity.
-   *
-   * Noise heuristic — rejects three distinct patterns:
-   *   a) All intervals are too short for a human heartbeat (< 450 ms).
-   *   b) Median is very short AND variability is extreme (CV > 0.30).
-   *   c) > 90 % of successive diffs exceed 50 ms (saturation — even severe
-   *      AF has some consecutive beats with similar timing).
-   */
-  private rejectNoisePattern(intervals: number[], median: number): boolean {
-    if (intervals.length < 4) return false;
-
-    if (intervals.every(r => r < 450)) {
-      log.debug('Noise reject (a): all <450ms');
-      return true;
-    }
-
-    if (median < 450) {
-      let sum = 0;
-      for (const r of intervals) sum += r;
-      const mean = sum / intervals.length;
-      let sqSum = 0;
-      for (const r of intervals) sqSum += (r - mean) ** 2;
-      const cv = Math.sqrt(sqSum / intervals.length) / mean;
-      if (cv > 0.30) {
-        log.debug(`Noise reject (b): median=${median} cv=${cv.toFixed(3)}`);
-        return true;
-      }
-    }
-
-    let large = 0;
-    for (let i = 1; i < intervals.length; i++) {
-      if (Math.abs(intervals[i] - intervals[i - 1]) > 50) large++;
-    }
-    if (median < 500 && large / (intervals.length - 1) > 0.90) {
-      log.debug(`Noise reject (c): median=${median} ${large}/${intervals.length - 1} diffs >50ms`);
-      return true;
-    }
-
-    return false;
-  }
-
-  // ──────────────────────────────────────────────
-  // Public helpers
-  // ──────────────────────────────────────────────
 
   public reset(): void {
     this.rrIntervals = [];
@@ -580,9 +232,6 @@ export class ArrhythmiaProcessor {
     this.arrhythmiaCount = 0;
     this.lastArrhythmiaTime = 0;
     this.measurementStartTime = getMonotonicNow();
-    this.warmupSpread = [];
-    this.learnedDeadbandMs = this.A.RR_JITTER_FLOOR_MS;
-    this.baselineLearned = false;
     this.metrics = this.emptyMetrics();
     this.lastScore = 0;
     this.lastDetectionKind = '';
@@ -600,5 +249,3 @@ export class ArrhythmiaProcessor {
     };
   }
 }
-
-

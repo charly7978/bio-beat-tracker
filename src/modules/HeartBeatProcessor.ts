@@ -1,6 +1,7 @@
 /**
- * HEARTBEAT PROCESSOR — detección Elgendi optimizada.
+ * HEARTBEAT PROCESSOR — detección Elgendi + CaptainAgent LLM.
  * BPM y hápticos solo desde picos emitidos.
+ * CaptainAgent razona con un LLM real cada ~4s sobre la señal.
  */
 import { clamp } from '../utils/math';
 import { triggerHeartbeatHaptic } from '../utils/haptics';
@@ -16,11 +17,18 @@ import {
 } from '../lib/device/cameraDeviceProfile';
 import { bpmFromEmittedRr, decidePeakEmit } from '../lib/measurement/peakEmitPolicy';
 import type { FingerPlacementMode } from '../types/signal';
+import { CaptainAgent, type CaptainState, type ClinicalAssessment } from './ai';
 
 export interface HeartBeatProcessDiagnostics {
   ensemble?: Record<string, unknown>;
   lastPeakTime?: number;
   consensusReason?: string;
+  captainAgent?: {
+    modelStatus: string;
+    lastAssessment: ClinicalAssessment | null;
+    inferenceCount: number;
+    error: string | null;
+  };
 }
 
 export class HeartBeatProcessor {
@@ -66,6 +74,11 @@ export class HeartBeatProcessor {
   /** SQI auto-calculado por {@link calculateSQI} (ruta interna) */
   private internalSqi = 0;
 
+  /** CaptainAgent: LLM real que razona sobre la señal cardíaca */
+  private readonly captainAgent = new CaptainAgent();
+  private captainInitialized = false;
+  private lastClinicalAssessment: ClinicalAssessment | null = null;
+
   private unlockHandler = async () => {
     if (this.audioUnlocked) return;
     try {
@@ -88,6 +101,10 @@ export class HeartBeatProcessor {
 
   constructor() {
     this.setupAudio();
+    this.captainAgent.init(
+      (assessment) => { this.lastClinicalAssessment = assessment; },
+      () => {},
+    ).catch(() => { /* LLM init may fail silently */ });
   }
 
   private setupAudio() {
@@ -96,8 +113,13 @@ export class HeartBeatProcessor {
     document.addEventListener('click', this.unlockHandler, { passive: true });
   }
 
-  getDiagnostics(): HeartBeatProcessDiagnostics & { internalSqi: number; externalSqi: number } {
-    return { ...this.lastDiagnostics, internalSqi: this.internalSqi, externalSqi: this.ppgSqi };
+  getDiagnostics(): HeartBeatProcessDiagnostics & { internalSqi: number; externalSqi: number; captainState?: CaptainState; } {
+    return {
+      ...this.lastDiagnostics,
+      internalSqi: this.internalSqi,
+      externalSqi: this.ppgSqi,
+      captainState: this.captainAgent.getState(),
+    };
   }
 
   setRuntimeHints(hints: CameraRuntimeHints): void {
@@ -279,6 +301,21 @@ export class HeartBeatProcessor {
       });
       ensembleConf = ens.confidence;
 
+      // ── CaptainAgent: alimentar contexto para razonamiento LLM ──
+      if (this.captainAgent.getState().modelStatus === 'loaded') {
+        this.captainAgent.processFrame(sigRaw, ts, ens.peaks, {
+          heartRate: this.smoothBPM,
+          rrIntervals: [...this.rrIntervals],
+          signalQuality: this.internalSqi,
+          perfusionIndex: this.ppgPerfusionIndex,
+          motionScore: this.ppgMotionScore,
+          fingerContact: this.fingerContactConfirmed,
+          elapsedMs: now,
+          peakCount: this.emittedPeakCount,
+          consecutivePeaks: this.consecutivePeaks,
+        });
+      }
+
       const minPeakConf =
         VITAL_THRESHOLDS.QUALITY.MIN_ENSEMBLE_CONF_FOR_PEAK *
         (this.cameraHints.constrained ? 0.42 : 0.52);
@@ -368,11 +405,39 @@ export class HeartBeatProcessor {
         },
         lastPeakTime: this.lastPeakTime,
         consensusReason: emitReason,
+        captainAgent: {
+          modelStatus: this.captainAgent.getState().modelStatus,
+          lastAssessment: this.lastClinicalAssessment,
+          inferenceCount: this.captainAgent.getState().inferenceCount,
+          error: this.captainAgent.getState().error,
+        },
       };
     } else {
+      // CaptainAgent sigue corriendo sin ensemble (contexto continuo)
+      if (this.signalBuffer.length >= 20 && this.captainAgent.getState().modelStatus === 'loaded') {
+        const sigRaw = this.signalBuffer.slice(-Math.min(DSP_CONSTANTS.BUFFER_SIZE, this.signalBuffer.length));
+        const ts = this.timestampBuffer.slice(-Math.min(DSP_CONSTANTS.BUFFER_SIZE, this.signalBuffer.length));
+        this.captainAgent.processFrame(sigRaw, ts, [], {
+          heartRate: this.smoothBPM,
+          rrIntervals: [...this.rrIntervals],
+          signalQuality: this.internalSqi,
+          perfusionIndex: this.ppgPerfusionIndex,
+          motionScore: this.ppgMotionScore,
+          fingerContact: this.fingerContactConfirmed,
+          elapsedMs: now,
+          peakCount: this.emittedPeakCount,
+          consecutivePeaks: this.consecutivePeaks,
+        });
+      }
       this.lastDiagnostics = {
         ensemble: { gateRange: this.cachedGateRange, gateOk },
         consensusReason: gateOk ? 'BUFFERING' : 'LOW_AMPLITUDE',
+        captainAgent: {
+          modelStatus: this.captainAgent.getState().modelStatus,
+          lastAssessment: this.lastClinicalAssessment,
+          inferenceCount: this.captainAgent.getState().inferenceCount,
+          error: this.captainAgent.getState().error,
+        },
       };
     }
 
@@ -527,9 +592,11 @@ export class HeartBeatProcessor {
     const peakSupport = Math.min(1, this.consecutivePeaks / 5);
     const ens = clamp(ensembleConf, 0, 1);
     const peakBoost = isPeak ? 0.12 : 0;
+    const clinicalConfidence = this.lastClinicalAssessment?.signalQuality?.confidence ?? 0;
 
     if (this.rrIntervals.length < 2) {
-      return clamp(sqiFactor * 0.22 + peakSupport * 0.22 + ens * 0.36 + peakBoost, 0, 0.85);
+      const base = clamp(sqiFactor * 0.15 + peakSupport * 0.15 + ens * 0.25 + peakBoost, 0, 0.85);
+      return clamp(base * 0.5 + clinicalConfidence * 0.5, 0, 1);
     }
 
     const mean = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
@@ -537,11 +604,13 @@ export class HeartBeatProcessor {
     const cv = Math.sqrt(variance) / Math.max(1, mean);
     const rrStability = clamp(1 - cv * 1.5, 0, 1);
 
-    return clamp(
-      rrStability * 0.32 + peakSupport * 0.22 + sqiFactor * 0.2 + ens * 0.16 + peakBoost,
+    const base = clamp(
+      rrStability * 0.22 + peakSupport * 0.15 + sqiFactor * 0.15 + ens * 0.12 + peakBoost,
       0,
       1,
     );
+
+    return clamp(base * 0.4 + clinicalConfidence * 0.6, 0, 1);
   }
 
   private vibrate(): void {
@@ -611,6 +680,8 @@ export class HeartBeatProcessor {
     this.ppgSqi = 0;
     this.ppgPerfusionIndex = 0;
     this.ppgMotionScore = 0;
+    this.captainAgent.reset();
+    this.lastClinicalAssessment = null;
   }
 
   dispose(): void {
