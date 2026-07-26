@@ -49,7 +49,7 @@ export const VITAL_THRESHOLDS = {
 
   // BLOOD PRESSURE — rangos fisiológicos (AHA / supervivencia) + normalización morfológica PPG
   BP: {
-    SYSTOLIC_MIN: 20,
+    SYSTOLIC_MIN: 50,
     SYSTOLIC_MAX: 280,
     DIASTOLIC_MIN: 40,
     DIASTOLIC_MAX: 130,

@@ -519,10 +519,10 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
   const dispDia = state.displayDia;
   const hrColor = dispBpm <= 0 ? COLORS.TEXT_DIM
     : dispBpm < 50 ? COLORS.TEXT_DANGER
-      : dispBpm < 60 ? COLORS.TEXT_WARN
-        : dispBpm <= 100 ? COLORS.TEXT_PRIMARY
-          : dispBpm <= 120 ? COLORS.TEXT_WARN
-            : COLORS.TEXT_DANGER;
+    : dispBpm < 60 ? COLORS.TEXT_WARN
+    : dispBpm <= 100 ? COLORS.TEXT_PRIMARY
+    : dispBpm <= 120 ? COLORS.TEXT_WARN
+    : COLORS.TEXT_DANGER;
 
   ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
@@ -570,8 +570,8 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
 
   const spo2Color = dispSpo2 <= 0 ? COLORS.TEXT_DIM
     : dispSpo2 >= 95 ? COLORS.SPO2
-      : dispSpo2 >= 90 ? COLORS.TEXT_WARN
-        : COLORS.TEXT_DANGER;
+    : dispSpo2 >= 90 ? COLORS.TEXT_WARN
+    : COLORS.TEXT_DANGER;
 
   ctx.font = `bold 10px ${FONT_MONO}`;
   ctx.fillStyle = COLORS.TEXT_SECONDARY;
@@ -612,9 +612,9 @@ export function drawMetricsBar(ctx: CanvasRenderingContext2D, state: PpgRenderSt
 
   const bpColor = sys <= 0 ? COLORS.TEXT_DIM
     : sys >= 140 || dia >= 90 ? COLORS.TEXT_DANGER
-      : sys >= 130 || dia >= 80 ? COLORS.TEXT_WARN
-        : sys < 90 || dia < 60 ? COLORS.TEXT_WARN
-          : COLORS.BP;
+    : sys >= 130 || dia >= 80 ? COLORS.TEXT_WARN
+    : sys < 90 || dia < 60 ? COLORS.TEXT_WARN
+    : COLORS.BP;
 
   const bpX = colW * 2 + 4;
 
@@ -713,7 +713,7 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
   ctx.save();
   ctx.font = `bold 9px ${FONT_MONO}`;
   ctx.textAlign = 'left';
-
+  
   let labelText = 'PRESIÓN: IDEAL';
   let labelColor = COLORS.SIGNAL;
   let targetPct = 0.5;
@@ -741,7 +741,7 @@ export function drawPressureGauge(ctx: CanvasRenderingContext2D, state: PpgRende
 
   ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
   ctx.fillRect(gaugeX - 4, gaugeY - 4, gaugeW + 8, gaugeH + 8);
-
+  
   ctx.fillStyle = grad;
   ctx.fillRect(gaugeX, gaugeY, gaugeW, gaugeH);
 
@@ -823,7 +823,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ? (state.signalStrength < 0 ? 0 : state.signalStrength > 1 ? 1 : state.signalStrength)
     : 0.5; // Default amplitude during warmup so we can see finger contact immediately
   const midValue = (stats.max + stats.min) / 2;
-  const coords: { x: number; y: number; isArr: boolean; val: number }[] = [];
+  const coords: { x: number; y: number; isArr: boolean; val: number; heightPct: number }[] = [];
   for (let i = 0; i < points.length; i++) {
     const pt = points[i];
     const age = state.now - pt.time - VISUAL_DELAY_MS;
@@ -831,13 +831,13 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     const x = plot.x + plot.w - (age * plot.w / WINDOW_MS);
     if (x < plot.x || x > plot.x + plot.w) continue;
     const honestValue = midValue + (pt.value - midValue) * strength;
-
+    
     // Mapeo normalizado [0..1] para aplicar la transformación de subida/bajada no lineal
     const pct = Math.max(0, Math.min(1, (honestValue - stats.min) / safeRange));
     const transformedPct = Math.pow(pct, CARDIAC_WAVE_CONFIG.WAVE_SHARPNESS_EXPONENT);
     const y = plot.y + wavePadTop + (1 - transformedPct) * waveH;
-
-    coords.push({ x, y, isArr: pt.isArrhythmia, val: pt.value });
+    
+    coords.push({ x, y, isArr: pt.isArrhythmia, val: pt.value, heightPct: transformedPct });
   }
 
   if (coords.length < 2) return;
@@ -850,10 +850,11 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   // El halo de la punta se amortigua una vez por frame; ambos modos (2D/3D) lo leen.
   state.sweepPulse *= CARDIAC_WAVE_CONFIG.SWEEP_PULSE_DECAY;
 
-  // ── MODO 3D: onda como cinta extruida sobre el piso en perspectiva. ──
-  // Reusa las MISMAS coords honestas → forma, amplitud y tiempo idénticos al 2D.
-  drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
-
+    try {
+    drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
+  } finally {
+    ctx.restore();
+  }
 
   // Tachogram (panel clínico: 2D en ambos modos)
   const tachoY = plot.y + plot.h - RR_TACHO_H + 4;
@@ -902,6 +903,8 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.fillStyle = '#94a3b8';
   ctx.fillText(contact, plot.x + plot.w - 12, plot.y + 66);
 
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1.0;
   ctx.restore();
 }
 
@@ -1105,6 +1108,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     seg = end + 1;
   }
   ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1.0;
 
   for (let i = 0; i < coords.length; i++) {
     const c = coords[i];

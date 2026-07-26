@@ -28,7 +28,6 @@
     "@capacitor/preferences": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2",
     "@capgo/capacitor-health": "^8.6.2",
-    "@huggingface/transformers": "^4.2.0",
     "@radix-ui/react-slot": "^1.1.0",
     "@radix-ui/react-toast": "^1.2.1",
     "@supabase/supabase-js": "^2.93.3",

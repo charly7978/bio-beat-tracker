@@ -28,6 +28,8 @@ export interface WaveCoord {
   y: number;
   isArr: boolean;
   val: number;
+  /** Altura normalizada [0..1] YA calculada por el auto-escalado honesto del 2D (mismo pct^exponente que define coords.y). */
+  heightPct: number;
 }
 
 /** Geometría 2D de la zona de onda, para recuperar amplitud normalizada y tiempo. */
@@ -218,6 +220,8 @@ export function drawGrid3D(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   // Referencias numéricas de los ejes (amplitud + tiempo).
   drawGridReferences3D(ctx, proj, plot, state.amplitudeStats);
 
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1.0;
   ctx.restore();
 }
 
@@ -276,8 +280,10 @@ export function drawWaveRibbon3D(
   const { plot } = state.layout;
   const revealed = state.traceRevealed;
 
-  // Amplitud normalizada honesta con soporte para valores negativos por debajo de la grilla (piso)
-  const hOf = (c: WaveCoord) => clamp(c.val / ((state.waveGain || 4.2) * 10.0), -0.5, 1.2);
+  // Amplitud honesta: reusa DIRECTAMENTE el heightPct ya normalizado por el auto-escalado 2D
+  // (mismo pct^WAVE_SHARPNESS_EXPONENT que define coords.y). Evita recalcular la altura desde
+  // waveGain absoluto, que fluctúa cada frame y desincroniza la cinta 3D del trazo 2D honesto.
+  const hOf = (c: WaveCoord) => clamp(c.heightPct, 0, 1);
   const uOf = (c: WaveCoord) => clamp((c.x - plot.x) / plot.w, 0, 1);
 
   const Pf: ProjPoint[] = []; // cresta frontal (la onda honesta)
@@ -389,75 +395,34 @@ export function drawWaveRibbon3D(
     ctx.stroke();
   }
 
-  // 5) Cresta frontal: la onda honesta con efecto de iluminación animada (estilo 2D)
-  const drawDirectCrestSegment = (startIdx: number, endIdx: number) => {
-    ctx.beginPath();
-    ctx.moveTo(Pf[startIdx].x, Pf[startIdx].y);
-    for (let k = startIdx + 1; k < endIdx; k++) {
-      ctx.lineTo(Pf[k].x, Pf[k].y);
-    }
-  };
-
-  const recentCut = Math.max(0, n - Math.floor(n * 0.35));
-  const leadingCut = Math.max(0, n - Math.floor(n * 0.10));
-
-  // 5a) Trazo base (toda la línea)
+  // === TRAZO DE LA CRESTA: UNA sola pasada firme y sólida ======================
+  // ANTES: 3 pasadas superpuestas (cuerpo 0.45 + reciente 0.68 + cabeza verde
+  // brillante '#4ade80'), cada una segmentada y con shadowBlur distinto (8 y 15).
+  // Eso provocaba:
+  //   (a) un DEGRADADO DE BRILLO que se desplazaba con la onda → el color se veía
+  //       "no firme"/tembloroso a lo largo del trazo, y
+  //   (b) varias pasadas con blur por frame (cuyo costo escala con el bounding box
+  //       de la onda completa) → picos de costo → frame-drops = parpadeo en
+  //       pantallas de alta tasa de refresco.
+  // AHORA: un color 100% SÓLIDO y constante por segmento (verde señal / rojo
+  // arritmia), sin shadowBlur → color firme y uniforme, sin shimmer, y un costo de
+  // dibujo menor y más estable (menos varianza de tiempo por frame = más fluidez).
   s = 0;
   while (s < n - 1) {
     const isArr = coords[s].isArr;
     let segEnd = s;
     while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-    drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
+    ctx.beginPath();
+    ctx.moveTo(Pf[s].x, Pf[s].y);
+    for (let k = s + 1; k < segEnd + 1 && k < n; k++) {
+      ctx.lineTo(Pf[k].x, Pf[k].y);
+    }
     ctx.strokeStyle = revealed
-      ? (isArr ? `rgba(${C.arr}, 0.4)` : `rgba(${C.signal}, 0.45)`)
-      : 'rgba(148, 163, 184, 0.25)';
-    ctx.lineWidth = 2.0;
-    ctx.shadowBlur = 0;
+      ? (isArr ? `rgb(${C.arr})` : `rgb(${C.signal})`)
+      : 'rgba(148, 163, 184, 0.5)';
+    ctx.lineWidth = 2.2;
     ctx.stroke();
     s = segEnd;
-  }
-
-  if (revealed) {
-    // 5b) Trazo con brillo base (último 35%)
-    ctx.shadowColor = `rgba(${C.signal}, 0.45)`;
-    ctx.shadowBlur = 8; // SHADOW_BLUR_BASE
-    s = Math.max(recentCut, 0);
-    while (s < n - 1) {
-      const isArr = coords[s].isArr;
-      let segEnd = s;
-      while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-      drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
-      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.65)` : `rgba(${C.signal}, 0.68)`;
-      ctx.lineWidth = 1.6; // GLOW_STROKE_WIDTH
-      ctx.stroke();
-      s = segEnd;
-    }
-
-    // 5c) Trazo líder de punta (último 10%)
-    ctx.shadowBlur = 15; // SHADOW_BLUR_LEADING
-    s = Math.max(leadingCut, 0);
-    while (s < n - 1) {
-      const isArr = coords[s].isArr;
-      let segEnd = s;
-      while (segEnd < n - 1 && coords[segEnd].isArr === isArr) segEnd++;
-      drawDirectCrestSegment(s, segEnd + 1 > n ? segEnd : segEnd + 1);
-      ctx.strokeStyle = isArr ? `rgba(${C.arr}, 0.85)` : '#4ade80';
-      ctx.lineWidth = 1.5; // LEADING_STROKE_WIDTH
-      ctx.shadowColor = isArr ? `rgba(${C.arr}, 0.45)` : `rgba(${C.signal}, 0.45)`;
-      ctx.stroke();
-      s = segEnd;
-    }
-    ctx.shadowBlur = 0;
-  } else {
-    // Trazo de punta tenue sin brillo cuando se está estabilizando
-    s = Math.max(leadingCut, 0);
-    if (s < n - 1) {
-      drawDirectCrestSegment(s, n);
-      ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)';
-      ctx.lineWidth = 2.0;
-      ctx.shadowBlur = 0;
-      ctx.stroke();
-    }
   }
 
   // 6) Marcadores fiduciales con VALORES en tiempo real: picos máximos (SYS),
@@ -480,10 +445,7 @@ export function drawWaveRibbon3D(
         ctx.beginPath();
         ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
         ctx.fillStyle = isArr ? `rgb(${C.arr})` : '#ffffff';
-        ctx.shadowColor = isArr ? `rgb(${C.arr})` : `rgb(${C.cyan})`;
-        ctx.shadowBlur = 8;
         ctx.fill();
-        ctx.shadowBlur = 0;
         ctx.font = `bold 9px ${FONT}`;
         ctx.fillStyle = isArr ? `rgb(${C.arr})` : `rgb(${C.cyan})`;
         ctx.fillText(v.toFixed(1), p.x, p.y - 11);
