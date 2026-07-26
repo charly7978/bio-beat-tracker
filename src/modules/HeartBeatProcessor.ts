@@ -17,7 +17,7 @@ import {
 } from '../lib/device/cameraDeviceProfile';
 import { bpmFromEmittedRr, decidePeakEmit } from '../lib/measurement/peakEmitPolicy';
 import type { FingerPlacementMode } from '../types/signal';
-import { CaptainAgent, type CaptainState, type ClinicalAssessment } from './ai';
+import { CaptainAgent, DEFAULT_DETECTION_PARAMS, type CaptainState, type ClinicalAssessment, type DetectionParams } from './ai';
 
 export interface HeartBeatProcessDiagnostics {
   ensemble?: Record<string, unknown>;
@@ -28,6 +28,7 @@ export interface HeartBeatProcessDiagnostics {
     lastAssessment: ClinicalAssessment | null;
     inferenceCount: number;
     error: string | null;
+    activeParams?: DetectionParams;
   };
 }
 
@@ -78,6 +79,7 @@ export class HeartBeatProcessor {
   private readonly captainAgent = new CaptainAgent();
   private captainInitialized = false;
   private lastClinicalAssessment: ClinicalAssessment | null = null;
+  private llmParams: DetectionParams = { ...DEFAULT_DETECTION_PARAMS };
 
   private unlockHandler = async () => {
     if (this.audioUnlocked) return;
@@ -102,7 +104,10 @@ export class HeartBeatProcessor {
   constructor() {
     this.setupAudio();
     this.captainAgent.init(
-      (assessment) => { this.lastClinicalAssessment = assessment; },
+      (assessment) => {
+        this.lastClinicalAssessment = assessment;
+        this.llmParams = this.captainAgent.getDetectionParams();
+      },
       () => {},
     ).catch(() => { /* LLM init may fail silently */ });
   }
@@ -278,7 +283,8 @@ export class HeartBeatProcessor {
     const manualRelax = now < this.gateRelaxUntilMs ? 0.5 : 1;
     const gateScale =
       Math.min(autoGateRelax, manualRelax) *
-      (this.ppgPerfusionIndex > 0 && this.ppgPerfusionIndex < 0.004 ? 0.68 : 1);
+      (this.ppgPerfusionIndex > 0 && this.ppgPerfusionIndex < 0.004 ? 0.68 : 1) *
+      this.llmParams.gateRangeScale;
     const gateOk =
       this.cachedGateRange >= this.gateRangeMin() * gateScale;
     const runEnsemble =
@@ -371,22 +377,20 @@ export class HeartBeatProcessor {
         if (instantBpm > 0) {
           const acceptOutlier =
             this.smoothBPM <= 0 ||
-            Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= 0.4;
+            Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= this.llmParams.outlierThreshold;
           if (acceptOutlier) {
             if (this.smoothBPM === 0) {
               this.smoothBPM = instantBpm;
             } else {
               const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
-              const trust = clamp(0.18 + wScore * 0.32, 0.18, 0.50);
-              // A menor desviación, más suavizado (alpha bajo)
-              // A mayor desviación, más seguimiento (alpha alto)
-              const alpha = rel > 0.22 ? trust : rel > 0.12 ? trust * 0.75 : trust * 0.45;
+              const baseAlpha = this.llmParams.smoothingAlpha;
+              const alpha = rel > 0.22 ? baseAlpha : rel > 0.12 ? baseAlpha * 0.75 : baseAlpha * 0.45;
               this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
             }
           }
         }
 
-        if (wScore >= 0.4 && this.rrIntervals.length >= 1) {
+        if (wScore >= 0.4 && this.rrIntervals.length >= 1 && this.llmParams.hapticEnabled) {
           this.vibrate();
           this.playBeep();
         }
@@ -410,6 +414,7 @@ export class HeartBeatProcessor {
           lastAssessment: this.lastClinicalAssessment,
           inferenceCount: this.captainAgent.getState().inferenceCount,
           error: this.captainAgent.getState().error,
+          activeParams: { ...this.llmParams },
         },
       };
     } else {
@@ -437,6 +442,7 @@ export class HeartBeatProcessor {
           lastAssessment: this.lastClinicalAssessment,
           inferenceCount: this.captainAgent.getState().inferenceCount,
           error: this.captainAgent.getState().error,
+          activeParams: { ...this.llmParams },
         },
       };
     }
@@ -572,45 +578,53 @@ export class HeartBeatProcessor {
     let rrFactor = 0;
     if (this.rrIntervals.length >= 3) {
       const cv = computeRrHrv(this.rrIntervals).cv;
-      rrFactor = Math.max(0, 1 - cv * 2) * 24;
+      rrFactor = Number.isFinite(cv) ? Math.max(0, 1 - cv * 2) * 24 : 0;
     }
 
     const peakFactor = Math.min(1, this.consecutivePeaks / 4) * 22;
-    const periodicityFactor = periodicityScore * 16;
+    const periodicityFactor = Number.isFinite(periodicityScore) ? periodicityScore * 16 : 0;
 
     let sqi = clamp(rangeFactor + slopeFactor + rrFactor + peakFactor + periodicityFactor, 0, 100);
+    if (!Number.isFinite(sqi)) sqi = 0;
     const agree = (this.lastDiagnostics.ensemble?.agreement as { elgendi?: number } | undefined)?.elgendi;
     if (typeof agree === 'number' && agree > 0) {
       sqi = clamp(sqi + agree * 10, 0, 100);
     }
+    sqi = clamp(sqi + (this.llmParams.sqiAdjustment || 0), 0, 100);
+    if (!Number.isFinite(sqi)) sqi = 0;
     return sqi;
   }
 
   private calculateConfidence(ensembleConf: number, isPeak: boolean): number {
     const effectiveSqi = this.signalQualityIndex;
-    const sqiFactor = effectiveSqi / 100;
+    const sqiFactor = Number.isFinite(effectiveSqi) ? effectiveSqi / 100 : 0;
     const peakSupport = Math.min(1, this.consecutivePeaks / 5);
-    const ens = clamp(ensembleConf, 0, 1);
+    const ens = clamp(Number.isFinite(ensembleConf) ? ensembleConf : 0, 0, 1);
     const peakBoost = isPeak ? 0.12 : 0;
     const clinicalConfidence = this.lastClinicalAssessment?.signalQuality?.confidence ?? 0;
+    const llmWeight = Number.isFinite(this.llmParams.confidenceWeight) ? this.llmParams.confidenceWeight : 0.5;
+
+    let result: number;
 
     if (this.rrIntervals.length < 2) {
       const base = clamp(sqiFactor * 0.15 + peakSupport * 0.15 + ens * 0.25 + peakBoost, 0, 0.85);
-      return clamp(base * 0.5 + clinicalConfidence * 0.5, 0, 1);
+      result = clamp(base * (1 - llmWeight) + clinicalConfidence * llmWeight, 0, 1);
+    } else {
+      const mean = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
+      const variance = this.rrIntervals.reduce((a, rr) => a + (rr - mean) ** 2, 0) / this.rrIntervals.length;
+      const cv = Math.sqrt(variance) / Math.max(1, mean);
+      const rrStability = clamp(1 - cv * 1.5, 0, 1);
+
+      const base = clamp(
+        rrStability * 0.22 + peakSupport * 0.15 + sqiFactor * 0.15 + ens * 0.12 + peakBoost,
+        0,
+        1,
+      );
+
+      result = clamp(base * (1 - llmWeight) + clinicalConfidence * llmWeight, 0, 1);
     }
 
-    const mean = this.rrIntervals.reduce((a, b) => a + b, 0) / this.rrIntervals.length;
-    const variance = this.rrIntervals.reduce((a, rr) => a + (rr - mean) ** 2, 0) / this.rrIntervals.length;
-    const cv = Math.sqrt(variance) / Math.max(1, mean);
-    const rrStability = clamp(1 - cv * 1.5, 0, 1);
-
-    const base = clamp(
-      rrStability * 0.22 + peakSupport * 0.15 + sqiFactor * 0.15 + ens * 0.12 + peakBoost,
-      0,
-      1,
-    );
-
-    return clamp(base * 0.4 + clinicalConfidence * 0.6, 0, 1);
+    return Number.isFinite(result) ? result : 0;
   }
 
   private vibrate(): void {
@@ -682,6 +696,7 @@ export class HeartBeatProcessor {
     this.ppgMotionScore = 0;
     this.captainAgent.reset();
     this.lastClinicalAssessment = null;
+    this.llmParams = { ...DEFAULT_DETECTION_PARAMS };
   }
 
   dispose(): void {
