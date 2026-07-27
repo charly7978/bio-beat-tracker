@@ -30,7 +30,6 @@ import {
   resolveProfile,
 } from '@/lib/sanity/sanityProfiles';
 import { recordVerdict as recordAuditVerdict } from '@/lib/sanity/sanityAuditLog';
-import { toast } from '@/hooks/use-toast';
 import { triggerArrhythmiaHaptic } from '@/utils/haptics';
 
 interface HeartBeatProcessorAPI {
@@ -179,10 +178,9 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       },
     })
   );
-  // Dedup de error de sanity: el ref es la única fuente de verdad (no hay UI que
-  // renderice el mensaje; el aviso al usuario va por toast más abajo).
+  // Dedup de error de sanity: evita re-registrar el mismo veredicto en el log
+  // de auditoría frame tras frame. No hay UI asociada.
   const sanityErrorRef = useRef<string | null>(null);
-  const sanityToastAtRef = useRef<number>(0);
   const isMonitoringRef = useRef(false);
 
   useEffect(() => {
@@ -558,18 +556,13 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
       if (bpmLive > 0) {
         const verdict = bpmSanityRef.current.push(bpmLive);
         if (verdict.ok === false) {
-          const msg = `BPM stream ${verdict.reason} (${verdict.detail})`;
+          // El veredicto de sanidad queda en el log de auditoría, no en pantalla.
+          // Su texto ("BPM stream ZERO_VARIANCE (std=0.00)") es telemetría de
+          // desarrollo: no le dice nada al usuario y aparecía como alarma roja
+          // encima de la medición. La calidad de señal ya se comunica por los
+          // indicadores de SQI y el estado de adquisición.
           if (sanityErrorRef.current !== verdict.reason) {
             sanityErrorRef.current = verdict.reason;
-            const now = performance.now();
-            if (now - sanityToastAtRef.current > VITAL_THRESHOLDS.ROUTER.SANITY_TOAST_COOLDOWN_MS) {
-              sanityToastAtRef.current = now;
-              toast({
-                variant: "destructive",
-                title: "⚠ Señal sospechosa detectada",
-                description: msg,
-              });
-            }
           }
         } else if (sanityErrorRef.current) {
           sanityErrorRef.current = null;
@@ -789,13 +782,11 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
             arrhythmiaDetectedRef.current = isArrhythmiaDetected;
 
             if (isArrhythmiaDetected) {
+              // Aviso háptico discreto. Sin popup de alarma: el contador de
+              // latidos irregulares ya se muestra en el panel de ritmo, y esta
+              // app no es un dispositivo certificado como para lanzar una
+              // alarma médica en rojo sobre la pantalla.
               triggerArrhythmiaHaptic().catch(() => undefined);
-              toast({
-                title: "⚠️ Arritmia detectada",
-                description: `Latido irregular #${vitals.arrhythmia.value?.count ?? 0}`,
-                variant: "destructive",
-                duration: 4000
-              });
             }
           }
         }

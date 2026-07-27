@@ -515,8 +515,6 @@ export const VITAL_THRESHOLDS = {
     DUAL_STREAM_PUSH_THROTTLE_MS: 250,
     /** Duración del marcador de latido en UI (ms) */
     BEAT_MARKER_MS: 300,
-    /** Cooldown entre toasts de señal sospechosa (ms) */
-    SANITY_TOAST_COOLDOWN_MS: 5000,
     /** Ratio de frames saturados/subexpuestos para contabilizar artefacto */
     SATURATION_FRAME_RATIO: 0.75,
     UNDEREXPOSURE_FRAME_RATIO: 0.82,
