@@ -711,6 +711,15 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     this.onSignalReady({
       timestamp,
+      // La evidencia viaja SIN recortar por signalPathActive: es la fuente de
+      // verdad que usan las capas de arriba para decidir, así que tiene que
+      // llegarles tal cual, incluso (sobre todo) cuando dice que no hay sangre.
+      perfusion: {
+        state: this.cachedPerfusion.state,
+        logOdds: this.cachedPerfusion.logOdds,
+        chromaticAngleDeg: this.lastSignatureAngleDeg,
+        reason: this.lastSignatureReason,
+      },
       rawValue: signalPathActive ? pulseSource.value : 0,
       filteredValue: signalPathActive ? enhanced : 0,
       morphologyValue: signalPathActive ? morphFiltered : 0,

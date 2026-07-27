@@ -54,11 +54,18 @@ describe('BloodPressureProcessor', () => {
     expect(est.diastolic).toBe(0);
   });
 
-  it('mantiene últimos valores conocidos tras pérdida de señal', () => {
+  it('NO conserva la última presión tras perderse la señal', () => {
+    // Este test afirmaba lo contrario: que la presión se mantenía tras la
+    // pérdida de señal. Ese era exactamente el defecto — al retirar el dedo la
+    // pantalla seguía mostrando una presión estable durante 30 frames más,
+    // etiquetada con confianza 'LOW' pero indistinguible de una medición.
+    //
+    // La vigencia de un vital la decide ahora un único criterio (el acumulador
+    // de evidencia de perfusión, aplicado en VitalSignsProcessor sobre los tres
+    // vitales a la vez), no un contador de frames propio de cada procesador.
     const proc = new BloodPressureProcessor();
     const rr = [850, 870, 860];
 
-    // Alimentar buffer con frames variados para acumular ciclos
     let est = proc.estimate(syntheticPpgBuffer(6, 30, 0), rr, 30);
     for (let i = 0; i < 3; i++) {
       est = proc.estimate(syntheticPpgBuffer(6, 30, i + 1), rr, 30);
@@ -66,8 +73,10 @@ describe('BloodPressureProcessor', () => {
 
     if (est.confidence === 'INSUFFICIENT') return;
 
-    // Señal perdida
+    // Señal perdida: no hay ciclos que medir, así que no hay presión.
     const est2 = proc.estimate([0, 0, 0], rr, 30);
-    expect(est2.systolic).toBeGreaterThan(0);
+    expect(est2.systolic).toBe(0);
+    expect(est2.diastolic).toBe(0);
+    expect(est2.confidence).toBe('INSUFFICIENT');
   });
 });

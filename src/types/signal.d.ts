@@ -27,6 +27,27 @@ export interface ProcessedSignal {
   quality: number;
   fingerDetected: boolean;
   contactState: ContactState;
+  /**
+   * Evidencia de que hay hemoglobina pulsando en el camino óptico.
+   *
+   * Es la ÚNICA fuente de verdad sobre si hay algo que medir, y viaja en la
+   * señal para que todos los consumidores compartan el mismo reloj. Antes cada
+   * capa decidía por su cuenta —el router con `fingerConfirmed`, la presión con
+   * un contador de frames propio, la saturación sin criterio alguno— y por eso
+   * podían contradecirse: al retirar el dedo la pantalla mostraba tres valores
+   * de tres instantes distintos.
+   *
+   * `state` responde si hay sangre; `logOdds` es la evidencia acumulada, y su
+   * signo y magnitud sirven de confianza sin necesidad de inventar una escala.
+   */
+  perfusion?: {
+    state: 'PERFUSED' | 'NOT_PERFUSED' | 'UNDECIDED';
+    logOdds: number;
+    /** Ángulo con el eje acromático, en grados. Diagnóstico. */
+    chromaticAngleDeg: number;
+    /** Por qué el detector no pudo decidir, cuando aplica. */
+    reason: string;
+  };
   motionArtifact?: boolean;
   roi: {
     x: number;

@@ -37,7 +37,6 @@ export interface BPEstimate {
 
 const BUFFER_MAX = 24;
 const EMIT_EVERY_N_FRAMES = 6;
-const STALE_FRAMES_MAX = 30;
 const VARIANCE_WINDOW = 5;
 const STALE_VARIANCE_THRESHOLD = 3.0;
 
@@ -258,29 +257,25 @@ export class BloodPressureProcessor {
     return true;
   }
 
+  /**
+   * Sin ciclos suficientes para estimar, no hay presión.
+   *
+   * Antes esta función devolvía la última presión buena durante 30 frames más,
+   * etiquetada `confidence: 'LOW'`. Era un tercer reloj independiente —además
+   * del `lastGood` del router y de los vitales que nunca se borraban— y por eso
+   * al retirar el dedo la pantalla mostraba tres valores de tres instantes
+   * distintos, cada uno sobreviviendo por su cuenta.
+   *
+   * La vigencia ahora la decide un único criterio, el acumulador de evidencia
+   * de perfusión, aplicado en VitalSignsProcessor sobre los tres vitales a la
+   * vez. Aquí solo se informa que en este ciclo no hubo estimación.
+   */
   private staleOrInsufficient(insufficient: BPEstimate): BPEstimate {
     this.staleFrames++;
-
-    if (this.lastSBP <= 0 || this.lastDBP <= 0) {
-      return insufficient;
-    }
-
-    if (this.staleFrames >= STALE_FRAMES_MAX) {
-      this.lastSBP = 0;
-      this.lastDBP = 0;
-      this.lastConfidence = 'INSUFFICIENT';
-      return insufficient;
-    }
-
-    return {
-      systolic: Math.round(this.lastSBP),
-      diastolic: Math.round(this.lastDBP),
-      map: Math.round(this.lastDBP + (this.lastSBP - this.lastDBP) / 3),
-      pulsePressure: Math.round(this.lastSBP - this.lastDBP),
-      confidence: 'LOW',
-      cyclesUsed: this.cycleCount,
-      featureQuality: 0,
-    };
+    this.lastSBP = 0;
+    this.lastDBP = 0;
+    this.lastConfidence = 'INSUFFICIENT';
+    return insufficient;
   }
 
   reset(): void {

@@ -14,6 +14,8 @@ import { RingF32 } from '../../utils/RingBuffer';
 import { clamp } from '../../utils/math';
 import { estimateRespiratorySmartFusion } from '../../lib/vitals/respiratorySmartFusion';
 import type { FingerPlacementMode } from '../../types/signal';
+import type { PerfusionState } from '../signal-processing/perfusionEvidence';
+import { evaluateCoupledVigency } from './vitalValidity';
 
 const log = createLogger('VitalSignsProcessor');
 
@@ -66,6 +68,16 @@ export class VitalSignsProcessor {
   private isCalibrating: boolean = false;
 
   // Estado actual - SIN VALORES BASE FIJOS
+  /**
+   * Instante en que cada vital se produjo a partir de evidencia real.
+   *
+   * Sin esto los valores de `measurements` eran inmortales: solo existían las
+   * ramas que los escriben, ninguna que los borre, así que al perderse la señal
+   * la última lectura se quedaba en pantalla indefinidamente. El sello permite
+   * preguntarle a `vitalValidity` si el valor todavía describe al paciente.
+   */
+  private measuredAt = { spo2: 0, bloodPressure: 0, heartRate: 0 };
+
   private measurements = {
     spo2: 0,
     systolicPressure: 0,
@@ -219,8 +231,19 @@ export class VitalSignsProcessor {
     faceQuality?: number,
     /** Respiración pre-estimada del acelerómetro (IMU) — 4ª modalidad de la Smart Fusion. */
     accelRespiration?: { rpm: number; quality: number },
+    /**
+     * Veredicto del acumulador de evidencia de perfusión. Es el reloj único que
+     * decide si los vitales todavía describen a alguien.
+     */
+    perfusionState?: PerfusionState,
   ): VitalSignsResult {
     this.frameCount++;
+
+    // Lo PRIMERO de cada ciclo: caducar lo que la evidencia ya no sostiene.
+    // Antes esta rama no existía —los vitales solo se escribían, nunca se
+    // borraban— y por eso al retirar el dedo la última lectura se quedaba en
+    // pantalla como si siguiera midiendo.
+    this.expireByEvidence(perfusionState ?? 'UNDECIDED');
     // Espeja el estado cacheado del acelerómetro (ya throttled en el procesador).
     this.lastAccelRespiration =
       accelRespiration && accelRespiration.quality > 0 ? accelRespiration : null;
@@ -608,6 +631,58 @@ export class VitalSignsProcessor {
   }
 
   /**
+   * Borra los vitales que la evidencia de perfusión ya no sostiene.
+   *
+   * Los tres caducan JUNTOS porque están fisiológicamente acoplados: el gasto
+   * cardíaco es frecuencia × volumen sistólico y la presión media es gasto ×
+   * resistencia, así que solo son interpretables entre sí si provienen del
+   * mismo instante. Publicar una saturación de hace veinte segundos junto a
+   * una presión de hace treinta compone un cuadro clínico que nunca existió.
+   *
+   * El acoplamiento HR → SpO2 / PA se conserva intacto — es fisiología real y
+   * el ratio-of-ratios necesita saber dónde están los latidos. Lo que cambia es
+   * que ahora los alimenta una frecuencia VIVA, no una guardada.
+   */
+  private expireByEvidence(perfusionState: PerfusionState): void {
+    const now = Date.now();
+    const vigency = evaluateCoupledVigency(
+      {
+        heartRate: this.lastBPM > 0
+          ? { value: this.lastBPM, measuredAtMs: this.measuredAt.heartRate }
+          : null,
+        spo2: this.measurements.spo2 > 0
+          ? { value: this.measurements.spo2, measuredAtMs: this.measuredAt.spo2 }
+          : null,
+        bloodPressure: this.measurements.systolicPressure > 0
+          ? { value: this.measurements.systolicPressure, measuredAtMs: this.measuredAt.bloodPressure }
+          : null,
+      },
+      perfusionState,
+      now,
+    );
+
+    if (!vigency.heartRate.publishable) {
+      this.lastBPM = 0;
+      this.measuredAt.heartRate = 0;
+    }
+    if (!vigency.spo2.publishable) {
+      this.measurements.spo2 = 0;
+      this.measuredAt.spo2 = 0;
+      // El estado del suavizador también caduca: si no, al volver la señal el
+      // primer valor saldría mezclado con el de la sesión anterior.
+      this.ema2Spo2 = 0;
+      this.lastCoherentSpO2 = 0;
+    }
+    if (!vigency.bloodPressure.publishable) {
+      this.measurements.systolicPressure = 0;
+      this.measurements.diastolicPressure = 0;
+      this.measuredAt.bloodPressure = 0;
+      this.ema2Sys = 0;
+      this.ema2Dia = 0;
+    }
+  }
+
+  /**
    * CÁLCULO UNIFICADO DE SIGNOS VITALES
    * Usa extractCycleFeatures (API moderna) en lugar de extractAllFeatures (legacy)
    * para glucosa, hemoglobina y lípidos con modelos basados en literatura
@@ -661,10 +736,12 @@ export class VitalSignsProcessor {
         this.lastCoherentSpO2 = spo2;
         // EMA médico de SpO2 (sin display hold, eso lo hace useSignalRouter).
         this.measurements.spo2 = this.applyEma2('ema2Spo2', spo2);
+        this.measuredAt.spo2 = Date.now();
       }
     }
 
     this.lastBPM = currentBPM > 0 ? currentBPM : 0;
+    if (this.lastBPM > 0) this.measuredAt.heartRate = Date.now();
     const hr = this.lastBPM;
 
     // === BP y Arritmias — requieren rrData válido ===
@@ -706,6 +783,7 @@ export class VitalSignsProcessor {
           // EMA médico de PA (sin display hold, eso lo hace useSignalRouter).
           this.measurements.systolicPressure = this.applyEma2('ema2Sys', finalSys);
           this.measurements.diastolicPressure = this.applyEma2('ema2Dia', finalDia);
+          this.measuredAt.bloodPressure = Date.now();
 
           this.bpSysWeightedSum += finalSys * cw;
           this.bpDiaWeightedSum += finalDia * cw;

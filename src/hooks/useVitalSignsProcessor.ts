@@ -68,6 +68,12 @@ export const useVitalSignsProcessor = () => {
         dcBlue?: number;
       };
     },
+    faceBvp?: number,
+    faceBpm?: number,
+    faceQuality?: number,
+    accelRespiration?: { rpm: number; quality: number },
+    /** Veredicto de evidencia de perfusión: el reloj único de vigencia. */
+    perfusionState?: import('../modules/signal-processing/perfusionEvidence').PerfusionState,
   ): VitalSignsResult => {
     if (!processorRef.current) return createDefaultVitalSignsResult();
 
@@ -80,10 +86,21 @@ export const useVitalSignsProcessor = () => {
       sqmBundle,
       morphologyValue,
       splitterChannels,
+      faceBvp,
+      faceBpm,
+      faceQuality,
+      accelRespiration,
+      perfusionState,
     );
-    
-    // Guardar la última ventana realmente válida para cierre/exportación en ref para evitar re-renderizados constantes
-    if (
+
+    // Última ventana válida, para el cierre de medición y la exportación.
+    //
+    // Solo se conserva mientras la evidencia sostiene la lectura. Antes bastaba
+    // con que el resultado hubiera sido válido ALGUNA vez, y como nada la
+    // borraba, esa copia sobrevivía al dedo y reaparecía en pantalla.
+    if (perfusionState === 'NOT_PERFUSED') {
+      lastValidRef.current = null;
+    } else if (
       result.heartRate.status === 'VALID' ||
       result.bloodPressure.status === 'VALID' ||
       (result.spo2.value ?? 0) > 0 ||

@@ -3,6 +3,7 @@ import type { ProcessedSignal, ContactState, FingerPlacementMode } from '@/types
 import type { VitalSignsResult, RGBData } from '@/modules/vital-signs/VitalSignsProcessor';
 import type { SignalQualityMetrics } from '@/types/measurements';
 import type { CameraRuntimeHints } from '@/lib/device/cameraDeviceProfile';
+import type { PerfusionState } from '@/modules/signal-processing/perfusionEvidence';
 
 import { SignalQualityIndex } from '@/modules/signal-quality/SignalQualityIndex';
 import {
@@ -82,6 +83,8 @@ interface VitalSignsProcessorAPI {
     faceBpm?: number,
     faceQuality?: number,
     accelRespiration?: { rpm: number; quality: number },
+    /** Veredicto de evidencia de perfusión: el reloj único de vigencia. */
+    perfusionState?: PerfusionState,
   ) => VitalSignsResult;
   setPlacementMode: (mode: FingerPlacementMode) => void;
   setRGBData: (data: RGBData) => void;
@@ -303,8 +306,27 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     processVitalSigns.setPlacementMode(placementMode);
     const fingerConfirmed = !!lastSignal.fingerDetected;
     const nowT = performance.now();
+
+    // ── La evidencia de perfusión manda sobre la detección de dedo ──────────
+    //
+    // `fingerDetected` responde a "¿esto PARECE un dedo?" — color, cobertura,
+    // escena — y una pared del color de la piel contesta que sí. Esa pregunta
+    // gobernaba todo el router: el latch de medición, la etapa de adquisición,
+    // el guardado y el bucle que resucitaba el último BPM.
+    //
+    // Ahora la evidencia espectral puede vetarla. Solo VETA, nunca habilita:
+    // no relaja ninguna condición previa, únicamente cierra la puerta cuando
+    // hay evidencia positiva de que lo que se mide no es sangre. Mientras el
+    // acumulador está indeciso rige el criterio anterior.
+    //
+    // Al concentrar el veto en esta única definición quedan corregidos de una
+    // vez todos sus consumidores —incluida la etapa de adquisición, que era la
+    // que llegaba a decir "señal estabilizada" sin que hubiera un dedo—, en vez
+    // de sembrar comprobaciones sueltas por todo el archivo.
+    const perfusionRejects = lastSignal.perfusion?.state === 'NOT_PERFUSED';
+
     const hasUsableContact =
-      fingerConfirmed && contactState !== 'NO_CONTACT';
+      fingerConfirmed && contactState !== 'NO_CONTACT' && !perfusionRejects;
 
     if (
       hasUsableContact &&
@@ -380,13 +402,14 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     // El push del diag se hace MÁS ABAJO, tras sobreescribir el stage/progress de
     // estabilización con el criterio REAL por convergencia (necesita bpmLive).
 
-    const bpmForLatch =
-      heartBeatResult.bpm > 0
-        ? heartBeatResult.bpm
-        : hasUsableContact
-          ? lastGoodBpmRef.current
-          : 0;
-    if (bpmForLatch > 0 && hasUsableContact) lastGoodBpmRef.current = bpmForLatch;
+    // El latch recibe SOLO la frecuencia medida en este ciclo.
+    //
+    // Antes, si no había BPM se usaba `lastGoodBpmRef.current` y acto seguido se
+    // volvía a guardar ese mismo valor como si fuera nuevo. El efecto era un
+    // bucle que se realimentaba: el valor viejo se refrescaba a sí mismo y no
+    // caducaba nunca mientras `hasUsableContact` siguiera en true — que es
+    // justo lo que ocurre cuando la detección de dedo se equivoca.
+    const bpmForLatch = heartBeatResult.bpm > 0 ? heartBeatResult.bpm : 0;
 
     measurementLatchRef.current = updateMeasurementSessionLatch(
       measurementLatchRef.current,
@@ -745,17 +768,29 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         spo2Channels: lastSignal.spo2Channels,
       };
 
-      const effectiveBpm = bpmOut || lastGoodBpmRef.current;
+      // El BPM que alimenta a SpO2 y presión sale de la medición viva, no de un
+      // valor guardado. El acoplamiento fisiológico se conserva —el gasto
+      // cardíaco es frecuencia × volumen sistólico, y el ratio-of-ratios
+      // necesita saber dónde están los latidos— pero lo alimenta una frecuencia
+      // actual. Antes aquí había `bpmOut || lastGoodBpmRef.current`, que al
+      // perderse la señal resucitaba el último BPM bueno y con él fabricaba un
+      // oxígeno y una presión que parecían normales sin que hubiera un dedo.
+      const perfusionState = lastSignal.perfusion?.state ?? 'UNDECIDED';
 
       const vitals = processVitalSigns.processSignal(
         lastSignal.filteredValue,
         rawSqi || lastSignal.quality || 0,
-        effectiveBpm,
+        bpmOut,
         rrForVitals,
         lastSignal.perfusionIndex,
         enrichedSqm,
         lastSignal.morphologyValue ?? lastSignal.filteredValue,
-        splitterChannels
+        splitterChannels,
+        undefined, // faceBvp
+        undefined, // faceBpm
+        undefined, // faceQuality
+        undefined, // accelRespiration
+        perfusionState
       );
 
       vitalSignsRef.current = vitals;
