@@ -112,10 +112,28 @@ Tests relevantes: `Detectors.test.ts`, `PPGSignalProcessor.test.ts`, `fingerRoiP
 
 - Estimaciones **orientativas** sin calibración de usuario (especialmente SpO2 y PA).
 - Variabilidad entre dispositivos (sensor RG-Bayer, torch, FPS).
-- Procesamiento en main thread (sin Web Worker aún).
 - No sustituye un pulsioxímetro ni un tensiómetro certificado.
+
+## Hilos
+
+El DSP corre en un **Web Worker** (`src/workers/ppgSignal.worker.ts`),
+instanciado por `useSignalProcessor`. El main thread sólo captura frames y
+renderiza; el `PPGSignalProcessor` vive dentro del worker y devuelve
+`ProcessedSignal` por `postMessage`.
+
+## Capas de suavizado
+
+Un vital atraviesa tres etapas con responsabilidades distintas — no son
+copias del mismo algoritmo, y no deben fusionarse:
+
+| Capa | Módulo | Rol |
+|---|---|---|
+| Clínica | `VitalSignsProcessor` | EMA sobre el valor estimado. Publica el valor real o `0`. **Nunca retiene** un valor viejo. |
+| Presentación | `useSignalRouter` | `smoothDisplayValue` / `smoothDisplayPair` sobre el estado React. |
+| Animación | `PPGSignalMeter` | `lerpDisplayValue` por frame de canvas. |
 
 ## Referencias internas
 
-- `docs/repository-cleanup.md` — depuración previa y mapa histórico
+- `docs/repository-cleanup.md` — depuración de julio 2026 (huérfanos, duplicados, valores fabricados)
 - `docs/no-simulation-audit.md` — política anti-simulación en runtime
+- `docs/dependency-audit.md` — inventario de dependencias y riesgo de simulación

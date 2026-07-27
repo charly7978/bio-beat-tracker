@@ -2,7 +2,6 @@ import { ArrhythmiaProcessor } from './arrhythmia-processor';
 import { BloodPressureProcessor } from './BloodPressureProcessor';
 import { SpO2Calculator, type RGBData } from './SpO2Calculator';
 export type { RGBData };
-import { DisplaySmoothing } from './DisplaySmoothing';
 
 import { createLogger } from '../../utils/logger';
 import { isPhysiologicalRR, getMonotonicNow } from '../../utils/physio';
@@ -130,13 +129,11 @@ export class VitalSignsProcessor {
 
   // Módulos extraídos para reducir tamaño del procesador
   private readonly spo2Calculator: SpO2Calculator;
-  private readonly displaySmoothing: DisplaySmoothing;
 
   constructor() {
     this.arrhythmiaProcessor = new ArrhythmiaProcessor();
     this.bloodPressureProcessor = new BloodPressureProcessor();
     this.spo2Calculator = new SpO2Calculator();
-    this.displaySmoothing = new DisplaySmoothing();
     this.arrhythmiaProcessor.setArrhythmiaDetectionCallback((detected) => {
       log.info(`Estado arritmia → ${detected ? 'ARRITMIA' : 'NORMAL'}`);
     });
@@ -179,7 +176,6 @@ export class VitalSignsProcessor {
     this.bpDiaWeightedSum = 0;
     this.bpTotalWeight = 0;
     this.spo2Calculator.reset();
-    this.displaySmoothing.reset();
   }
 
   forceCalibrationCompletion(): void {
@@ -460,10 +456,12 @@ export class VitalSignsProcessor {
     const bpUiReady =
       vitalUiGate || (this.validPulseCount >= 2 && sqi >= 12);
 
-    const spo2Shown = this.displaySmoothing.updateSpO2Hold(
-      this.measurements.spo2,
-      spo2UiReady && this.measurements.spo2 >= 70 && this.measurements.spo2 <= 100,
-    );
+    // Devolvemos el SPO2 tal cual si está gate-ready, 0 si no.
+    // El display hold (mantener último valor válido cuando se cierra la gate)
+    // lo maneja useSignalRouter, no el processor.
+    const spo2Shown = spo2UiReady && this.measurements.spo2 >= 70 && this.measurements.spo2 <= 100
+      ? this.measurements.spo2
+      : 0;
     const spo2HasDisplay = spo2Shown >= 70 && spo2Shown <= 100;
 
     const spo2Status: MeasurementStatus = !spo2UiReady && !spo2HasDisplay
@@ -476,13 +474,10 @@ export class VitalSignsProcessor {
             ? "VALID"
             : "REQUIRES_CALIBRATION";
 
-    const bpShown = this.displaySmoothing.updateBPHold(
-      this.measurements.systolicPressure,
-      this.measurements.diastolicPressure,
-      bpUiReady && this.measurements.systolicPressure > 0 && this.measurements.diastolicPressure > 0,
-    );
-    const bpSysShown = bpShown.systolic;
-    const bpDiaShown = bpShown.diastolic;
+    // Igual: devolvemos 0 si la gate no está lista, valor exacto si está lista.
+    const bpGateReady = bpUiReady && this.measurements.systolicPressure > 0 && this.measurements.diastolicPressure > 0;
+    const bpSysShown = bpGateReady ? this.measurements.systolicPressure : 0;
+    const bpDiaShown = bpGateReady ? this.measurements.diastolicPressure : 0;
     const bpHasMorph =
       bpUiReady &&
       this.lastBPConfidence !== 'INSUFFICIENT' &&
@@ -664,10 +659,8 @@ export class VitalSignsProcessor {
       if (isCoherent || this.spo2IncoherentStreak >= 25) {
         this.spo2IncoherentStreak = 0;
         this.lastCoherentSpO2 = spo2;
-        const pi = this.currentPerfusionIndex();
-        const wSpo2 = clamp(signalQuality / 80, 0.1, 1.0) * clamp(pi / 0.005, 0.1, 1.0);
-        const firstPass = this.displaySmoothing.smoothWeightedValue(this.measurements.spo2, spo2, wSpo2, 'stable');
-        this.measurements.spo2 = this.applyEma2('ema2Spo2', firstPass);
+        // EMA médico de SpO2 (sin display hold, eso lo hace useSignalRouter).
+        this.measurements.spo2 = this.applyEma2('ema2Spo2', spo2);
       }
     }
 
@@ -710,20 +703,9 @@ export class VitalSignsProcessor {
           const cw = this.confidenceToWeight(bpEstimate.confidence)
             * clamp(bpEstimate.featureQuality / 60, 0.1, 1.0);
 
-          const bpFirstSys = this.displaySmoothing.smoothWeightedValue(
-            this.measurements.systolicPressure,
-            finalSys,
-            cw,
-            'stable',
-          );
-          this.measurements.systolicPressure = this.applyEma2('ema2Sys', bpFirstSys);
-          const bpFirstDia = this.displaySmoothing.smoothWeightedValue(
-            this.measurements.diastolicPressure,
-            finalDia,
-            cw,
-            'stable',
-          );
-          this.measurements.diastolicPressure = this.applyEma2('ema2Dia', bpFirstDia);
+          // EMA médico de PA (sin display hold, eso lo hace useSignalRouter).
+          this.measurements.systolicPressure = this.applyEma2('ema2Sys', finalSys);
+          this.measurements.diastolicPressure = this.applyEma2('ema2Dia', finalDia);
 
           this.bpSysWeightedSum += finalSys * cw;
           this.bpDiaWeightedSum += finalDia * cw;
@@ -773,10 +755,10 @@ export class VitalSignsProcessor {
    */
 
   /**
-   * Segundo pase EMA sobre un valor ya suavizado por {@link DisplaySmoothing}.
-   * El primer pase (ponderado por confianza) lo hace displaySmoothing;
-   * este segundo pase reduce el residuo ruidoso con alpha fijo, sin añadir
-   * latencia apreciable porque el primer pase ya respondió al cambio.
+   * EMA médico con alpha fijo sobre el valor recién estimado.
+   * Reduce el residuo ruidoso del estimador sin ocultar cambios reales.
+   * El suavizado y el hold de presentación viven en useSignalRouter, no aquí:
+   * este processor publica el valor clínico o 0, nunca un valor retenido.
    */
   private applyEma2(
     key: 'ema2Spo2' | 'ema2Sys' | 'ema2Dia',
@@ -855,7 +837,6 @@ export class VitalSignsProcessor {
     };
     this.rgbData = { redAC: 0, redDC: 0, greenAC: 0, greenDC: 0 };
     this.lastPpgPerfusionIndex = 0;
-    this.displaySmoothing.reset();
     this.isCalibrating = false;
     this.calibrationSamples = 0;
     this.arrhythmiaProcessor.reset();

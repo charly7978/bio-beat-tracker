@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { VitalSignsProcessor } from '../VitalSignsProcessor';
-import { DisplaySmoothing } from '../DisplaySmoothing';
 import { SpO2Calculator } from '../SpO2Calculator';
 
 describe('VitalSignsProcessor', () => {
@@ -12,27 +11,17 @@ describe('VitalSignsProcessor', () => {
     expect(result!.spo2.value).toBeNull();
   });
 
-  it('smoothWeightedValue actualiza con mayor velocidad ante alta confianza y viceversa', () => {
-    const smoother = new DisplaySmoothing();
-    
-    // Test con peso = 1.0 (alta confianza)
-    const valHighConf = smoother.smoothWeightedValue(120, 140, 1.0, 'stable');
-    
-    // Test con peso = 0.1 (baja confianza)
-    const valLowConf = smoother.smoothWeightedValue(120, 140, 0.1, 'stable');
+  it('no publica lecturas retenidas: sin señal los vitales quedan en null', () => {
+    // El processor es la capa clínica: publica el valor medido o nada.
+    // El display hold (mantener el último valor mientras la gate está abajo)
+    // pertenece a useSignalRouter, no aquí. Sin frames procesados no puede
+    // existir ningún valor publicado.
+    const proc = new VitalSignsProcessor();
+    const result = proc.reset();
 
-    // Alta confianza debe estar más cerca del nuevo valor (140)
-    // que baja confianza (que debe quedarse más cerca del valor previo 120).
-    const diffHigh = Math.abs(valHighConf - 140);
-    const diffLow = Math.abs(valLowConf - 140);
-
-    expect(diffHigh).toBeLessThan(diffLow);
-    
-    // Ambas salidas deben ser valores numéricos finitos y coherentes
-    expect(isFinite(valHighConf)).toBe(true);
-    expect(isFinite(valLowConf)).toBe(true);
-    expect(valHighConf).toBeGreaterThan(120);
-    expect(valLowConf).toBeGreaterThan(120);
+    expect(result!.spo2.value).toBeNull();
+    expect(result!.bloodPressure.value).toBeNull();
+    expect(result!.heartRate.value).toBeNull();
   });
 
   it('SpO2Calculator rechaza DC insuficiente', () => {
