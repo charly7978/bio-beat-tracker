@@ -4,6 +4,8 @@ import { PPGSignalSplitter } from './PPGSignalSplitter';
 import { createLogger, ppgPerf } from '../../utils/logger';
 import { clamp } from '../../utils/math';
 import { RingF32 } from '../../utils/RingBuffer';
+import { evaluateHemoglobinSignature } from './hemoglobinSignature';
+import { PerfusionEvidence, type PerfusionVerdict } from './perfusionEvidence';
 import {
   DEFAULT_BACKPRESSURE_CONFIG,
   sanitizeBackpressureConfig,
@@ -141,6 +143,21 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
   private readonly redBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
   private readonly greenBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
   private readonly blueBuffer = new RingF32(DSP_CONSTANTS.BUFFER_SIZE);
+
+  /**
+   * Evidencia de que hay hemoglobina pulsando en el camino óptico.
+   * Es lo que impide que apuntar a una pared produzca un número: la firma
+   * espectral se evalúa sobre los canales crudos y se acumula secuencialmente.
+   */
+  private readonly perfusionEvidence = new PerfusionEvidence();
+  private lastSignatureAtMs = 0;
+  private cachedPerfusion: PerfusionVerdict = {
+    state: 'UNDECIDED',
+    logOdds: 0,
+    confidence: 0.5,
+  };
+  private lastSignatureAngleDeg = 0;
+  private lastSignatureReason = 'INSUFFICIENT_SAMPLES';
   private tileConfidence: number[] = new Array(25).fill(0);
   // Fusión multi-celda por pulsatilidad: señal de verde por celda + cache de
   // pulsatilidad (AC/DC) recalculada con throttle, y su máximo para normalizar.
@@ -472,6 +489,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.greenBuffer.push(zloAdjG);
     this.blueBuffer.push(zloAdjB);
 
+    this.evaluatePerfusionEvidence(timestamp);
+
     this.updateSignalMotion(roi.rawRed, roi.centroidMotion);
 
     // ACDC: más frecuente con dedo para que PI/SQI no queden en 0 varios segundos
@@ -631,13 +650,27 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.postMotionSuppression--;
     }
 
+    // VETO POR EVIDENCIA ESPECTRAL.
+    //
+    // Las condiciones de arriba responden a "¿esto parece un dedo?" — color,
+    // cobertura, escena — y una pared del color de la piel las satisface. Este
+    // veto responde a otra pregunta, la que no se puede falsear: ¿la variación
+    // temporal la produjo hemoglobina?
+    //
+    // Solo VETA; nunca habilita por su cuenta. Es decir, no relaja ninguna de
+    // las condiciones previas: únicamente puede cerrar la puerta cuando hay
+    // evidencia positiva de que lo que se está midiendo NO es sangre.
+    // Mientras el acumulador está indeciso se respeta el criterio anterior.
+    const perfusionRejected = this.cachedPerfusion.state === 'NOT_PERFUSED';
+
     const signalPathActive =
       (fingerUi ||
       (this.lastInstantFinger &&
         (hemoglobinScene || ensembleScene) &&
         this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.85)) &&
       !motionArtifact &&
-      this.postMotionSuppression <= 0;
+      this.postMotionSuppression <= 0 &&
+      !perfusionRejected;
     const displayQuality = signalPathActive
       ? fingerUi
         ? this.displaySqiEma
@@ -1763,6 +1796,71 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
    * salto grande del DC delata movimiento. EMA lenta → solo el movimiento
    * sostenido eleva el score; un único frame no alcanza el umbral de supresión.
    */
+  /**
+   * Evalúa la firma espectral de la hemoglobina sobre los canales crudos y
+   * acumula el resultado como evidencia secuencial.
+   *
+   * Se evalúa cada SIGNATURE_PERIOD_MS y no en cada frame: la ventana de
+   * análisis es de varios segundos, así que evaluarla más seguido no aporta
+   * información nueva y sí cuesta CPU en el hot path.
+   *
+   * Cuando el detector no puede decidir (canal recortado, señal bajo el piso
+   * de ruido) devuelve verosimilitud 0, y el acumulador solo aplica olvido: la
+   * ausencia de evidencia no se convierte en evidencia de ausencia.
+   */
+  private evaluatePerfusionEvidence(timestamp: number): void {
+    const SIGNATURE_PERIOD_MS = 500;
+    const SIGNATURE_WINDOW_S = 5;
+
+    if (this.lastSignatureAtMs === 0) {
+      this.lastSignatureAtMs = timestamp;
+      return;
+    }
+    if (timestamp - this.lastSignatureAtMs < SIGNATURE_PERIOD_MS) return;
+
+    const dtSeconds = (timestamp - this.lastSignatureAtMs) / 1000;
+    this.lastSignatureAtMs = timestamp;
+
+    const fs = this.estimatedSampleRate > 0 ? this.estimatedSampleRate : 30;
+    const want = Math.min(
+      this.redBuffer.length,
+      Math.round(SIGNATURE_WINDOW_S * fs),
+    );
+
+    if (want < 60) {
+      // Sin ventana suficiente no se opina; solo decae lo acumulado.
+      this.cachedPerfusion = this.perfusionEvidence.update(0, dtSeconds);
+      this.lastSignatureReason = 'INSUFFICIENT_SAMPLES';
+      return;
+    }
+
+    const signature = evaluateHemoglobinSignature(
+      this.redBuffer.tail(want),
+      this.greenBuffer.tail(want),
+      this.blueBuffer.tail(want),
+      fs,
+    );
+
+    this.lastSignatureAngleDeg = signature.chromaticAngleDeg;
+    this.lastSignatureReason = signature.reason;
+    this.cachedPerfusion = this.perfusionEvidence.update(
+      signature.logLikelihoodRatio,
+      dtSeconds,
+    );
+  }
+
+  /** Veredicto actual de perfusión (evidencia de hemoglobina pulsando). */
+  public getPerfusionVerdict(): PerfusionVerdict & {
+    chromaticAngleDeg: number;
+    reason: string;
+  } {
+    return {
+      ...this.cachedPerfusion,
+      chromaticAngleDeg: this.lastSignatureAngleDeg,
+      reason: this.lastSignatureReason,
+    };
+  }
+
   private updateSignalMotion(rawRed: number, centroidMotion = 0): void {
     if (this.lastRawRedForMotion === 0) {
       this.lastRawRedForMotion = rawRed;
