@@ -8,8 +8,6 @@ import {
   evaluateFinalMeasurementSave,
   type ArtifactMetrics,
 } from '@/lib/measurements/savePolicy';
-import { ValidationDataset } from '@/modules/vital-signs/ValidationDataset';
-import { CalibrationManager } from '@/modules/vital-signs/CalibrationManager';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('useSaveMeasurement');
@@ -125,34 +123,6 @@ export const useSaveMeasurement = () => {
       const spo2 = Math.round(vs.spo2.value ?? 0);
       const sys = Math.round(vs.bloodPressure.value?.systolic ?? 0);
       const dia = Math.round(vs.bloodPressure.value?.diastolic ?? 0);
-
-      // Add to Validation Dataset
-      try {
-        const calib = CalibrationManager.getInstance();
-        const bpProfile = calib.getActiveProfile('BP');
-        const spo2Profile = calib.getActiveProfile('SPO2');
-
-        ValidationDataset.addEntry({
-          timestamp: new Date().toISOString(),
-          device: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
-          quality: {
-            sqi: sq,
-            pi: vs.heartRate.signalQuality?.perfusionIndex ?? 0,
-            fps: vs.heartRate.signalQuality?.fpsEffective ?? 30,
-            jitter: vs.heartRate.signalQuality?.timestampJitterMs ?? 0,
-          },
-          rr: [],
-          vitals: vs,
-          reference: {
-            bpm: null,
-            spo2: (spo2Profile?.referenceValues as Record<string, number | undefined>)?.spo2 ?? null,
-            systolic: bpProfile?.referenceValues?.systolic ?? null,
-            diastolic: bpProfile?.referenceValues?.diastolic ?? null,
-          }
-        });
-      } catch (e) {
-        log.warn('Failed to add to validation dataset:', e);
-      }
 
       // Intentar obtener usuario
       let user = null;

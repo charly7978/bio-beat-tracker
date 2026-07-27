@@ -217,7 +217,6 @@ const Index = () => {
   const [webgpuAvail, setWebgpuAvail] = useState<'checking' | 'yes' | 'no'>('checking');
   const [healthAvail, setHealthAvail] = useState<'checking' | 'yes' | 'no'>('checking');
   const [encryptionReady, setEncryptionReady] = useState(false);
-  const [riskResult, setRiskResult] = useState<string | null>(null);
   const [age, setAge] = useState<string>("35");
   const [height, setHeight] = useState<string>("172");
   const [weight, setWeight] = useState<string>("70");
@@ -417,17 +416,6 @@ const Index = () => {
     return () => window.removeEventListener('storage', check);
   }, []);
 
-  // Run risk analysis on current vitals
-  useEffect(() => {
-    const vs = lastValidResults;
-    if (vs && (vs.heartRate.value || vs.spo2.value)) {
-      import('@/lib/ml/riskAnalyzer').then(({ healthRiskAnalyzer }) => {
-        const risk = healthRiskAnalyzer.analyze(vs);
-        setRiskResult(risk.timeline);
-      }).catch(() => {});
-    }
-  }, [lastValidResults?.heartRate.value, lastValidResults?.spo2.value]);
-
   // Cargar datos antropométricos desde CalibrationManager al montar
   useEffect(() => {
     const profile = CalibrationManager.getInstance().getAnthropometric();
@@ -534,32 +522,41 @@ const Index = () => {
       setRefDia("");
       setRefSpo2("");
       
-      // Forzar renderizado y recargar los valores en pantalla
-      if (lastValidResults) {
-        const updatedBP = calib.applyBloodPressureCalibration(
-          lastValidResults.bloodPressure.value?.systolic ?? 120,
-          lastValidResults.bloodPressure.value?.diastolic ?? 80
-        );
+      // Reaplicar los offsets recién guardados sobre las lecturas REALES ya
+      // medidas. Si un vital no tiene medición propia no se sintetiza un valor:
+      // se deja tal cual estaba (el pipeline lo publicará cuando exista señal).
+      const measuredBP = lastValidResults?.bloodPressure.value;
+      const measuredSpo2 = lastValidResults?.spo2.value;
+
+      if (measuredBP || measuredSpo2) {
+        const updatedBP = measuredBP
+          ? calib.applyBloodPressureCalibration(measuredBP.systolic, measuredBP.diastolic)
+          : null;
+
         const activeSpo2 = calib.getActiveProfile('SPO2');
         const spo2Off = activeSpo2 ? (activeSpo2.coefficients.spo2Offset ?? 0) : 0;
-        const updatedSpo2 = lastValidResults.spo2.value 
-          ? Math.min(99, Math.max(88, lastValidResults.spo2.value + spo2Off))
-          : 98;
-          
+        const updatedSpo2 = measuredSpo2
+          ? Math.min(99, Math.max(88, measuredSpo2 + spo2Off))
+          : null;
+
         router.setVitalSigns((prev) => ({
           ...prev,
-          bloodPressure: {
-            ...prev.bloodPressure,
-            value: { systolic: updatedBP.systolic, diastolic: updatedBP.diastolic },
-            status: 'VALID',
-            calibration: calib.getCalibrationInfo('BP')
-          },
-          spo2: {
-            ...prev.spo2,
-            value: updatedSpo2,
-            status: 'VALID',
-            calibration: calib.getCalibrationInfo('SPO2')
-          }
+          bloodPressure: updatedBP
+            ? {
+                ...prev.bloodPressure,
+                value: { systolic: updatedBP.systolic, diastolic: updatedBP.diastolic },
+                status: 'VALID',
+                calibration: calib.getCalibrationInfo('BP'),
+              }
+            : prev.bloodPressure,
+          spo2: updatedSpo2
+            ? {
+                ...prev.spo2,
+                value: updatedSpo2,
+                status: 'VALID',
+                calibration: calib.getCalibrationInfo('SPO2'),
+              }
+            : prev.spo2,
         }));
       }
     } else {
@@ -881,11 +878,6 @@ const Index = () => {
             <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${healthAvail === 'yes' ? 'bg-blue-500/10 text-blue-400' : 'bg-zinc-900/50 text-zinc-600'}`}>
               <Activity className="w-2 h-2" />HC{healthAvail === 'yes' ? '' : '—'}
             </span>
-            {riskResult && (
-              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[7px] font-bold ${riskResult === 'IMMEDIATE' ? 'bg-red-500/10 text-red-400' : riskResult === 'SOON' ? 'bg-orange-500/10 text-orange-400' : riskResult === 'MONITOR' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
-                <Brain className="w-2 h-2" />{riskResult}
-              </span>
-            )}
           </div>
 
           {/* RESUMEN ESTADÍSTICO POST-MEDICIÓN */}

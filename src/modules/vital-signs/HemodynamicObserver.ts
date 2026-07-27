@@ -25,7 +25,6 @@
 
 import { clamp } from '@/utils/math';
 import {
-  STATE_DIM,
   type HemodynamicState,
   type HemodynamicBpResult,
   defaultInitialState,
@@ -36,10 +35,8 @@ import {
   propagateState,
   propagationJacobian,
   stateToBloodPressure,
-  hemodynamicCoherence,
   isValidState,
 } from './hemodynamicModel';
-import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 
 // ═══════════════════════════════════════════════════════════
 // TAKENS DELAY EMBEDDING — Attractor reconstruction
@@ -243,86 +240,8 @@ function mat6Add(A: number[], B: number[]): number[] {
   return C;
 }
 
-function vec6MultiplyMV(M: number[], v: number[]): number[] {
-  const r = new Array(6).fill(0);
-  for (let i = 0; i < 6; i++) {
-    for (let j = 0; j < 6; j++) {
-      r[i] += M[i * 6 + j] * v[j];
-    }
-  }
-  return r;
-}
-
 function vec6Add(a: number[], b: number[]): number[] {
   return a.map((v, i) => v + b[i]);
-}
-
-function vec6Sub(a: number[], b: number[]): number[] {
-  return a.map((v, i) => v - b[i]);
-}
-
-/**
- * Invert a 6×6 matrix using Gauss-Jordan elimination.
- * Returns null if singular.
- */
-function mat6Inverse(M: number[]): number[] | null {
-  const n = 6;
-  const aug = new Array(n * 2 * n);
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < n; j++) {
-      aug[i * 2 * n + j] = M[i * n + j];
-      aug[i * 2 * n + n + j] = i === j ? 1 : 0;
-    }
-  }
-
-  for (let col = 0; col < n; col++) {
-    let maxRow = col;
-    let maxVal = Math.abs(aug[col * 2 * n + col]);
-    for (let row = col + 1; row < n; row++) {
-      const val = Math.abs(aug[row * 2 * n + col]);
-      if (val > maxVal) {
-        maxVal = val;
-        maxRow = row;
-      }
-    }
-    if (maxVal < 1e-12) return null;
-
-    if (maxRow !== col) {
-      for (let j = 0; j < 2 * n; j++) {
-        const tmp = aug[col * 2 * n + j];
-        aug[col * 2 * n + j] = aug[maxRow * 2 * n + j];
-        aug[maxRow * 2 * n + j] = tmp;
-      }
-    }
-
-    const pivot = aug[col * 2 * n + col];
-    for (let j = 0; j < 2 * n; j++) {
-      aug[col * 2 * n + j] /= pivot;
-    }
-
-    for (let row = 0; row < n; row++) {
-      if (row === col) continue;
-      const factor = aug[row * 2 * n + col];
-      for (let j = 0; j < 2 * n; j++) {
-        aug[row * 2 * n + j] -= factor * aug[col * 2 * n + j];
-      }
-    }
-  }
-
-  const inv = mat6Init();
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < n; j++) {
-      inv[i * n + j] = aug[i * 2 * n + n + j];
-    }
-  }
-  return inv;
-}
-
-/**
- * Scalar inversion for 1×1 "matrix" (measurement noise).
- */
-function scalarInverse(s: number): number {
-  return Math.abs(s) < 1e-15 ? 0 : 1 / s;
 }
 
 // ═══════════════════════════════════════════════════════════

@@ -1,69 +1,77 @@
 # Dependency Audit — Anti-Simulation
 
-**Date:** 2026-05-09
-**Scope:** All runtime and dev dependencies in `package.json`.
-**Question:** ¿Alguna librería puede inyectar señales sintéticas, valores aleatorios "plausibles" o datos por defecto en el pipeline PPG?
-**Result:** ✅ **Ninguna dependencia genera señales sintéticas en el pipeline médico.**
+**Última revisión:** 2026-07-27
+**Alcance:** todas las dependencias de runtime y dev en `package.json`.
+**Pregunta:** ¿Alguna librería puede inyectar señales sintéticas, valores
+aleatorios "plausibles" o datos por defecto en el pipeline PPG?
+**Resultado:** ✅ Ninguna dependencia genera señales sintéticas en el pipeline médico.
+
+> Revisión de julio 2026: el inventario anterior auditaba paquetes que **no
+> están instalados** (`next-themes`, `@tanstack/react-query`) y omitía todo el
+> bloque de Capacitor, que sí es runtime. La tabla de abajo se regeneró desde
+> el `package.json` real.
 
 ## Metodología
 
-1. Inventario completo de `dependencies` y `devDependencies`.
-2. Clasificación por categoría (UI, routing, backend client, build).
-3. Verificación de que ninguna toca el camino crítico cámara → PPG → vitales.
-4. Búsqueda en `src/` de `Math.random`, `mock`, `fake`, `dummy`, `synthetic`, `simulate` (resultado: 0 coincidencias en código de producción — ver `scripts/check-no-simulation.mjs`).
+1. Inventario desde `package.json` (no de memoria).
+2. Clasificación por categoría y verificación de si toca la ruta
+   cámara → PPG → vitales.
+3. Barrido de `src/` en busca de `Math.random`, `mock`, `fake`, `dummy`,
+   `synthetic`, `simulate` — automatizado en `scripts/check-no-simulation.mjs`.
 
-## Inventario y veredicto
+## Runtime (`dependencies`)
 
-### Runtime (`dependencies`)
+| Paquete | Categoría | Toca pipeline PPG | Riesgo |
+|---|---|---|---|
+| `react`, `react-dom` | UI runtime | No | ✅ Ninguno |
+| `react-router-dom` | Routing | No | ✅ Ninguno |
+| `@radix-ui/react-slot`, `@radix-ui/react-toast` | Primitivos UI | No | ✅ Ninguno |
+| `lucide-react` | Iconos SVG | No | ✅ Ninguno |
+| `class-variance-authority`, `clsx`, `tailwind-merge`, `tailwindcss-animate` | Styling | No | ✅ Ninguno |
+| `sonner` | Toasts | No | ✅ Ninguno |
+| `zustand` | Estado UI | No | ✅ Ninguno |
+| `@supabase/supabase-js` | Cliente backend | Sólo persistencia post-medición | ✅ Ninguno — no fabrica vitales |
+| `@capacitor/core`, `@capacitor/android`, `@capacitor/app` | Shell nativo | No | ✅ Ninguno |
+| `@capacitor/camera` | Permisos de cámara | **Sí (adquisición)** | ✅ Entrega frames reales del sensor; no sintetiza |
+| `@capacitor/filesystem`, `@capacitor/preferences`, `@capacitor/network`, `@capacitor/status-bar`, `@capacitor/haptics` | APIs de plataforma | No | ✅ Ninguno |
+| `@capgo/capacitor-health` | Export a Health Connect | Sólo escritura post-medición | ✅ Ninguno — no lee vitales de vuelta al pipeline |
 
-| Paquete | Categoría | Toca pipeline PPG | Riesgo de simulación | Notas |
-|---|---|---|---|---|
-| `react`, `react-dom` | UI runtime | No | ✅ Ninguno | Solo render. |
-| `react-router-dom` | Routing | No | ✅ Ninguno | |
-| `@radix-ui/react-slot`, `@radix-ui/react-toast` | UI primitives | No | ✅ Ninguno | |
-| `lucide-react` | Iconos SVG | No | ✅ Ninguno | Estático. |
-| `class-variance-authority`, `clsx`, `tailwind-merge`, `tailwindcss-animate` | Styling | No | ✅ Ninguno | |
-| `next-themes` | Theme switcher | No | ✅ Ninguno | |
-| `sonner` | Toasts | No | ✅ Ninguno | |
-| `@tanstack/react-query` | Cache de fetch | No (no se usa para signos vitales) | ✅ Ninguno | No produce datos por defecto. |
-| `@supabase/supabase-js` | Backend client | Solo persistencia post-medición | ✅ Ninguno | No fabrica vitales; solo lee/escribe. |
-
-### Build / dev (`devDependencies`)
+## Build / dev (`devDependencies`)
 
 | Paquete | Categoría | Riesgo |
 |---|---|---|
-| `vite`, `@vitejs/plugin-react-swc`, `lovable-tagger` | Build tooling | ✅ Ninguno (no entra al bundle de runtime médico). |
-| `typescript`, `@types/*`, `eslint*`, `globals`, `typescript-eslint` | Tipado / lint | ✅ Ninguno. |
-| `tailwindcss`, `postcss`, `autoprefixer` | CSS | ✅ Ninguno. |
-| `vitest`, `@vitest/ui`, `jsdom` | Testing | ✅ Ninguno (excluido por el guardrail). |
-| `@types/node` | Tipos | ✅ Ninguno. |
+| `vite`, `@vitejs/plugin-react-swc`, `lovable-tagger`, `@capacitor/cli` | Build tooling | ✅ Ninguno |
+| `typescript`, `@types/*`, `eslint*`, `globals`, `typescript-eslint` | Tipado / lint | ✅ Ninguno |
+| `tailwindcss`, `postcss`, `autoprefixer` | CSS | ✅ Ninguno |
+| `vitest`, `@vitest/ui`, `jsdom` | Testing | ✅ Ninguno (excluido del guardrail) |
 
 ## Lo que **NO** está instalado (intencional)
 
-Para mantener el pipeline puramente determinista a partir de píxeles reales, el proyecto **rechaza** las siguientes categorías:
-
 - ❌ Generadores de datos: `faker`, `@faker-js/faker`, `chance`, `casual`.
-- ❌ Mocks de red/datos: `msw`, `nock`, `sinon`, `jest-mock-extended`.
-- ❌ Síntesis de señal/audio: `tone`, `osc-js`, `wavefile` (lectura sintetizada).
-- ❌ Pseudo-random "seguros para UI": `nanoid` con seed sintético, `seedrandom`.
-- ❌ Charting con sampling sintético por defecto (Recharts/Chart.js no se usan en la onda PPG; el monitor renderiza con `<canvas>` directamente).
+- ❌ Mocks de red/datos: `msw`, `nock`, `sinon`.
+- ❌ Síntesis de señal/audio: `tone`, `osc-js`, `wavefile`.
+- ❌ PRNG con semilla: `seedrandom`.
+- ❌ Runtimes de inferencia: `onnxruntime-web`, `@tensorflow/tfjs`. El
+  directorio `training/` que los presuponía se eliminó en julio 2026 (era
+  huérfano y entrenaba sobre PPG sintético).
 
-Si en el futuro se necesita alguno (ej. `faker` para tests), debe quedar en `devDependencies` y nunca importarse desde `src/modules/**` ni desde `src/hooks/use{Signal,VitalSigns,HeartBeat}*`.
+Si alguno hace falta para tests, va en `devDependencies` y nunca se importa
+desde `src/modules/**` ni desde `src/hooks/use{Signal,VitalSigns,HeartBeat}*`.
 
 ## Garantías automatizadas
 
-1. **`scripts/check-no-simulation.mjs`** — escanea `src/` (excluyendo tests) y falla si encuentra `Math.random`, `mock`, `fake`, `dummy`, `synthetic`, `simulate`. Excepciones explícitas vía marcador `// anti-sim-allow: <razón>`.
-2. **CI (`.github/workflows/ci.yml`)** — ejecuta `npm run check:no-sim` en cada push/PR. Build rojo si falla.
-3. **Pre-commit hook (`.githooks/pre-commit`)** — bloquea commits con `Math.random` y keywords de simulación.
-4. **Política de PR** — cualquier nueva dependencia debe agregarse a este informe con su categoría y justificación.
+1. `scripts/check-no-simulation.mjs` — escanea `src/` (sin tests) y falla ante
+   los patrones prohibidos. Excepciones sólo con marcador
+   `// anti-sim-allow: reason="..." ref="..."` o entrada en
+   `scripts/anti-sim-allowlist.json` (ambos exigen `reason` y `ref`).
+2. `scripts/check-no-simulation-dist.mjs` — repite el barrido sobre el bundle
+   construido, por si entra vía dependencia transitiva.
+3. CI (`.github/workflows/ci.yml`) ejecuta `npm run check:all` en cada push/PR.
 
-## Procedimiento para agregar una nueva dependencia
+## Procedimiento para agregar una dependencia
 
-1. Justificar en el PR por qué es necesaria.
-2. Confirmar que no toca `src/modules/signal-processing/**`, `src/modules/vital-signs/**` ni `src/components/CameraView.tsx`.
-3. Actualizar la tabla de inventario en este documento.
-4. Verificar que `npm run check:no-sim` y los tests pasan.
-
-## Conclusión
-
-El árbol de dependencias actual es **mínimo y auditado**. Ninguna librería puede contaminar el pipeline médico con valores sintéticos. El guardrail de CI bloquea automáticamente cualquier regresión.
+1. Justificarla en el PR.
+2. Confirmar que no toca `src/modules/signal-processing/**`,
+   `src/modules/vital-signs/**` ni `src/components/CameraView.tsx`.
+3. Actualizar la tabla de arriba.
+4. Verificar que `npm run check:all` pasa.

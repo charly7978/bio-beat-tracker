@@ -20,11 +20,10 @@
  */
 
 import { VITAL_THRESHOLDS } from '../../config/vitalThresholds';
-import { isPhysiologicalRR } from '../../utils/physio';
 import type { FingerPlacementMode } from '../../types/signal';
 import { HemodynamicObserver } from './HemodynamicObserver';
-import type { HemodynamicBpResult, AnthropometricProfile } from './hemodynamicModel';
-import { clamp } from '../../utils/math';
+import type { AnthropometricProfile } from './hemodynamicModel';
+import { median } from '../../utils/stats';
 
 export interface BPEstimate {
   systolic: number;
@@ -119,7 +118,14 @@ export class BloodPressureProcessor {
       return this.staleOrInsufficient(insufficient);
     }
 
-    const bpm = externalHr ?? 60;
+    // La frecuencia que alimenta al observador sale siempre de datos reales:
+    // el BPM del detector si está disponible, si no la mediana de los RR ya
+    // validados. Nunca se asume un valor de reposo por defecto.
+    let bpm = externalHr && externalHr > 0 ? externalHr : 0;
+    if (bpm <= 0) {
+      const medianRr = median(rrIntervals);
+      bpm = medianRr > 0 ? 60000 / medianRr : 0;
+    }
     for (let i = 0; i < signalBuffer.length; i++) {
       this.feedPpgFrame(signalBuffer[i], this.ppgFrameIndex * (1000 / sampleRate), sampleRate, bpm);
     }

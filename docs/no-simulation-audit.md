@@ -1,18 +1,37 @@
 # Auditoría Anti-Simulación — Pipeline PPG
 
-**Fecha de auditoría:** 2026-05-09
+**Última revisión:** 2026-07-27
 **Alcance:** cámara → procesamiento → BPM → SpO₂ → Presión Arterial → Arritmias → UI
-**Resultado:** ✅ **Sin simulaciones, sin valores artificiales, sin generadores aleatorios.**
+**Resultado:** ✅ Limpio **tras corregir tres focos de fabricación** encontrados
+en julio 2026 (ver más abajo). La revisión anterior los daba por inexistentes.
+
+## Hallazgos de julio 2026 — corregidos
+
+La auditoría de mayo declaraba el pipeline limpio, pero su barrido de valores
+clínicos era demasiado estrecho: buscaba `120/80` literal y
+`return.*spo2.*9[0-9]`, patrones que **no capturan el operador de fallback**
+`?? 120`. Con `rg "\?\? *(72|98|120|80|60)"` aparecieron tres:
+
+| Ubicación | Fabricación | Corrección |
+|---|---|---|
+| `src/lib/ml/riskAnalyzer.ts` | `hr ?? 72`, `spo2 ?? 98`, `systolic ?? 120`, `diastolic ?? 80` alimentaban un veredicto clínico (`IMMEDIATE`…`NORMAL`) pintado como badge. Con sólo HR medido, la app concluía "sin hipertensión / sin hipoxia" sobre un 120/80 inventado. | Módulo y badge **eliminados**. |
+| `src/pages/Index.tsx` (`handleCalibrate`) | Escribía `?? 120`, `?? 80` y `: 98` en el estado con `status: 'VALID'`. | Sólo reaplica offsets sobre vitales realmente medidos. |
+| `src/modules/vital-signs/BloodPressureProcessor.ts` | `externalHr ?? 60` asumía 60 bpm de reposo. | Deriva la frecuencia de la mediana de los RR reales. |
+
+**Lección:** el guardrail automatizado cubre keywords (`mock`, `fake`,
+`synthetic`…) pero no detecta constantes fisiológicas plausibles usadas como
+fallback. Ese patrón hay que buscarlo a mano: `?? <número>`, `|| <número>` y
+`: <número>` sobre vitales.
 
 ## Búsquedas ejecutadas
 
 | Patrón | Comando | Resultado |
 |---|---|---|
 | `Math.random` | `rg "Math\.random" src/` | **0 coincidencias** |
-| `simulate / mock / fake / dummy / stub` | `rg -i "simulat\|mock\|fake\|dummy\|stub"` | Solo `placeholder=` en `<input>` HTML de Auth (legítimo) |
-| Generadores sintéticos (`sine/cosine wave / synthetic / generate signal / seed`) | `rg -i "synthet\|sine.*wave\|generate.*signal\|seed"` | **0 coincidencias** |
-| `Math.sin / Math.cos` en pipeline | `rg "Math\.(sin\|cos)"` | Solo en `BandpassFilter.ts` (coeficientes Butterworth IIR) — **operación matemática legítima** |
-| Valores clínicos hardcoded (`120/80`, `98%`, baseline fijos) | `rg "120/80\|return.*spo2.*9[0-9]"` | Solo en **comentarios explicativos** ("SIN BASE FIJA 120/80") |
+| `simulate / mock / fake / dummy / stub` | `rg -i "simulat\|mock\|fake\|dummy\|stub" src/` | **0** en producción (automatizado en `check:no-sim`) |
+| Generadores sintéticos | `rg -i "synthet\|generate.*signal\|seed" src/` | **0 coincidencias**. El generador de PPG sintético que existía en `training/` se eliminó con el directorio. |
+| `Math.sin / Math.cos` en pipeline | `rg "Math\.(sin\|cos)" src/` | Coeficientes Butterworth IIR y proyección 3D del canvas — **matemática legítima** |
+| Fallbacks fisiológicos | `rg "\?\? *(72\|98\|120\|80\|60)" src/` | **0 coincidencias** tras las correcciones de arriba |
 
 ## Garantías por capa
 
@@ -42,16 +61,23 @@
 - Sin floor `90%`, sin clamping fisiológico forzado.
 
 ### 7. Presión arterial (`BloodPressureProcessor.ts`)
-- Modelo de regresión PWA sobre 74 features morfológicos reales (APG b/a, d/a, AIx, SI, dicrotic notch).
-- Si features insuficientes → `{systolic:0, diastolic:0, confidence:'INSUFFICIENT'}` → UI muestra `--/--`.
-- Sin base fija 120/80 — verificado por comentario explícito en el código.
-- Sin calibración manual ni offsets sintéticos (calibration wizard eliminado).
+- Observador hemodinámico EKF (Moens-Korteweg + Windkessel) sobre la señal PPG
+  real; sin pesos entrenados.
+- Si el observador no converge → `{systolic:0, diastolic:0, confidence:'INSUFFICIENT'}` → UI muestra `--/--`.
+- Sin base fija 120/80.
+- La frecuencia que alimenta al observador sale del BPM del detector o, si no
+  hay, de la **mediana de los RR reales** ya validados. No se asume 60 bpm de
+  reposo (corregido en julio 2026).
+- **Sí existe calibración manual** por referencia de tensiómetro
+  (`CalibrationManager`, perfiles `BP` / `SPO2` con caducidad de 30 días). Guarda
+  un *offset* contra una lectura real del usuario; no sintetiza valores. Una
+  afirmación previa de este documento decía que se había eliminado — era falsa.
 
 ### 8. Arritmias (`arrhythmia-processor.ts`)
 - Detectadas exclusivamente desde RR-intervals reales obtenidos de los picos del HeartBeatProcessor.
 - Estado inicial: `"SIN ARRITMIAS|0"`. No se incrementa el contador sin evento RR genuino.
 
-### 9. Capa de UI (`Index.tsx`, `PPGSignalMeter.tsx`, `VitalSign.tsx`)
+### 9. Capa de UI (`Index.tsx`, `PPGSignalMeter.tsx`)
 - Todos los componentes muestran `--` cuando el valor es `0` o `null` proveniente del pipeline.
 - Redondeo a entero **solo en presentación** (`Math.round(heartRate)`); precisión float preservada en cálculos internos.
 - Suavizado EMA aplicado solo para estabilidad visual, nunca para enmascarar pérdida de señal.
@@ -68,4 +94,14 @@
 
 ## Conclusión
 
-El pipeline cumple estrictamente la regla **`Medical Philosophy`** del proyecto: *"Prioritize 'no reading' over false reading"*. Todas las métricas se derivan exclusivamente de píxeles reales capturados con flash; cuando la señal es insuficiente, la app muestra `--` y conserva `confidence='INSUFFICIENT'` en lugar de inventar valores.
+Tras las correcciones de julio 2026 el pipeline cumple la regla
+**`Medical Philosophy`** del proyecto: *"Prioritize 'no reading' over false
+reading"*. Todas las métricas se derivan de píxeles reales capturados con
+flash; cuando la señal es insuficiente la app muestra `--` y conserva
+`confidence='INSUFFICIENT'` en lugar de inventar valores.
+
+Conviene no leer este documento como un certificado permanente. La revisión
+anterior afirmaba lo mismo mientras `riskAnalyzer.ts` emitía un veredicto
+clínico sobre un 120/80 inventado. Lo que sostiene la garantía es
+`npm run check:all` en CI más una relectura periódica de los fallbacks; no la
+existencia de este archivo.

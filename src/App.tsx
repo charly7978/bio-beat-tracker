@@ -1,6 +1,7 @@
 import React from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
-import { ToastProvider, ToastViewport } from "@/components/ui/toast";
+import { ToastProvider } from "@/components/ui/toast";
+import { Toaster } from "@/components/ui/toaster";
 import {
   SignalProcessingErrorBoundary,
   CameraErrorBoundary,
@@ -74,7 +75,7 @@ const App = () => {
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Router>
-          <ToastViewport />
+          <Toaster />
         </ToastProvider>
       </NetworkErrorBoundary>
     </ErrorBoundary>

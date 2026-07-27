@@ -37,9 +37,6 @@ import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
 /** Blood density (kg/m³) */
 const RHO_BLOOD = 1060;
 
-/** Blood kinematic viscosity (m²/s) — typical 3.5 cSt */
-const NU_BLOOD = 3.5e-6;
-
 /** Typical arterial wall Young's modulus (Pa) — ranges 0.4–1.6 MPa */
 const E_DEFAULT = 8.0e5;
 
@@ -52,11 +49,6 @@ const H_DEFAULT = 0.5e-3;
 /** Arterial segment length for PTT estimation (m) — aorta to fingertip ~0.7m */
 const L_ARTERY = 0.7;
 
-/** Heart period typical (s) */
-const T_HEART = 0.85;
-
-/** Gravity for mmHg conversion */
-const MMHG_TO_PA = 133.322;
 
 // ═══════════════════════════════════════════════════════════
 // STATE VECTOR — The hidden hemodynamic state
@@ -379,14 +371,18 @@ export function propagateState(
 /**
  * Jacobian of state propagation ∂f/∂x — needed for EKF prediction.
  * Returns 6×6 matrix (flat array, row-major).
+ *
+ * `hr` entra en `propagateState` sólo como entrada exógena (el objetivo de PWV
+ * y el periodo cardíaco), nunca como variable de estado, así que sus términos
+ * se derivan a constante y desaparecen de ∂f/∂x. Se mantiene en la firma para
+ * que coincida con `propagateState` en el punto de llamada del EKF.
  */
 export function propagationJacobian(
   state: number[],
   dt: number,
-  hr: number,
+  _hr: number,
 ): number[] {
-  const [pMAP, R, C, PWV] = state;
-  const T = Math.max(0.3, 60 / Math.max(40, Math.min(200, hr)));
+  const [pMAP, R] = state;
 
   // Sensitivity of pressure evolution to each state
   const dpMAP_dR = (pMAP / (R * 1e6)) * 0.001 * dt * 50 / Math.max(0.01, R);
@@ -394,7 +390,6 @@ export function propagationJacobian(
   const dpMAP_dPWV = 0;
 
   // Sensitivity of PWV evolution
-  const PWVtarget = 5.5 + 1.5 * (hr - 72) / 60;
   const dPWV_dPWV = 1 - 0.01 * dt;
 
   // Sensitivity of compliance evolution
@@ -488,7 +483,9 @@ export function hemodynamicCoherence(state: number[]): number {
  * physiologically derived relationships.
  */
 export function stateToBloodPressure(state: number[]): HemodynamicBpResult {
-  const [pMAP, R, C, PWV, pDia, gamma] = state;
+  // El índice 4 (pDia) se omite: aquí la diastólica se deriva de MAP y PP,
+  // no del estado crudo.
+  const [pMAP, R, C, PWV, , gamma] = state;
 
   // MAP is directly estimated (state variable)
   const map = clamp(pMAP, VITAL_THRESHOLDS.BP.MAP_MIN, VITAL_THRESHOLDS.BP.MAP_MAX);
