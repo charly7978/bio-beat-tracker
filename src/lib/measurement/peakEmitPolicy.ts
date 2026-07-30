@@ -64,24 +64,24 @@ export function decidePeakEmit(input: PeakEmitPolicyInput): PeakEmitDecision {
 
   const elConf = (ens.diagnostics as { elgendiConfidence?: number }).elgendiConfidence ?? 0;
 
-  // Refractario FIJO (~300 ms, validado): bloquea doble conteo y muesca dícrota
-  // por tiempo SIN escalar con la mediana RR. Así no bloquea latidos prematuros
-  // (arritmias) ni se alarga hasta frenar la detección. La dícrota de baja
-  // amplitud la filtra Elgendi (cuadrado + rechazo de amplitud relativa).
-  const minGap = PEAK_DETECTION_DEFAULTS.peakEmitRefractoryMinMs;
-
   // Guard "latido imposiblemente temprano" (anti-dícrota a HR baja / doble conteo):
   // sólo por el lado bajo del RR → no recorta HR altas ni bloquea arritmias.
   let prevRrMed = rrMedianMs(recentRrMs);
   if (stableBpm > 0) {
     const stableRr = 60000 / stableBpm;
     if (prevRrMed > 0) {
-      // Anchoring prevRrMed: prevents noise and artifacts from pulling the median RR
-      // down into high-frequency loop cascades. Allows up to 20% physiological deviation.
       prevRrMed = clamp(prevRrMed, stableRr * 0.8, stableRr * 1.2);
     } else {
       prevRrMed = stableRr;
     }
+  }
+
+  // Refractario adaptivo: escala con la mediana RR pero con piso de 300 ms
+  // (anti-doble conteo) y techo de 400 ms (no frenar HR alta).
+  const baseRefractory = PEAK_DETECTION_DEFAULTS.peakEmitRefractoryMinMs;
+  let minGap = baseRefractory;
+  if (prevRrMed > 400) {
+    minGap = clamp(Math.round(prevRrMed * 0.25), baseRefractory, 400);
   }
   const minRrAbs =
     prevRrMed > 0 ? prevRrMed * PEAK_DETECTION_DEFAULTS.peakEmitMinRrFrac : 0;
