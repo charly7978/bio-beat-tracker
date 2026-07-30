@@ -482,8 +482,10 @@ export class ArrhythmiaProcessor {
     const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
     if (median <= 0) return;
     for (const r of valid) this.warmupSpread.push(Math.abs(r - median));
-    if (this.warmupSpread.length > 400) {
-      this.warmupSpread = this.warmupSpread.slice(-400);
+    // Buffer de 200 (↓ de 400): el deadband se aprende de datos más recientes,
+    // adaptándose más rápido al ritmo real del usuario.
+    if (this.warmupSpread.length > 200) {
+      this.warmupSpread = this.warmupSpread.slice(-200);
     }
   }
 

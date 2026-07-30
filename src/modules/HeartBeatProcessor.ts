@@ -49,6 +49,8 @@ export class HeartBeatProcessor {
   private cachedGateRange = 0;
   private cachedSampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
   private cachedPeriodicity: { bpm: number; score: number } = { bpm: 0, score: 0 };
+  /** Beat window suavizado (EMA) para evitar oscilaciones que causan latidos erráticos. */
+  private smoothedBeatWindowMs = PEAK_DETECTION_DEFAULTS.beatWindowMs;
 
   private lastDiagnostics: HeartBeatProcessDiagnostics = {};
   private lastEmittedPeakTime = 0;
@@ -151,27 +153,28 @@ export class HeartBeatProcessor {
       const sorted = [...rr].sort((a, b) => a - b);
       medRr = sorted[Math.floor(sorted.length / 2)] ?? 0;
     } else if (this.cachedPeriodicity.bpm > 0 && this.cachedPeriodicity.score >= 0.3) {
-      // Aún sin RR emitidos: usa la estimación espectral (autocorr) para que la
-      // ventana se ensanche desde el ARRANQUE a baja frecuencia (no solo al sostener).
       medRr = 60000 / this.cachedPeriodicity.bpm;
     }
 
     if (this.smoothBPM > 0) {
       const stableRr = 60000 / this.smoothBPM;
       if (medRr > 0) {
-        // Prevents adaptive window length from collapsing under noise transients
         medRr = clamp(medRr, stableRr * 0.8, stableRr * 1.2);
       } else {
         medRr = stableRr;
       }
     }
 
-    if (medRr <= 0) return PEAK_DETECTION_DEFAULTS.beatWindowMs;
-    return clamp(
+    if (medRr <= 0) return this.smoothedBeatWindowMs;
+    const raw = clamp(
       medRr * PEAK_DETECTION_DEFAULTS.beatWindowRrFactor,
       PEAK_DETECTION_DEFAULTS.beatWindowMs,
       PEAK_DETECTION_DEFAULTS.beatWindowMsMax,
     );
+    // EMA smoothing: previene oscilaciones del beat window que causan
+    // alternancia detección/no-detección de picos (latidos erráticos).
+    this.smoothedBeatWindowMs = this.smoothedBeatWindowMs * 0.65 + raw * 0.35;
+    return this.smoothedBeatWindowMs;
   }
 
   private gateRangeMin(): number {
@@ -228,9 +231,18 @@ export class HeartBeatProcessor {
     if (this.frameTick % 4 === 0 || this.cachedGateRange === 0) {
       const recentForGate = this.signalBuffer.slice(-60);
       const gSorted = [...recentForGate].sort((a, b) => a - b);
-      this.cachedGateRange =
-        (gSorted[Math.floor(gSorted.length * 0.9)] ?? 0) -
-        (gSorted[Math.floor(gSorted.length * 0.1)] ?? 0);
+      // IQR (P75-P25) es más robusto a outliers que P90-P10; escala ×1.9 para
+      // aproximar el rango del 80% de la distribución. Suavizado EMA evita
+      // oscilaciones del gate que causan latidos erráticos.
+      const iqrRange =
+        (gSorted[Math.floor(gSorted.length * 0.75)] ?? 0) -
+        (gSorted[Math.floor(gSorted.length * 0.25)] ?? 0);
+      const rawRange = iqrRange * 1.9;
+      if (this.cachedGateRange === 0) {
+        this.cachedGateRange = rawRange;
+      } else {
+        this.cachedGateRange = this.cachedGateRange * 0.7 + rawRange * 0.3;
+      }
     }
 
     const windowLen = this.consecutivePeaks < 3 ? 90 : 150;
@@ -599,6 +611,7 @@ export class HeartBeatProcessor {
     this.gateRelaxUntilMs = 0;
     this.reacquireModeUntilMs = 0;
     this.lastDiagnostics = {};
+    this.smoothedBeatWindowMs = PEAK_DETECTION_DEFAULTS.beatWindowMs;
   }
 
   reset(): void {
@@ -611,6 +624,7 @@ export class HeartBeatProcessor {
     this.ppgSqi = 0;
     this.ppgPerfusionIndex = 0;
     this.ppgMotionScore = 0;
+    this.smoothedBeatWindowMs = PEAK_DETECTION_DEFAULTS.beatWindowMs;
   }
 
   dispose(): void {

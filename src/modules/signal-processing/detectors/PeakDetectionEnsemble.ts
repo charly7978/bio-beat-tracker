@@ -8,7 +8,7 @@ import { clamp } from '../../../utils/math';
 import { median } from '../../../utils/stats';
 import { isPhysiologicalRR } from '../../../utils/physio';
 import { computeDetectorCalibration } from '../../../lib/measurement/detectorCalibration';
-import { scorePeakCandidate } from '../../../lib/measurement/peakScoring';
+import { scorePeakCandidate, computePeakShapeQuality } from '../../../lib/measurement/peakScoring';
 import { ElgendiPeakDetector } from './ElgendiPeakDetector';
 
 export interface PeakDetectionEnsembleInput {
@@ -150,6 +150,10 @@ export class PeakDetectionEnsemble {
         }
         if (rrSlice.length) prevMed = median(rrSlice);
       }
+      // Shape quality: segunda derivada del pico — picos PPG reales tienen
+      // aceleración sistólica fuerte (RMS alto vs contexto).
+      const peakIdx = sortedIdx[i] ?? 0;
+      const shapeQ = computePeakShapeQuality(signal, peakIdx, Math.max(4, Math.round(fsEffective * 0.15)));
       peakScores.push(
         scorePeakCandidate({
           elConf: el.confidence,
@@ -158,6 +162,7 @@ export class PeakDetectionEnsemble {
           perfusionIndex,
           rrMs,
           prevRrMedianMs: prevMed > 0 ? prevMed : undefined,
+          shapeQuality: shapeQ,
         }),
       );
     }
