@@ -250,8 +250,8 @@ export class HeartBeatProcessor {
     const peakStallMs =
       this.lastEmittedPeakTime > 0 ? now - this.lastEmittedPeakTime : 0;
     const autoGateRelax =
-      this.fingerContactConfirmed && peakStallMs > 2000
-        ? clamp(1 - (peakStallMs - 2000) / 8000, 0.55, 1)
+      this.fingerContactConfirmed && peakStallMs > 1600
+        ? clamp(1 - (peakStallMs - 1600) / 7000, 0.45, 1)
         : 1;
     const manualRelax = now < this.gateRelaxUntilMs ? 0.5 : 1;
     const gateScale =
@@ -293,7 +293,7 @@ export class HeartBeatProcessor {
         nowMs: now,
         emittedPeakCount: this.emittedPeakCount,
         peakStallMs,
-        reacquireMode: now < this.reacquireModeUntilMs || peakStallMs >= 2200,
+        reacquireMode: now < this.reacquireModeUntilMs || peakStallMs >= 1800,
         recentRrMs: this.rrIntervals,
         sqi: ensSqi,
         perfusionIndex: this.ppgPerfusionIndex,

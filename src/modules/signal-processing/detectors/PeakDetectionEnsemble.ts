@@ -1,6 +1,5 @@
 /**
- * Ensemble de detección de picos PPG: Elgendi + Hamilton + validación espectral.
- * Voting genuino entre dos detectores con fusión por tolerancia temporal.
+ * Detección de picos PPG con Elgendi optimizado.
  */
 import type { PeakDetectionResult } from '../../../types/measurements';
 import { PEAK_DETECTION_DEFAULTS } from '../../../config/signalProcessing';
@@ -11,8 +10,6 @@ import { isPhysiologicalRR } from '../../../utils/physio';
 import { computeDetectorCalibration } from '../../../lib/measurement/detectorCalibration';
 import { scorePeakCandidate } from '../../../lib/measurement/peakScoring';
 import { ElgendiPeakDetector } from './ElgendiPeakDetector';
-import { HamiltonPPG } from './HamiltonPPG';
-import { bandLimitedDominantFreq, autocorrDominantLag } from '../shared/dsp';
 
 export interface PeakDetectionEnsembleInput {
   signal: number[];
@@ -20,12 +17,10 @@ export interface PeakDetectionEnsembleInput {
   samplingRateHz: number;
   sqi?: number;
   perfusionIndex?: number;
+  /** Beat-window adaptativo (ms) según ritmo detectado; default Elgendi si se omite. */
   beatWindowMs?: number;
   legacyPeakIndices?: number[];
 }
-
-/** Tolerancia para fusionar picos de ambos detectores (ms) */
-const MERGE_TOLERANCE_MS = 120;
 
 export class PeakDetectionEnsemble {
   static analyze(input: PeakDetectionEnsembleInput): PeakDetectionResult {
@@ -40,13 +35,12 @@ export class PeakDetectionEnsemble {
         bpmInstant: null,
         bpmStable: null,
         confidence: 0,
-        agreement: { elgendi: 0, hamilton: 0, spectral: 0 },
+        agreement: { elgendi: 0 },
         rejectedPeaks: [],
         diagnostics: { reason: 'INSUFFICIENT_WINDOW' },
       };
     }
 
-    // Adaptar fs desde timestamps
     const gaps: number[] = [];
     for (let i = 1; i < timestampsMs.length; i++) {
       const d = timestampsMs[i] - timestampsMs[i - 1];
@@ -68,12 +62,15 @@ export class PeakDetectionEnsemble {
     }
 
     const calibration = computeDetectorCalibration(
-      signal, fsEffective, sqi, perfusionIndex,
+      signal,
+      fsEffective,
+      sqi,
+      perfusionIndex,
     );
 
-    // ── Detector 1: Elgendi ──
     const el = ElgendiPeakDetector.detect({
-      signal, timestampsMs,
+      signal,
+      timestampsMs,
       samplingRateHz: fsEffective,
       sqi,
       minProminence: calibration.elgendiMinProminence,
@@ -81,87 +78,29 @@ export class PeakDetectionEnsemble {
       beatWindowMs: input.beatWindowMs,
     });
 
-    // ── Detector 2: Hamilton ──
-    const ham = HamiltonPPG.detect({
-      signal, timestampsMs,
-      samplingRateHz: fsEffective,
-      sqi,
-    });
+    const elTimeAt = (j: number): number => {
+      const ie = el.peaks[j] ?? 0;
+      return el.peakTimes[j] ?? timestampsMs[ie] ?? 0;
+    };
 
-    // ── Validación espectral ──
-    // Estima la frecuencia dominante en la banda cardíaca (0.7–4.0 Hz)
-    // y la compara con la estimación por autocorrelación.
-    const spectralResult = bandLimitedDominantFreq(signal, fsEffective, 0.7, 4.0);
-    const autoResult = autocorrDominantLag(
-      signal.map((v) => v),
-      Math.max(5, Math.round((fsEffective * 60) / 200)),
-      Math.min(signal.length - 8, Math.round((fsEffective * 60) / 38)),
-    );
-    const autoBpm = autoResult.lag > 0 ? (60 * fsEffective) / autoResult.lag : 0;
-    const spectralBpm = spectralResult.freqHz > 0 ? spectralResult.freqHz * 60 : 0;
-
-    // Concordancia espectral: ambos estimadores deben concordar (±15%)
-    let spectralAgreement = 0;
-    if (autoBpm > 0 && spectralBpm > 0) {
-      const relDiff = Math.abs(autoBpm - spectralBpm) / Math.max(autoBpm, spectralBpm);
-      spectralAgreement = clamp(1 - relDiff / 0.15, 0, 1) * spectralResult.quality;
-    } else if (spectralResult.freqHz > 0 && spectralResult.quality > 0.3) {
-      spectralAgreement = spectralResult.quality * 0.5;
-    }
-
-    // ── Fusión por tolerancia temporal ──
-    // Merge peaks from both detectors within MERGE_TOLERANCE_MS
-    const elTimes = el.peakTimes;
-    const hamTimes = ham.peakTimes;
-
-    // Contar cuántos picos de Elgendi tienen unHamilton cercano (y viceversa)
-    let elMatched = 0;
-    let hamMatched = 0;
-    const matchedByBoth: boolean[] = new Array(elTimes.length).fill(false);
-
-    for (let i = 0; i < elTimes.length; i++) {
-      for (let j = 0; j < hamTimes.length; j++) {
-        if (Math.abs(elTimes[i]! - hamTimes[j]!) <= MERGE_TOLERANCE_MS) {
-          elMatched++;
-          matchedByBoth[i] = true;
-          break;
-        }
-      }
-    }
-    for (let j = 0; j < hamTimes.length; j++) {
-      for (let i = 0; i < elTimes.length; i++) {
-        if (Math.abs(elTimes[i]! - hamTimes[j]!) <= MERGE_TOLERANCE_MS) {
-          hamMatched++;
-          break;
-        }
-      }
-    }
-
-    const elAgreement = elTimes.length > 0 ? elMatched / elTimes.length : 0;
-    const hamAgreement = hamTimes.length > 0 ? hamMatched / hamTimes.length : 0;
-
-    // Usar picos de Elgendi como primario, marcar los que Hamilton confirma
     const peakIdx: number[] = [];
-    const peakTimesOut: number[] = [];
+    const peakTimes: number[] = [];
 
     for (let j = 0; j < el.peaks.length; j++) {
       const ie = el.peaks[j]!;
-      const te = el.peakTimes[j] ?? timestampsMs[ie] ?? 0;
+      const te = elTimeAt(j);
       peakIdx.push(clamp(ie, 0, signal.length - 1));
-      peakTimesOut.push(te);
-      const detector = matchedByBoth[j] ? 'ELGENDI+HAMILTON' : 'ELGENDI';
-      log.push({ index: ie, reason: detector, detector: 'Elgendi' });
+      peakTimes.push(te);
+      log.push({ index: ie, reason: 'ELGENDI', detector: 'Elgendi' });
     }
 
-    // Ordenar por tiempo
-    const order = peakTimesOut
+    const order = peakTimes
       .map((t, i) => ({ t, i }))
       .sort((a, b) => a.t - b.t)
       .map((o) => o.i);
     const sortedIdx = order.map((i) => peakIdx[i]!);
-    const sortedTimes = order.map((i) => peakTimesOut[i]!);
+    const sortedTimes = order.map((i) => peakTimes[i]!);
 
-    // RR intervals
     const rr: number[] = [];
     for (let i = 1; i < sortedTimes.length; i++) {
       const d = sortedTimes[i] - sortedTimes[i - 1];
@@ -170,26 +109,24 @@ export class PeakDetectionEnsemble {
 
     const bpmInstant: number | null = rr.length ? 60000 / median(rr.slice(-4)) : null;
 
-    // ── Cálculo de confianza ──
-    // Voting genuino: ambos detectores deben concordar + validación espectral
-    const detectorAgreement = (elAgreement + hamAgreement) / 2;
-    const minDetectorConf = Math.min(el.confidence, ham.confidence);
-    const maxDetectorConf = Math.max(el.confidence, ham.confidence);
+    const nE = el.peaks.length || 1;
+    const agreeEl = clamp(sortedTimes.length / nE, 0, 1);
 
     let confidence =
-      detectorAgreement * 0.35 +
-      minDetectorConf * 0.25 +
-      maxDetectorConf * 0.15 +
-      spectralAgreement * 0.25;
+      agreeEl * 0.50 +
+      clamp(el.confidence, 0, 1) * 0.50;
 
     if (typeof sqi === 'number' && sqi < PEAK_DETECTION_DEFAULTS.minSQI) {
       confidence *= 0.8;
     }
     if (sortedIdx.length > 0) {
-      confidence = clamp(confidence + 0.05, 0, 1);
+      confidence = clamp(confidence + 0.08, 0, 1);
     }
 
-    // Penalización por skewness
+    // SQI por skewness (Elgendi 2016): penalización SUAVE de confianza. PPG limpio
+    // (skew alta) → factor 1; ruido simétrico/corrupción (skew baja/negativa) →
+    // factor hasta FLOOR. Reduce FP de ventanas no-pulsátiles sin bloquear latidos
+    // reales (un latido genuino tiene skewness positiva → nunca se penaliza).
     const skew = (el.diagnostics as { signalSkewness?: number }).signalSkewness;
     if (typeof skew === 'number' && Number.isFinite(skew)) {
       const Q = VITAL_THRESHOLDS.QUALITY;
@@ -200,7 +137,6 @@ export class PeakDetectionEnsemble {
       confidence *= skewFactor;
     }
 
-    // ── Peak scoring ──
     const sqiVal = sqi ?? 0;
     const peakScores: number[] = [];
     for (let i = 0; i < sortedTimes.length; i++) {
@@ -235,29 +171,17 @@ export class PeakDetectionEnsemble {
       bpmStable: bpmInstant,
       confidence: clamp(confidence, 0, 1),
       agreement: {
-        elgendi: elAgreement,
-        hamilton: hamAgreement,
-        spectral: spectralAgreement,
+        elgendi: agreeEl,
       },
       rejectedPeaks: log,
       diagnostics: {
         elgendi: el.diagnostics,
         elgendiReason: el.reason,
-        hamilton: ham.diagnostics,
-        hamiltonConfidence: ham.confidence,
-        hamiltonNPeaks: ham.peaks.length,
         fusedCount: sortedIdx.length,
         detectorCalibration: calibration,
         elgendiConfidence: el.confidence,
-        detectorAgreement,
-        spectralAgreement,
-        spectralFreqHz: spectralResult.freqHz,
-        spectralQuality: spectralResult.quality,
-        autoBpm,
-        spectralBpm,
         fusedPeakTimes: sortedTimes,
         elgendiPeakTimes: el.peakTimes,
-        hamiltonPeakTimes: ham.peakTimes,
         fsDeclared: samplingRateHz,
         fsEffective,
         fsAdapted,
