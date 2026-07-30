@@ -5,7 +5,7 @@
 import { clamp } from '../utils/math';
 import { triggerHeartbeatHaptic } from '../utils/haptics';
 import { robustBounds } from '../utils/stats';
-import { PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS } from '../config/signalProcessing';
+import { PEAK_DETECTION_DEFAULTS, DSP_CONSTANTS, KALMAN_FILTER } from '../config/signalProcessing';
 import { VITAL_THRESHOLDS } from '../config/vitalThresholds';
 import { PeakDetectionEnsemble } from './signal-processing/detectors/PeakDetectionEnsemble';
 import { autocorrDominantLag } from './signal-processing/shared/dsp';
@@ -16,6 +16,66 @@ import {
 } from '../lib/device/cameraDeviceProfile';
 import { bpmFromEmittedRr, decidePeakEmit } from '../lib/measurement/peakEmitPolicy';
 import type { FingerPlacementMode } from '../types/signal';
+
+class AdaptiveKalmanFilter {
+  private x: number = 0;
+  private P: number = KALMAN_FILTER.INITIAL_ERROR_COV;
+  private initialized = false;
+
+  update(z: number, confidence: number): number {
+    const Q = KALMAN_FILTER.PROCESS_NOISE_Q;
+    const R_base = KALMAN_FILTER.MEASUREMENT_NOISE_R_BASE;
+    const adapt = KALMAN_FILTER.RESIDUAL_ADAPT_SCALE;
+    const gateSigmas = KALMAN_FILTER.INNOVATION_GATE_SIGMAS;
+    const R_min = KALMAN_FILTER.MEASUREMENT_NOISE_R_MIN;
+    const R_max = KALMAN_FILTER.MEASUREMENT_NOISE_R_MAX;
+
+    if (!this.initialized || this.x <= 0) {
+      this.x = z;
+      this.P = KALMAN_FILTER.INITIAL_ERROR_COV;
+      this.initialized = true;
+      return z;
+    }
+
+    // Predict
+    const x_pred = this.x;
+    const P_pred = this.P + Q;
+
+    // Innovation/residual
+    const residual = z - x_pred;
+    const S = P_pred + R_base;
+    const gate = gateSigmas * Math.sqrt(S);
+
+    // Innovation gate: reject extreme outliers
+    if (Math.abs(residual) > gate) {
+      this.P = P_pred;
+      return this.x;
+    }
+
+    // Adapt R based on residual magnitude and confidence
+    const confidenceFactor = clamp(confidence, 0.1, 1.0);
+    const R_adapted = clamp(
+      R_base * (1 + adapt * Math.abs(residual)) / confidenceFactor,
+      R_min,
+      R_max,
+    );
+
+    // Update
+    const K = P_pred / (P_pred + R_adapted);
+    this.x = x_pred + K * residual;
+    this.P = (1 - K) * P_pred;
+
+    return Math.round(this.x);
+  }
+
+  reset(value: number = 0): void {
+    this.x = value;
+    this.P = KALMAN_FILTER.INITIAL_ERROR_COV;
+    this.initialized = false;
+  }
+
+  get value(): number { return this.x; }
+}
 
 export interface HeartBeatProcessDiagnostics {
   ensemble?: Record<string, unknown>;
@@ -49,6 +109,8 @@ export class HeartBeatProcessor {
   private cachedGateRange = 0;
   private cachedSampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
   private cachedPeriodicity: { bpm: number; score: number } = { bpm: 0, score: 0 };
+
+  private readonly bpmKalman = new AdaptiveKalmanFilter();
 
   private lastDiagnostics: HeartBeatProcessDiagnostics = {};
   private lastEmittedPeakTime = 0;
@@ -336,16 +398,7 @@ export class HeartBeatProcessor {
             this.smoothBPM <= 0 ||
             Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM) <= 0.4;
           if (acceptOutlier) {
-            if (this.smoothBPM === 0) {
-              this.smoothBPM = instantBpm;
-            } else {
-              const rel = Math.abs(instantBpm - this.smoothBPM) / Math.max(1, this.smoothBPM);
-              const trust = clamp(0.18 + wScore * 0.32, 0.18, 0.50);
-              // A menor desviación, más suavizado (alpha bajo)
-              // A mayor desviación, más seguimiento (alpha alto)
-              const alpha = rel > 0.22 ? trust : rel > 0.12 ? trust * 0.75 : trust * 0.45;
-              this.smoothBPM = this.smoothBPM * (1 - alpha) + instantBpm * alpha;
-            }
+            this.smoothBPM = this.bpmKalman.update(instantBpm, wScore);
           }
         }
 
@@ -599,6 +652,7 @@ export class HeartBeatProcessor {
     this.gateRelaxUntilMs = 0;
     this.reacquireModeUntilMs = 0;
     this.lastDiagnostics = {};
+    this.bpmKalman.reset();
   }
 
   reset(): void {
