@@ -11,11 +11,9 @@ import { skewness } from '../../../utils/stats';
 import {
   bandpassOffline,
   detrendLinear,
-  fractionalDerivative,
   hampel1D,
   prepareUniformPpgWindow,
   robustNormalizeZeroCenter,
-  spectralEntropy,
 } from '../shared/dsp';
 
 export interface ElgendiPeakDetectorInput {
@@ -103,33 +101,12 @@ export class ElgendiPeakDetector {
 
     const hampelWin = Math.max(5, Math.round(fs * 0.25) | 1);
     const cleaned = hampel1D(sig, hampelWin, 3);
-    const detrended = detrendLinear(cleaned);
-
-    // FOC pre-filtering: derivada fraccional realza picos sistólicos y atenúa
-    // la muesca dícrota y ruido de alta frecuencia en una sola etapa.
-    // Mezcla señal FOC con original para conservar morfología.
-    const focAlpha = PEAK_DETECTION_DEFAULTS.FOC_ALPHA;
-    const focMix = PEAK_DETECTION_DEFAULTS.FOC_MIX_WEIGHT;
-    const focFiltered = fractionalDerivative(detrended, focAlpha, 1 / fs);
-    const mixedSig = new Array<number>(detrended.length);
-    for (let mi = 0; mi < detrended.length; mi++) {
-      mixedSig[mi] = detrended[mi] * (1 - focMix) + focFiltered[mi] * focMix;
-    }
-
-    let x = bandpassOffline(mixedSig, fs);
+    let x = bandpassOffline(detrendLinear(cleaned), fs);
     x = robustNormalizeZeroCenter(x);
 
-    // Spectral entropy gate: señal limpia tiene entropía baja (pico espectral
-    // dominante en banda cardíaca). Entropía alta → posible ruido/artefacto.
-    // Se usa para ajustar dinámicamente el umbral de detección.
-    const specEntropy = spectralEntropy(x, fs);
-    const entropyThreshold = PEAK_DETECTION_DEFAULTS.SPECTRAL_ENTROPY_THRESHOLD;
-    const entropyFactor = specEntropy <= entropyThreshold
-      ? 1.0
-      : clamp(1.0 + (specEntropy - entropyThreshold) * 1.5, 1.0, 1.8);
-
     // SQI por skewness (Elgendi 2016) sobre la señal filtrada — PPG limpio tiene
-    // skewness positiva; ruido/movimiento, ≈0 o negativa.
+    // skewness positiva; ruido/movimiento, ≈0 o negativa. Se reporta para que el
+    // ensemble lo use como penalización suave de confianza (anti falsos positivos).
     const signalSkewness = skewness(x);
 
     const w1 = Math.max(3, Math.round((peakMs / 1000) * fs));
@@ -156,8 +133,7 @@ export class ElgendiPeakDetector {
     meanEnergy /= n;
     const beta =
       PEAK_DETECTION_DEFAULTS.beatOffset * (offsetW / PEAK_DETECTION_DEFAULTS.offsetWeight);
-    // Adaptive threshold: entropía alta → umbral más alto (exige picos más claros)
-    const thrOffset = beta * meanEnergy * entropyFactor;
+    const thrOffset = beta * meanEnergy;
 
     const minDist = Math.max(1, Math.round((60000 / maxBpm / 1000) * fs));
     const maxDist = Math.max(minDist + 1, Math.round((60000 / minBpm / 1000) * fs));
@@ -307,9 +283,6 @@ export class ElgendiPeakDetector {
         meanEnergy,
         thrOffset,
         signalSkewness,
-        spectralEntropy: specEntropy,
-        entropyFactor,
-        focAlpha,
       },
       reason: pk > 0 ? 'OK' : 'NO_PEAKS',
       parametersUsed: { minBpm, maxBpm, peakMs, beatMs, offsetW, beta, minProm, fs, w1, w2 },

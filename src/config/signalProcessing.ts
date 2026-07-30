@@ -89,12 +89,6 @@ export const PEAK_DETECTION_DEFAULTS = {
   RESAMPLE_TARGET_MIN: 64,
   RESAMPLE_TARGET_MAX: 512,
   /** Normalización robusta del latido para ensemble (escala ±) */
-  /** Orden fraccional para filtro derivativo de realce de picos (0.3–0.7) */
-  FOC_ALPHA: 0.45,
-  /** Entropía espectral máxima para considerar señal limpia (<0.7 = limpia) */
-  SPECTRAL_ENTROPY_THRESHOLD: 0.70,
-  /** Peso del pre-filtrado FOC en la mezcla con señal original (0=sin FOC, 1=solo FOC) */
-  FOC_MIX_WEIGHT: 0.35,
   HEARTBEAT_NORM_SCALE: 120,
   HEARTBEAT_NORM_MIN_RANGE: 0.032,
   HEARTBEAT_NORM_FALLBACK_GAIN: 8,
@@ -162,25 +156,4 @@ export const RESP_SMART_FUSION = {
   DISAGREEMENT_CONF_SCALE: 0.30,
   /** Mínimo de muestras en una serie de modalidad para estimar */
   MIN_SERIES_SAMPLES: 24,
-} as const;
-
-/**
- * Configuración del Filtro de Kalman Adaptativo para suavizado de BPM.
- * Basado en Kim (2024) DWT-RAKF: residual-based adaptive measurement noise.
- */
-export const KALMAN_FILTER = {
-  /** Varianza del ruido de proceso (modelo random walk del BPM real) */
-  PROCESS_NOISE_Q: 0.35,
-  /** Varianza inicial del ruido de observación */
-  MEASUREMENT_NOISE_R_BASE: 8.0,
-  /** Varianza mínima del ruido de observación (alta confianza) */
-  MEASUREMENT_NOISE_R_MIN: 1.5,
-  /** Varianza máxima del ruido de observación (baja confianza) */
-  MEASUREMENT_NOISE_R_MAX: 45.0,
-  /** Escala de adaptación de R basada en residual: R = R_base * (1 + scale * |residual|) */
-  RESIDUAL_ADAPT_SCALE: 0.15,
-  /** Varianza del error de estimación inicial */
-  INITIAL_ERROR_COV: 10.0,
-  /** Umbral de innovación para considerar outlier (desviaciones estándar) */
-  INNOVATION_GATE_SIGMAS: 2.5,
 } as const;
