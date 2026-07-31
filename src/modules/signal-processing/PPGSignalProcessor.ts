@@ -1290,8 +1290,24 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       if (!m.valid) continue;
       if (useFingerOnly && !m.isFinger) continue;
 
-      // Presencia de dedo (confianza combinada incluye centerBias y estabilidad).
-      const presence = 0.2 + m.combinedScore * 2.5 + m.centerBias * 0.5;
+      // Presencia de dedo. NO se pondera por posición geométrica.
+      //
+      // Antes había aquí un término `+ m.centerBias * 0.5` que castigaba a las
+      // celdas alejadas del centro AUNQUE tuvieran el mejor pulso del frame, y
+      // lo hacía por segunda vez (el `centerBias` ya entra en `tileConfidence`,
+      // y de ahí en `combinedScore`).
+      //
+      // El dedo es mucho mayor que el lente: al desplazarse un poco, la zona
+      // bien acoplada se corre del centro. Penalizar por geometría descarta
+      // justo la señal buena cuando la colocación no es exacta — que es el
+      // síntoma reportado. Contradecía además el propósito declarado de este
+      // módulo: buscar la mejor zona "esté donde esté el dedo".
+      //
+      // El sesgo al centro se conserva donde sí corresponde: en la DETECCIÓN
+      // (`tileConfidence` / `isFinger`), para descartar celdas de borde que ven
+      // luz parásita. Aquí ya solo entran celdas que la detección aceptó como
+      // dedo, así que la ponderación la decide la pulsatilidad medida.
+      const presence = 0.2 + m.combinedScore * 2.5;
       // Realce por pulsatilidad relativa a la mejor celda (la del mejor pulso pesa más).
       const boost = pulsatilityBoost(
         this.tilePulsatilityCache[i] ?? 0,
