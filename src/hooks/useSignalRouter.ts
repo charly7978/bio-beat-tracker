@@ -143,7 +143,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const lastBpmSeenAtRef = useRef(0);
   const prevHasUsableContactRef = useRef(false);
   const noContactSessionFramesRef = useRef(0);
-  const lastHbInputRef = useRef(0);
   const displayHrRef = useRef(0);
   const displaySpo2Ref = useRef(0);
   const displayBpRef = useRef({ systolic: 0, diastolic: 0 });
@@ -247,7 +246,6 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     displayHrRef.current = 0;
     displaySpo2Ref.current = 0;
     displayBpRef.current = { systolic: 0, diastolic: 0 };
-    lastHbInputRef.current = 0;
     lastHrPushRef.current = 0;
     lastVitalsPushRef.current = 0;
     lastRrPushRef.current = 0;
@@ -345,17 +343,16 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
         ? diag.sqm.sqi
         : lastSignal.quality) || 0;
 
-    let hbInput = 0;
-    if (fingerConfirmed) {
-      if (Math.abs(signalValue) > 1e-7) {
-        lastHbInputRef.current = signalValue;
-        hbInput = signalValue;
-      } else if (Math.abs(lastHbInputRef.current) > 1e-7) {
-        hbInput = lastHbInputRef.current;
-      }
-    } else {
-      lastHbInputRef.current = 0;
-    }
+    // Al detector de latidos solo entra la muestra REAL de este frame.
+    //
+    // Antes, si la señal llegaba en cero pero la detección de dedo seguía
+    // afirmando contacto, se re-inyectaba la última muestra no nula. El
+    // procesador emite `filteredValue: 0` precisamente cuando rechaza el frame
+    // (saturación, subexposición, movimiento) sin bajar `fingerDetected`, así
+    // que ese respaldo alimentaba al detector con una muestra congelada justo
+    // en los casos en que no había nada que medir — y el detector, viendo una
+    // entrada plausible, seguía produciendo latidos.
+    const hbInput = fingerConfirmed && Math.abs(signalValue) > 1e-7 ? signalValue : 0;
 
     const heartBeatResult = processHeartBeat.processSignal(
       hbInput,

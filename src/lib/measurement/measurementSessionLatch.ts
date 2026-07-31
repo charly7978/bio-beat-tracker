@@ -64,9 +64,16 @@ export function updateMeasurementSessionLatch(
     };
   }
 
-  const nextBpm = bpm > 0 ? bpm : latch.lastBpm;
+  // `lastBpm` guarda SOLO frecuencias medidas en este ciclo.
+  //
+  // Antes era `bpm > 0 ? bpm : latch.lastBpm`, y ese resultado se volvía a
+  // escribir en `lastBpm` más abajo: el valor viejo se refrescaba a sí mismo y
+  // no caducaba nunca. Como `measurementReadiness` lo consume como respaldo
+  // (`bpm > 0 ? bpm : latch.lastBpm`), una frecuencia fósil bastaba para que la
+  // medición siguiera declarándose lista sin latidos nuevos.
+  const nextBpm = bpm > 0 ? bpm : 0;
   const lastPeakMs = isPeak ? nowMs : latch.lastPeakMs;
-  const peakBpm = bpm > 0 ? bpm : latch.lastBpm;
+  const peakBpm = bpm;
 
   if (isPeak && peakBpm >= SESSION_LATCH.MIN_BPM && rawSqi >= SESSION_LATCH.MIN_SQI) {
     const goodStreak = latch.goodStreak + 1;
