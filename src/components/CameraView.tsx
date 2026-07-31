@@ -161,20 +161,57 @@ async function stabilizeTrack(track: MediaStreamTrack): Promise<void> {
     env.focusMode = 'continuous';
   }
 
-  if (expMode === 'continuous') {
-    env.exposureMode = 'continuous';
-  } else if (expMode === 'manual' && caps.iso) {
-    const minI = caps.iso.min ?? 50;
-    const maxI = caps.iso.max ?? 800;
-    env.iso = Math.round(Math.max(minI, Math.min(maxI, 160)));
+  // ── BLOQUEO DE EXPOSICIÓN ────────────────────────────────────────────────
+  //
+  // Crítico para PPG: el control automático de exposición REACCIONA al pulso.
+  // Cada sístole oscurece levemente el ROI, el AE sube la ganancia para
+  // compensar, y el resultado es que la cámara cancela activamente la señal
+  // que estamos midiendo. Hay que congelarlo.
+  //
+  // Antes este bloque calculaba `iso` y `exposureTime` en la rama manual pero
+  // NUNCA ponía `exposureMode = 'manual'`. Sin esa línea el AE sigue corriendo
+  // y las restricciones se ignoran: la intención estaba, el efecto no.
+  if (expMode === 'manual') {
+    env.exposureMode = 'manual';
+    if (caps.iso) {
+      const minI = caps.iso.min ?? 50;
+      const maxI = caps.iso.max ?? 800;
+      // ISO bajo: el ruido de lectura del sensor escala con la ganancia, y ese
+      // ruido es aditivo — con el flash en contacto sobra luz (MobilePhys, UW).
+      env.iso = Math.round(Math.max(minI, Math.min(maxI, 100)));
+    }
     if (caps.exposureTime) {
       env.exposureTime = Math.round(
         Math.max(caps.exposureTime.min ?? 1000, Math.min(caps.exposureTime.max ?? 100000, 16666)),
       );
     }
+  } else if (expMode === 'continuous') {
+    // Sin modo manual disponible no queda opción; se deja constancia porque
+    // explica una parte del ruido irreducible en ese dispositivo.
+    env.exposureMode = 'continuous';
   }
 
-  if (wbMode === 'continuous') {
+  // ── BLOQUEO DE BALANCE DE BLANCOS ────────────────────────────────────────
+  //
+  // El AWB reescala los canales R/G/B de forma independiente y variable en el
+  // tiempo. Eso destruye la relación entre canales, que es exactamente la
+  // magnitud de la que depende distinguir hemoglobina de una variación de
+  // intensidad cualquiera.
+  //
+  // Antes solo se cubría la rama 'continuous': si el dispositivo ofrecía
+  // 'manual' —la opción preferida— no se aplicaba NINGUNA restricción y el
+  // AWB quedaba libre.
+  if (wbMode === 'manual') {
+    env.whiteBalanceMode = 'manual';
+    if (caps.colorTemperature) {
+      // Temperatura fija en el extremo cálido disponible: el flash blanco sobre
+      // tejido perfundido es dominante en rojo, y fijarla evita que el
+      // dispositivo la persiga entre frames.
+      const ctLo = caps.colorTemperature.min ?? 2850;
+      const ctHi = caps.colorTemperature.max ?? 7000;
+      env.colorTemperature = Math.round(Math.max(ctLo, Math.min(ctHi, 3200)));
+    }
+  } else if (wbMode === 'continuous') {
     env.whiteBalanceMode = 'continuous';
   }
 

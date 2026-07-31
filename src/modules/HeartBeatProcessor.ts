@@ -50,7 +50,10 @@ export class HeartBeatProcessor {
   private cachedSampleRate: number = DSP_CONSTANTS.DEFAULT_SAMPLE_RATE;
   private cachedPeriodicity: { bpm: number; score: number } = { bpm: 0, score: 0 };
   /** Beat window suavizado (EMA) para evitar oscilaciones que causan latidos erráticos. */
-  private smoothedBeatWindowMs = PEAK_DETECTION_DEFAULTS.beatWindowMs;
+  // Anotado explícitamente: `PEAK_DETECTION_DEFAULTS` es `as const`, así que sin
+  // el tipo el campo se infiere con el tipo literal 667 y el suavizado EMA de
+  // más abajo no compila.
+  private smoothedBeatWindowMs: number = PEAK_DETECTION_DEFAULTS.beatWindowMs;
 
   private lastDiagnostics: HeartBeatProcessDiagnostics = {};
   private lastEmittedPeakTime = 0;
@@ -389,9 +392,28 @@ export class HeartBeatProcessor {
     }
 
     const peakAgeMs = this.lastPeakTime > 0 ? now - this.lastPeakTime : Number.POSITIVE_INFINITY;
-    if (!isPeak && peakAgeMs > this.BPM_PUBLISH_HOLD_MS) {
+
+    // ── Ventana de publicación anclada al ritmo REAL del paciente ───────────
+    //
+    // Antes era un tope fijo de 4200 ms, elegido a mano. Ese plazo no significa
+    // lo mismo a 50 lpm que a 120: a 120 lpm son SIETE latidos perdidos
+    // publicando una frecuencia que ya no existe.
+    //
+    // El criterio fisiológico es "latidos perdidos", no milisegundos: se toleran
+    // hasta 2,5 intervalos RR del propio paciente antes de dejar de publicar.
+    // Se acota por el tope anterior para no alargarlo en bradicardia extrema.
+    const medianRr = this.rrIntervals.length >= 2
+      ? bpmFromEmittedRr(this.rrIntervals) > 0
+        ? 60000 / bpmFromEmittedRr(this.rrIntervals)
+        : 0
+      : 0;
+    const holdMs = medianRr > 0
+      ? Math.min(this.BPM_PUBLISH_HOLD_MS, medianRr * 2.5)
+      : this.BPM_PUBLISH_HOLD_MS;
+
+    if (!isPeak && peakAgeMs > holdMs) {
       this.consecutivePeaks = 0;
-      if (peakAgeMs > this.BPM_PUBLISH_HOLD_MS * 2) {
+      if (peakAgeMs > holdMs * 2) {
         this.smoothBPM = 0;
       }
     }
@@ -400,7 +422,7 @@ export class HeartBeatProcessor {
     let publishBpm = 0;
     if (
       this.fingerContactConfirmed &&
-      peakAgeMs < this.BPM_PUBLISH_HOLD_MS
+      peakAgeMs < holdMs
     ) {
       if (this.smoothBPM > 0 && rrBpm > 0) {
         const agree = Math.abs(this.smoothBPM - rrBpm) / Math.max(1, rrBpm) < 0.08;
