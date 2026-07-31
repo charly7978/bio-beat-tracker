@@ -1197,9 +1197,26 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
         fingerScoreSum += combinedScore;
         const gridX = i % this.TILE_COLUMNS;
         const gridY = (i / this.TILE_COLUMNS) | 0;
-        sumX += gridX * combinedScore;
-        sumY += gridY * combinedScore;
-        sumWeight += combinedScore;
+
+        // El centroide SIGUE al pulso, no a la geometría.
+        //
+        // Antes se ponderaba por `combinedScore`, que arrastra `centerBias` a
+        // través de la EMA de `tileConfidence`. El resultado era que el
+        // centroide rastreado tiraba hacia el centro y la ROI se RESISTÍA a
+        // seguir un dedo descentrado — el mismo sesgo que ya se quitó del peso
+        // de señal, un nivel más abajo.
+        //
+        // Se pondera por evidencia de color instantánea (sin geometría) realzada
+        // por la pulsatilidad medida de la celda: la ROI se mueve hacia donde
+        // realmente late.
+        const trackWeight = frameScore * pulsatilityBoost(
+          this.tilePulsatilityCache[i] ?? 0,
+          this.tileMaxPulsatility,
+          VITAL_THRESHOLDS.TILE_FUSION.BOOST_GAIN,
+        );
+        sumX += gridX * trackWeight;
+        sumY += gridY * trackWeight;
+        sumWeight += trackWeight;
       }
     }
 
