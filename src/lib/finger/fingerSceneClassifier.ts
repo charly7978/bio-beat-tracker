@@ -171,12 +171,14 @@ export function isFingerOnLensScene(
   const rb = r / b;
   const rg = r / g;
   const dom = r - (g + b) / 2;
+  const blueFraction = b / total;
   return (
     total >= 48 &&
     total <= 520 &&
-    rb >= 1.14 &&
-    rg >= 1.05 &&
+    rb >= 1.65 &&
+    rg >= 1.15 &&
     dom >= 10 &&
+    blueFraction <= 0.25 &&
     coverage >= 0.11 &&
     fingerScore >= 0.14 &&
     snap.coverage >= 0.1
