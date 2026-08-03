@@ -10,6 +10,7 @@ import { isPhysiologicalRR } from '../../../utils/physio';
 import { computeDetectorCalibration } from '../../../lib/measurement/detectorCalibration';
 import { scorePeakCandidate, computePeakShapeQuality } from '../../../lib/measurement/peakScoring';
 import { ElgendiPeakDetector } from './ElgendiPeakDetector';
+import { MsptdPeakDetector } from './MsptdPeakDetector';
 
 export interface PeakDetectionEnsembleInput {
   signal: number[];
@@ -67,6 +68,13 @@ export class PeakDetectionEnsemble {
       sqi,
       perfusionIndex,
     );
+
+    const msptd = MsptdPeakDetector.detect({
+      signal,
+      samplingRateHz: fsEffective,
+      timestampsMs,
+      minScale: Math.max(1, Math.round(fsEffective * 0.05)),
+    });
 
     const el = ElgendiPeakDetector.detect({
       signal,
@@ -187,6 +195,7 @@ export class PeakDetectionEnsemble {
         elgendiConfidence: el.confidence,
         fusedPeakTimes: sortedTimes,
         elgendiPeakTimes: el.peakTimes,
+        msptd,
         fsDeclared: samplingRateHz,
         fsEffective,
         fsAdapted,

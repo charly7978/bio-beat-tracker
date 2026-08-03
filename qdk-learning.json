@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "position": {
+    "courseId": "katas",
+    "unitId": "getting_started",
+    "activityId": "getting_started__flip_qubit"
+  },
+  "completions": {
+    "katas__getting_started__getting_started__welcome": {
+      "completedAt": "2026-08-03T09:37:49.154Z"
+    }
+  },
+  "startedAt": "2026-08-03T09:37:45.065Z"
+}
