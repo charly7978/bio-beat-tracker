@@ -62,6 +62,16 @@ import {
 } from '../../lib/signal/activeStabilizer';
 import { bandLimitedDominantFreq } from './shared/dsp';
 import { RESP_SMART_FUSION, RESPIRATION_DEFAULTS } from '../../config/signalProcessing';
+import {
+  createAdaptiveMotionFilterState,
+  applyAdaptiveMotionFilter,
+  resetAdaptiveMotionFilter,
+  computeHjorthParams,
+  type AdaptiveMotionFilterState,
+} from '../../lib/signal/adaptiveMotionFilter';
+import {
+  BiologicalFrameValidator,
+} from '../../lib/signal/BiologicalFrameValidator';
 
 const log = createLogger('PPGSignalProcessor');
 // BUILD_STAMP: 2026-05-15 18:32:00
@@ -260,6 +270,21 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
   // Acondicionador ACTIVO de señal (denoise edge-preserving + estabilización baseline).
   private readonly activeStabilizer = createActiveStabilizer();
+
+  // Filtro adaptativo de micro-movimiento (Wiener espectral).
+  private readonly adaptiveMotionFilter: AdaptiveMotionFilterState = createAdaptiveMotionFilterState(90);
+
+  // Métricas de Hjorth cacheadas (recalculadas cada 8 frames)
+  private cachedHjorthMobility = 0;
+  private cachedHjorthComplexity = 0;
+  private hjorthCounter = 0;
+
+  // Score de movimiento espectral (complementa al IMU)
+  private spectralMotionScore = 0;
+
+  // Validación biológica de frame
+  private lastBioScore = 0;
+  private bioRejectStreak = 0;
 
   // Cache: PI se calcula una sola vez por frame y se reutiliza en SQI, contact state, etc.
   private cachedPI = 0;
@@ -514,6 +539,25 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
 
     this.rawBuffer.push(pulseSource.value);
 
+    // ── Validación biológica de frame ──────────────────────────────────────
+    // Rechaza frames sin firma de sangre humana antes de procesar la señal.
+    const bioValidation = BiologicalFrameValidator.validate({
+      red: this.smoothedRed,
+      green: this.smoothedGreen,
+      blue: this.smoothedBlue,
+      redCvTemporal: this.lastRoiRedCv,
+      rgSpectralCoherence: this.calculateRedGreenCoherence(),
+      perfusionIndex: this.cachedPI,
+      ensembleScore: this.lastEnsembleScore,
+      contactState: this.contactState,
+    });
+    this.lastBioScore = bioValidation.biologicalScore;
+    if (!bioValidation.isValid && this.contactState !== 'STABLE_CONTACT') {
+      this.bioRejectStreak++;
+    } else {
+      this.bioRejectStreak = Math.max(0, this.bioRejectStreak - 1);
+    }
+
     const endFilt = ppgPerf.start('bandpass');
     // ACONDICIONAMIENTO ACTIVO en vivo: estabiliza la línea base (quita deriva) y
     // hace denoise que PRESERVA los picos sistólicos, ANTES del bandpass → la señal
@@ -521,11 +565,21 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const stabilizedInput = stabilizeSample(this.activeStabilizer, pulseSource.value);
     const filtered = this.bandpassFilter.filter(stabilizedInput);
     const morphFiltered = this.morphBandpassFilter.filter(morphSource);
+
+    // Filtro adaptativo de micro-movimiento (Wiener espectral)
+    const motionFiltered = applyAdaptiveMotionFilter(
+      this.adaptiveMotionFilter,
+      filtered,
+      this.estimatedSampleRate,
+      this.motionScore,
+    );
+    this.spectralMotionScore = this.adaptiveMotionFilter.spectralMotionScore;
+
     const enhanced = applyPulseAgc(
       this.pulseAgcState,
-      filtered,
+      motionFiltered,
       this.cachedPeriodicity > 0 ? this.cachedPeriodicity : this.periodicityEma,
-      this.motionScore,
+      Math.max(this.motionScore, this.spectralMotionScore * 0.5),
       DEFAULT_PULSE_AGC,
       this.contactState === 'STABLE_CONTACT',
     );
@@ -579,13 +633,24 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       }
     }
 
+    // Métricas de Hjorth (recalculadas cada 8 frames para no sobrecargar)
+    this.hjorthCounter++;
+    if (this.hjorthCounter >= 8 && this.filteredBuffer.length >= 30) {
+      this.hjorthCounter = 0;
+      const hjTail = this.filteredBuffer.tail(Math.min(60, this.filteredBuffer.length)) as number[];
+      const hjorth = computeHjorthParams(hjTail);
+      this.cachedHjorthMobility = hjorth.mobility;
+      this.cachedHjorthComplexity = hjorth.complexity;
+    }
+
     const snapPerf = ppgPerf.snapshot();
     const metrics: SignalQualityMetrics = {
       sqi: 0,
       perfusionIndex: this.cachedPI,
       snr: pulseSource.strength,
       periodicity: this.cachedPeriodicity,
-      motionScore: this.motionScore,
+      // Movimiento efectivo: máximo de IMU, micro-movimiento de señal y espectral
+      motionScore: Math.max(this.motionScore, this.signalMotionScore, this.spectralMotionScore * 0.6),
       saturationRatio: roi.rawRed > 250 ? 1 : 0,
       underexposureRatio: this.underexposureEma,
       frameDropRatio: snapPerf.droppedEstimate / Math.max(1, this.frameCount),
@@ -593,6 +658,8 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       timestampJitterMs: snapPerf.jitterMs,
       skewness: this.cachedSkewness,
       relativePower: this.cachedRelativePower,
+      hjorthMobility: this.cachedHjorthMobility,
+      hjorthComplexity: this.cachedHjorthComplexity,
     };
 
     this.cachedSqi = SignalQualityIndex.calculate(metrics);
@@ -1732,6 +1799,13 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     this.tileMaxPulsatility = 0;
     this.tilePulseThrottle = 0;
     resetActiveStabilizer(this.activeStabilizer);
+    resetAdaptiveMotionFilter(this.adaptiveMotionFilter);
+    this.spectralMotionScore = 0;
+    this.cachedHjorthMobility = 0;
+    this.cachedHjorthComplexity = 0;
+    this.hjorthCounter = 0;
+    this.lastBioScore = 0;
+    this.bioRejectStreak = 0;
     this.placementMode = 'hybrid';
     this.placementStreak = { mode: 'hybrid', count: 0 };
     // Resetear contadores y caches para que el WARMUP gate (frameCount < 28)

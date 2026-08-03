@@ -88,6 +88,30 @@ export class SignalQualityIndex {
       score += rpScore;
     }
 
+    // ── Métricas de Hjorth (Hjorth 1970) ──────────────────────────────────
+    // Movilidad alta = frecuencia media alta = ruido de alta frecuencia (MA).
+    // Complejidad alta = señal de banda ancha = ruido/movimiento.
+    // PPG limpio: movilidad baja (0.1–0.8 rad/muestra), complejidad baja (0.8–1.5).
+    const hjorthMob = metrics.hjorthMobility;
+    const hjorthCmx = metrics.hjorthComplexity;
+    if (hjorthMob !== undefined && hjorthMob > 0) {
+      // Penalizar movilidad alta (ruido de alta frecuencia)
+      const mobPenalty = clamp((hjorthMob - 0.8) / 1.5, 0, 1) * 6;
+      score -= mobPenalty;
+    }
+    if (hjorthCmx !== undefined && hjorthCmx > 0) {
+      // Penalizar complejidad alta (señal de banda ancha = ruido)
+      const cmxPenalty = clamp((hjorthCmx - 1.5) / 2.0, 0, 1) * 5;
+      score -= cmxPenalty;
+    }
+
+    // ── Bonus de consenso multi-detector ──────────────────────────────────
+    // Si el ensemble reporta consenso ≥2 detectores, la señal es más confiable.
+    const consensusRate = (metrics as Record<string, unknown>).consensusRate as number | undefined;
+    if (typeof consensusRate === 'number' && consensusRate > 0) {
+      score += clamp(consensusRate, 0, 1) * 8;
+    }
+
     const motion = motionScore ?? 0;
     const motionPenalty = clamp((motion - 0.22) / 0.55, 0, 1) * 12;
     const jitterPenalty = clamp((timestampJitterMs - 38) / 48, 0, 1) * 8;

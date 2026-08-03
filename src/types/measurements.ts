@@ -103,6 +103,10 @@ export interface PeakDetectionResult {
   confidence: number;
   agreement: {
     elgendi: number;
+    spectral?: number;
+    msptd?: number;
+    consensus?: number;
+    [key: string]: number | undefined;
   };
   rejectedPeaks: Array<{
     index: number;
