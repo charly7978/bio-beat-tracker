@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BloodPressureProcessor } from '../BloodPressureProcessor';
 import { VITAL_THRESHOLDS } from '@/config/vitalThresholds';
-import { isPhysiologicalBp } from '@/lib/vitals/pwaPhysiologicalBpEngine';
 
 function syntheticPpgBuffer(cycles = 8, spc = 30, shift = 0): number[] {
   const buf: number[] = [];
@@ -34,7 +33,10 @@ describe('BloodPressureProcessor', () => {
 
     // Si produce estimación, debe ser fisiológica
     if (lastEst.confidence !== 'INSUFFICIENT') {
-      expect(isPhysiologicalBp(lastEst.systolic, lastEst.diastolic)).toBe(true);
+      expect(lastEst.systolic).toBeGreaterThanOrEqual(70);
+      expect(lastEst.systolic).toBeLessThanOrEqual(200);
+      expect(lastEst.diastolic).toBeGreaterThanOrEqual(40);
+      expect(lastEst.diastolic).toBeLessThanOrEqual(130);
       expect(lastEst.diastolic).toBeLessThan(lastEst.systolic);
       expect(lastEst.diastolic / lastEst.systolic).toBeGreaterThan(
         VITAL_THRESHOLDS.BP.DIA_SYS_RATIO_MIN,

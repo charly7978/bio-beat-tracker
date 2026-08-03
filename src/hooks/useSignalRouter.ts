@@ -162,6 +162,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
   const lastDiagPushRef = useRef(0);
   const beatMarkerTimerRef = useRef<number | null>(null);
   const lastPeakTimestampRef = useRef<number>(0);
+  const beatPeakRealValueRef = useRef<number>(0);
+  const beatTroughRealValueRef = useRef<number>(0);
 
   // Sanity checker
   const [sanityProfileId, setSanityProfileId] = useState<string>(() => getActiveProfileId());
@@ -254,6 +256,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastSignalPushRef.current = 0;
     lastDiagPushRef.current = 0;
     lastPeakTimestampRef.current = 0;
+    beatPeakRealValueRef.current = 0;
+    beatTroughRealValueRef.current = 0;
     ppgMeterRef?.current?.clearBuffer();
 
   }, [processHeartBeat, ppgMeterRef]);
@@ -279,6 +283,8 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
     lastArrhythmiaData.current = null;
     arrhythmiaDetectedRef.current = false;
     lastPeakTimestampRef.current = 0;
+    beatPeakRealValueRef.current = 0;
+    beatTroughRealValueRef.current = 0;
     ppgMeterRef?.current?.clearBuffer();
 
   }, [ppgMeterRef]);
@@ -471,37 +477,37 @@ export function useSignalRouter({ processHeartBeat, processVitalSigns, cameraHin
 
     if (hasUsableContact && heartBeatResult.isPeak) {
       lastPeakTimestampRef.current = nowT;
+      beatPeakRealValueRef.current = signalValue;
+      beatTroughRealValueRef.current = signalValue;
     }
 
     if (!hasUsableContact) {
       lastPeakTimestampRef.current = 0;
+      beatPeakRealValueRef.current = 0;
+      beatTroughRealValueRef.current = 0;
     }
 
     let eegValue = 0;
     if (hasUsableContact && lastPeakTimestampRef.current > 0) {
       const elapsed = nowT - lastPeakTimestampRef.current;
-      // EEG-style heartbeat spike:
-      // 0ms - 50ms: Violent rise from 0 to +10.0
-      // 50ms - 110ms: Violent drop from +10.0 to -4.0 (below baseline)
-      // 110ms - 220ms: Return from -4.0 to 0.0
-      // > 220ms: Rest at 0.0
-      if (elapsed >= 0 && elapsed < 50) {
-        eegValue = (elapsed / 50) * 10.0;
-      } else if (elapsed >= 50 && elapsed < 110) {
-        const t = (elapsed - 50) / 60;
-        eegValue = 10.0 - t * 14.0;
-      } else if (elapsed >= 110 && elapsed < 220) {
-        const t = (elapsed - 110) / 110;
-        eegValue = -4.0 + t * 4.0;
+      if (elapsed >= 0 && elapsed < 170 && signalValue < beatTroughRealValueRef.current) {
+        beatTroughRealValueRef.current = signalValue;
+      }
+      const realPeakAmp = beatPeakRealValueRef.current;
+      const realTroughAmp = beatTroughRealValueRef.current;
+      if (elapsed >= 0 && elapsed < 60) {
+        const t = elapsed / 60;
+        eegValue = realPeakAmp - t * (realPeakAmp - realTroughAmp);
+      } else if (elapsed >= 60 && elapsed < 170) {
+        const t = (elapsed - 60) / 110;
+        eegValue = realTroughAmp - t * realTroughAmp;
       } else {
         eegValue = 0.0;
       }
     }
 
-    const showWaveform = hasUsableContact;
-
     if (ppgMeterRef?.current) {
-      ppgMeterRef.current.pushSignal(showWaveform ? eegValue : 0, Date.now());
+      ppgMeterRef.current.pushSignal(hasUsableContact ? eegValue : 0, Date.now());
     }
 
     if (hasUsableContact && nowT - lastHrPushRef.current >= HR_PUSH_THROTTLE_MS) {

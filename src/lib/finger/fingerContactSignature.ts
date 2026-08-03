@@ -79,31 +79,73 @@ export function computeFingerEnsemble(
   grayPixels: Uint8ClampedArray | null,
   temporalVariance: number,
 ): FingerEnsembleMetrics {
-  const total = snapshot.red + snapshot.green + snapshot.blue;
+  const r = snapshot.red;
+  const g = Math.max(1, snapshot.green);
+  const b = Math.max(1, snapshot.blue);
+  const total = r + g + b;
 
-  const brightnessNorm = Math.min(total / 255, 3) / 3;
-  const brightScore = brightnessNorm > 0.5 ? 1.0 : brightnessNorm > 0.25 ? 0.5 : brightnessNorm / 0.25 * 0.3;
-
-  const covScore = snapshot.coverage > 0.7 ? 1.0 : snapshot.coverage > 0.4 ? 0.7 : snapshot.coverage / 0.4 * 0.4;
-
-  let histScore = 0.3;
-  if (grayPixels) {
-    const h = computeHistogramStats(grayPixels);
-    if (h.binsOccupied < 60 && h.peakHeight > 0.12) {
-      histScore = 1.0;
-    } else if (h.binsOccupied < 100 && h.peakHeight > 0.08) {
-      histScore = 0.6;
-    }
+  if (total < 35 || r < 35) {
+    return {
+      brightnessScore: 0,
+      coverageScore: 0,
+      histogramScore: 0,
+      temporalScore: 0,
+      ensembleScore: 0,
+    };
   }
 
-  const tempScore = temporalVariance < 0.015 ? 1.0 : temporalVariance < 0.03 ? 0.6 : temporalVariance < 0.05 ? 0.3 : 0.1;
+  const rb = r / b;
+  const rg = r / g;
+  const blueFraction = b / total;
 
-  const wBright = 0.30;
+  // Firma de transiluminación subcutánea real:
+  // Bajo torch/flash la piel transmite rojo con fuerte atenuación de azul y verde.
+  // Superficies inanimadas (paredes blancas/grises, ambientes) reflejan alto componente azul.
+  const hasSubcutaneousOpticalSignature = rb >= 1.35 && rg >= 1.08 && blueFraction <= 0.25;
+  if (!hasSubcutaneousOpticalSignature) {
+    // Escena inanimada, pared, ropa roja o luz ambiental sin contacto de tejido.
+    return {
+      brightnessScore: 0.1,
+      coverageScore: Math.min(snapshot.coverage, 0.3),
+      histogramScore: 0,
+      temporalScore: 0,
+      ensembleScore: 0.05,
+    };
+  }
+
+  const brightnessNorm = Math.min(total / 255, 3) / 3;
+  const brightScore = brightnessNorm > 0.5 ? 1.0 : brightnessNorm > 0.25 ? 0.6 : (brightnessNorm / 0.25) * 0.3;
+
+  const covScore = snapshot.coverage > 0.7 ? 1.0 : snapshot.coverage > 0.4 ? 0.7 : (snapshot.coverage / 0.4) * 0.4;
+
+  let histScore = 0.0;
+  let tempScore = 0.1;
+  if (grayPixels) {
+    const h = computeHistogramStats(grayPixels);
+    if (h.binsOccupied >= 15 && h.binsOccupied < 85 && h.peakHeight > 0.08) {
+      histScore = 1.0;
+      tempScore = temporalVariance < 0.015 ? 1.0 : temporalVariance < 0.03 ? 0.6 : 0.3;
+    } else if (h.binsOccupied >= 10 && h.binsOccupied < 110) {
+      histScore = 0.4;
+      tempScore = temporalVariance < 0.02 ? 0.5 : 0.2;
+    } else {
+      histScore = 0.0;
+      tempScore = 0.0;
+    }
+  } else {
+    tempScore = temporalVariance < 0.015 ? 1.0 : temporalVariance < 0.03 ? 0.6 : 0.2;
+  }
+
+  const wBright = 0.25;
   const wCover = 0.30;
-  const wHist = 0.20;
+  const wHist = 0.25;
   const wTemp = 0.20;
 
-  const ensemble = wBright * brightScore + wCover * covScore + wHist * histScore + wTemp * tempScore;
+  let ensemble = wBright * brightScore + wCover * covScore + wHist * histScore + wTemp * tempScore;
+
+  if (rb >= 2.2 && rg >= 1.3 && blueFraction <= 0.16) {
+    ensemble = Math.min(1.0, ensemble * 1.15);
+  }
 
   return {
     brightnessScore: brightScore,
@@ -129,16 +171,17 @@ export function hasFingerHemoglobinSignature(s: FingerRgbSnapshot): boolean {
   const redDominance = r - (g + b) / 2;
   const rg = r / g;
   const rb = r / b;
+  const blueFraction = b / total;
 
   if (r < F.MIN_RED_INTENSITY) return false;
   if (rg < F.MIN_RG_RATIO) return false;
   if (rb < F.HEMOGLOBIN_MIN_RB) return false;
   if (redDominance < F.MIN_RED_DOMINANCE) return false;
+  if (blueFraction > 0.25) return false;
 
-  if (rg < 1.14 && rb < 1.28) return false;
-  if (g > 95 && b > 80 && redDominance < 30) return false;
+  if (rg < 1.12 || rb < 1.35) return false;
+  if (g > 110 && b > 70 && redDominance < 35) return false;
   if (total > 200 && rb < 1.38) return false;
-  if (total > 120 && rb < 1.42 && rg < 1.2) return false;
 
   return (
     s.coverage >= F.MIN_COVERAGE * 0.95 &&

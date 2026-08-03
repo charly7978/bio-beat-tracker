@@ -617,10 +617,14 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
     const hemoglobinScene =
       hasFingerHemoglobinSignature(snapHb) && !isOpenFlashWithoutContact(snapHb);
     const ensembleScene = this.lastEnsembleScore > VITAL_THRESHOLDS.FINGER.ENSEMBLE_FINGER_THRESHOLD;
+    const rgCoherence = this.calculateRedGreenCoherence();
+    const coherenceOk = rgCoherence >= 0.20 || perfusionIndex >= 0.0008;
+
     const fingerUi =
       this.fingerDetected &&
       liveFinger &&
       (hemoglobinScene || ensembleScene) &&
+      coherenceOk &&
       (this.lastInstantFinger || this.contactState === 'STABLE_CONTACT');
 
     // Post-motion hold-off: despues de que el motion cesa, el BPF 4° orden aun
@@ -635,6 +639,7 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       (fingerUi ||
       (this.lastInstantFinger &&
         (hemoglobinScene || ensembleScene) &&
+        coherenceOk &&
         this.smoothedCoverage >= VITAL_THRESHOLDS.FINGER.MIN_COVERAGE * 0.85)) &&
       !motionArtifact &&
       this.postMotionSuppression <= 0;
@@ -1500,6 +1505,33 @@ export class PPGSignalProcessor implements SignalProcessorInterface {
       this.activeSource = bestSource;
       this.lastSourceSwitch = now;
     }
+  }
+
+  private calculateRedGreenCoherence(): number {
+    if (this.redBuffer.length < 24 || this.greenBuffer.length < 24) return 0.5;
+    const len = Math.min(30, this.redBuffer.length);
+    const rTail = this.redBuffer.tail(len);
+    const gTail = this.greenBuffer.tail(len);
+
+    let sumR = 0, sumG = 0;
+    for (let i = 0; i < len; i++) {
+      sumR += rTail[i];
+      sumG += gTail[i];
+    }
+    const meanR = sumR / len;
+    const meanG = sumG / len;
+
+    let num = 0, denR = 0, denG = 0;
+    for (let i = 0; i < len; i++) {
+      const diffR = rTail[i] - meanR;
+      const diffG = gTail[i] - meanG;
+      num += diffR * diffG;
+      denR += diffR * diffR;
+      denG += diffG * diffG;
+    }
+    const den = Math.sqrt(denR * denG);
+    if (den < 1e-6) return 0;
+    return num / den;
   }
 
   private calculateStdDev(ring: RingF32): number {

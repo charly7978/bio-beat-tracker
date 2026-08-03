@@ -823,7 +823,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     ? (state.signalStrength < 0 ? 0 : state.signalStrength > 1 ? 1 : state.signalStrength)
     : 0.5; // Default amplitude during warmup so we can see finger contact immediately
   const midValue = (stats.max + stats.min) / 2;
-  const coords: { x: number; y: number; isArr: boolean; val: number }[] = [];
+  const coords: { x: number; y: number; isArr: boolean; val: number; heightPct: number }[] = [];
   for (let i = 0; i < points.length; i++) {
     const pt = points[i];
     const age = state.now - pt.time - VISUAL_DELAY_MS;
@@ -837,7 +837,7 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
     const transformedPct = Math.pow(pct, CARDIAC_WAVE_CONFIG.WAVE_SHARPNESS_EXPONENT);
     const y = plot.y + wavePadTop + (1 - transformedPct) * waveH;
     
-    coords.push({ x, y, isArr: pt.isArrhythmia, val: pt.value });
+    coords.push({ x, y, isArr: pt.isArrhythmia, val: pt.value, heightPct: transformedPct });
   }
 
   if (coords.length < 2) return;
@@ -850,10 +850,11 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   // El halo de la punta se amortigua una vez por frame; ambos modos (2D/3D) lo leen.
   state.sweepPulse *= CARDIAC_WAVE_CONFIG.SWEEP_PULSE_DECAY;
 
-    // ── MODO 3D: onda como cinta extruida sobre el piso en perspectiva. ──
-  // Reusa las MISMAS coords honestas → forma, amplitud y tiempo idénticos al 2D.
-  drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
-
+    try {
+    drawWaveRibbon3D(ctx, state, coords, { waveBaseY, waveH, midValue });
+  } finally {
+    ctx.restore();
+  }
 
   // Tachogram (panel clínico: 2D en ambos modos)
   const tachoY = plot.y + plot.h - RR_TACHO_H + 4;
@@ -902,6 +903,8 @@ export function drawSignal(ctx: CanvasRenderingContext2D, state: PpgRenderState)
   ctx.fillStyle = '#94a3b8';
   ctx.fillText(contact, plot.x + plot.w - 12, plot.y + 66);
 
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1.0;
   ctx.restore();
 }
 
@@ -1105,6 +1108,7 @@ export function drawTrendStrip(ctx: CanvasRenderingContext2D, state: PpgRenderSt
     seg = end + 1;
   }
   ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1.0;
 
   for (let i = 0; i < coords.length; i++) {
     const c = coords[i];
