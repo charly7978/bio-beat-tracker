@@ -3,7 +3,9 @@
         "redhat.vscode-yaml",
         "ramgopal.flutter-assets-generator",
         "codium.codium",
-        "webboy998.kimi3-copilot-provider"
+        "webboy998.kimi3-copilot-provider",
+        "denizhandaklr.kimi-lm-provider",
+        "sixth.sixth-ai"
     ],
     "unwantedRecommendations": [
         "github.vscode-github-actions"
