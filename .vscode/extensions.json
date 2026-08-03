@@ -2,7 +2,8 @@
     "recommendations": [
         "redhat.vscode-yaml",
         "ramgopal.flutter-assets-generator",
-        "codium.codium"
+        "codium.codium",
+        "webboy998.kimi3-copilot-provider"
     ],
     "unwantedRecommendations": [
         "github.vscode-github-actions"

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ElgendiPeakDetector } from '../detectors/ElgendiPeakDetector';
+import { MsptdPeakDetector } from '../detectors/MsptdPeakDetector';
 import { PeakDetectionEnsemble } from '../detectors/PeakDetectionEnsemble';
 
 function makeSinePeaks(fs: number, durationSec: number, bpm: number, noise = 0): { y: number[]; t: number[] } {
@@ -122,6 +123,27 @@ describe('ElgendiPeakDetector', () => {
   });
 });
 
+describe('MsptdPeakDetector', () => {
+  it('rechaza falsos positivos en una señal con muesca dícrota y ruido leve', () => {
+    const fs = 30;
+    const bpm = 72;
+    const durationSec = 12;
+    const { y, t } = makePpgWithDicrotic(fs, durationSec, bpm);
+    const noisy = y.map((value, i) => value + (i % 7 === 0 ? 0.08 : 0) + (i % 11 === 0 ? -0.05 : 0));
+
+    const r = MsptdPeakDetector.detect({
+      signal: noisy,
+      timestampsMs: t,
+      samplingRateHz: fs,
+      minScale: 1,
+    } as any);
+
+    expect(r.peaks.length).toBeGreaterThan(0);
+    expect(r.peaks.length).toBeLessThanOrEqual(Math.ceil((durationSec * bpm) / 60 * 1.25));
+    expect(r.diagnostics.falsePositiveRejections).toBeGreaterThan(0);
+  });
+});
+
 describe('PeakDetectionEnsemble', () => {
   it('produce BPM instantáneo coherente con señal a ~75 bpm', () => {
     const fs = 30;
@@ -139,5 +161,19 @@ describe('PeakDetectionEnsemble', () => {
     }
     expect(r.confidence).toBeGreaterThanOrEqual(0);
     expect(r.agreement.elgendi).toBeGreaterThanOrEqual(0);
+  });
+
+  it('expone el diagnóstico MSPTD en el ensemble', () => {
+    const fs = 30;
+    const { y, t } = makeSinePeaks(fs, 10, 78, 0.02);
+    const r = PeakDetectionEnsemble.analyze({
+      signal: y,
+      timestampsMs: t,
+      samplingRateHz: fs,
+      sqi: 40,
+      perfusionIndex: 0.005,
+    });
+
+    expect(r.diagnostics.msptd).toBeDefined();
   });
 });
